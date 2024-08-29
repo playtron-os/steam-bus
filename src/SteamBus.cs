@@ -19,16 +19,16 @@ class SteamBus
     // Connect to the bus
     using Connection connection = new Connection(busAddress);
     await connection.ConnectAsync();
-    Console.WriteLine("Connected to session bus.");
+    Console.WriteLine("Connected to user session bus.");
 
-    await connection.RegisterServiceAsync("com.playtron.SteamBus");
-    Console.WriteLine("Registered address: com.playtron.SteamBus");
+    await connection.RegisterServiceAsync("one.playtron.SteamBus");
+    Console.WriteLine("Registered address: one.playtron.SteamBus");
 
     // Register the Steam Manager object
     await connection.RegisterObjectAsync(new Manager(connection));
 
     // Create a default DBusSteamClient instance
-    string path = "/com/playtron/SteamBus/SteamClient0";
+    string path = "/one/playtron/SteamBus/SteamClient0";
     DBusSteamClient client = new DBusSteamClient(new ObjectPath(path));
     await connection.RegisterObjectAsync(client);
 
