@@ -10,6 +10,7 @@
   <ItemGroup>
     <PackageReference Include="SteamKit2" Version="2.5.0" />
     <PackageReference Include="Tmds.DBus" Version="0.18.0" />
+    <PackageReference Include="Xdg.Directories" Version="0.1.2" />
   </ItemGroup>
 
 </Project>

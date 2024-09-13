@@ -23,8 +23,8 @@ public class PasswordFlowProperties : IEnumerable<KeyValuePair<string, object>>
 [DBusInterface("one.playtron.auth.PasswordFlow")]
 public interface IAuthPasswordFlow : IDBusObject
 {
-  Task<int> LoginAsync(string username, string password);
-  Task<int> LogoutAsync(string username);
+  Task LoginAsync(string username, string password);
+  Task LogoutAsync(string username);
 
   Task<PasswordFlowProperties> GetAllAsync();
 }
