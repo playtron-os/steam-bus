@@ -53,13 +53,19 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   private SteamClient steamClient;
   // SteakKit2 callback manager for handling callbacks
   private CallbackManager manager;
+  // Unique login ID used to allow multiple active login sessions from the same account
+  private uint? loginId;
+  // Username used to login to Steam
   private string? user;
+  // Password used to login to Steam
   private string? pass;
+  // Two-factor code used to login to Steam
   private string? tfaCode;
   private bool isRunning = true;
   private bool shouldRememberPassword = true; // TODO: Make this configurable via dbus property
   private string? previouslyStoredGuardData = null; // For the sake of this sample, we do not persist guard data
   private string authFile = "auth.json";
+  private List<SteamApps.LicenseListCallback.License> licenses = new List<SteamApps.LicenseListCallback.License>();
 
   // Create an RSA keypair for secure secret sending
   private bool useEncryption = false;
@@ -72,6 +78,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
 
+
   // Creates a new DBusSteamClient instance with the given DBus path
   public DBusSteamClient(ObjectPath path)
   {
@@ -81,6 +88,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     this.steamClient = new SteamClient();
     // Create the callback manager which will route callbacks to function calls
     this.manager = new CallbackManager(steamClient);
+
+    // Create a unique random login ID for this client. This is required to
+    // allow multiple active login sessions from the same public IP address.
+    // https://github.com/SteamRE/SteamKit/pull/217
+    Random random = new Random();
+    this.loginId = (uint?)random.Next();
 
     // Security
     if (!this.useEncryption)
@@ -111,6 +124,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     manager.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
     manager.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
     manager.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+    manager.Subscribe<SteamApps.PICSProductInfoCallback>(OnProductInfo);
 
     // Run the callback manager
     // create our callback handling loop
@@ -127,6 +141,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     Console.WriteLine("Callback handler is running");
   }
 
+
   // Decrypt the given base64 encoded string using our private key
   private string Decrypt(string base64EncodedString)
   {
@@ -134,6 +149,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     byte[] decrypted = this.rsa.Decrypt(base64EncodedBytes, RSAEncryptionPadding.OaepSHA256);
     return Encoding.Unicode.GetString(decrypted);
   }
+
 
   // Login using the given credentials. The password string should be encrypted
   // using the provided public key to prevent session bus eavesdropping.
@@ -181,6 +197,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     return Task.FromResult(0);
   }
 
+
   // Log out of the given account
   public Task<int> LogoutAsync(string username)
   {
@@ -190,6 +207,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
 
     return Task.FromResult(0);
   }
+
 
   // Invoked when connected to Steam
   async void OnConnected(SteamClient.ConnectedCallback callback)
@@ -235,6 +253,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     steamUser?.LogOn(new SteamUser.LogOnDetails
     {
       Username = pollResponse.AccountName,
+      LoginID = this.loginId,
       AccessToken = pollResponse.RefreshToken,
       ShouldRememberPassword = this.shouldRememberPassword, // If you set IsPersistentSession to true, this also must be set to true for it to work correctly
     });
@@ -244,6 +263,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     ParseJsonWebToken(pollResponse.RefreshToken, nameof(pollResponse.RefreshToken));
   }
 
+
   // Invoked when the Steam client disconnects
   void OnDisconnected(SteamClient.DisconnectedCallback callback)
   {
@@ -251,6 +271,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
 
     isRunning = false;
   }
+
 
   // Invoked when the Steam client tries to log in
   void OnLoggedOn(SteamUser.LoggedOnCallback callback)
@@ -263,50 +284,51 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
       return;
     }
 
+    if (this.user == null)
+    {
+      Console.WriteLine("Successfully logged in, but username was unset!");
+      return;
+    }
+
     Console.WriteLine("Successfully logged on!");
 
-    // Update the account ID for the logged in user
-    var steamUser = this.steamClient.GetHandler<SteamUser>();
-
     // Update the saved login sessions
-    if (this.user != null)
+    // Update the saved auth sessions with login details
+    Dictionary<string, SteamAuthSession> authSessions;
+
+    // Load or create the existing auth file to update available sessions
+    try
     {
-      // Update the saved auth sessions with login details
-      Dictionary<string, SteamAuthSession> authSessions;
-
-      // Load or create the existing auth file to update available sessions
-      try
-      {
-        Console.WriteLine("Loading auth sessions from path: {0}", authFile);
-        string authFileJson = File.ReadAllText(authFile);
-        authSessions = JsonSerializer.Deserialize<Dictionary<string, SteamAuthSession>>(authFileJson)!;
-      }
-      catch (Exception)
-      {
-        Console.WriteLine("No auth sessions exist. Creating new session.");
-        authSessions = new Dictionary<string, SteamAuthSession>();
-      }
-
-      // Create a new auth session for this login
-      SteamAuthSession session = new SteamAuthSession();
-      session.steamGuard = previouslyStoredGuardData;
-      session.accountId = 0;
-      if (steamUser != null && steamUser!.SteamID != null)
-      {
-        session.accountId = steamUser!.SteamID!.AccountID;
-      }
-      Console.WriteLine($"Found steam id: {steamUser?.SteamID}");
-
-      // Store the updated session for this user
-      authSessions[this.user!.ToLower()] = session;
-
-      // Update the auth file with the updated session details
-      using StreamWriter writer = new StreamWriter(authFile, false);
-      string? authSessionsSerialized = JsonSerializer.Serialize(authSessions);
-      writer.Write(authSessionsSerialized);
-
-      Console.WriteLine($"Updated saved logins at '{authFile}'");
+      Console.WriteLine("Loading auth sessions from path: {0}", authFile);
+      string authFileJson = File.ReadAllText(authFile);
+      authSessions = JsonSerializer.Deserialize<Dictionary<string, SteamAuthSession>>(authFileJson)!;
     }
+    catch (Exception)
+    {
+      Console.WriteLine("No auth sessions exist. Creating new session.");
+      authSessions = new Dictionary<string, SteamAuthSession>();
+    }
+
+    // Create a new auth session for this login
+    SteamAuthSession session = new SteamAuthSession();
+    session.steamGuard = previouslyStoredGuardData;
+    session.accountId = 0;
+    var steamUser = this.steamClient.GetHandler<SteamUser>();
+    if (steamUser != null && steamUser!.SteamID != null)
+    {
+      session.accountId = steamUser!.SteamID!.AccountID;
+    }
+    Console.WriteLine($"Found steam id: {steamUser?.SteamID}");
+
+    // Store the updated session for this user
+    authSessions[this.user!.ToLower()] = session;
+
+    // Update the auth file with the updated session details
+    using StreamWriter writer = new StreamWriter(authFile, false);
+    string? authSessionsSerialized = JsonSerializer.Serialize(authSessions);
+    writer.Write(authSessionsSerialized);
+
+    Console.WriteLine($"Updated saved logins at '{authFile}'");
 
     // Emit dbus signal when logged in successfully
     OnLoggedIn?.Invoke(this.user is null ? "" : this.user!);
@@ -330,17 +352,48 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     Console.WriteLine($"Account persona name: {callback.PersonaName}");
   }
 
+
   // Invoked on login to list the game/app licenses associated with the user.
-  void OnLicenseList(SteamApps.LicenseListCallback callback)
+  async void OnLicenseList(SteamApps.LicenseListCallback callback)
   {
     Console.WriteLine("Licenses listed: {0}: {1}", callback.Result, callback.LicenseList);
 
+    // Clear any old licenses
+    this.licenses.Clear();
+
+    // Build a list of requests to get app info for each owned app.
+    var requests = new List<SteamApps.PICSRequest>();
+
+    // Loop through each license to build a request and save the info
     foreach (var license in callback.LicenseList)
     {
+      this.licenses.Append(license);
       Console.WriteLine("  Found license: {0}", license);
       Console.WriteLine("  PackageID: {0}", license.PackageID);
+      var id = license.PackageID;
+      var token = license.AccessToken;
+      var req = new SteamApps.PICSRequest(id, token);
+      requests.Append(req);
+    }
+
+
+    // Request app information for all owned apps
+    var steamApps = this.steamClient.GetHandler<SteamApps>();
+    var result = await steamApps?.PICSGetProductInfo(requests, new List<SteamApps.PICSRequest>(), false);
+  }
+
+
+  // Invoked when SteamApps.PICSGetProductInfo() returns a result
+  void OnProductInfo(SteamApps.PICSProductInfoCallback callback)
+  {
+    Console.WriteLine("Got response for product info");
+    foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Apps)
+    {
+      var appId = entry.Key;
+      var appInfo = entry.Value;
     }
   }
+
 
   // This is simply showing how to parse JWT, this is not required to login to Steam
   void ParseJsonWebToken(string token, string name)
@@ -370,11 +423,13 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     Console.WriteLine();
   }
 
+
   // Get the value of the given property
   public Task<object> GetAsync(string prop)
   {
     throw new NotImplementedException();
   }
+
 
   // Set the given property to the given value
   public Task SetAsync(string prop, object val)
@@ -382,10 +437,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     throw new NotImplementedException();
   }
 
+
   public Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler)
   {
     throw new NotImplementedException();
   }
+
 
   // Returns all properties of the DBusSteamClient
   public Task<SteamClientProperties> GetAllAsync()
@@ -393,11 +450,13 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     return Task.FromResult(new SteamClientProperties());
   }
 
+
   // Test signal
   public Task<IDisposable> WatchPongAsync(Action<string> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnPing), reply);
   }
+
 
   // Connected Signal; this method gets invoked once on initialization to create
   // the event action to be invoked when we want to fire a signal over DBus.
@@ -405,6 +464,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   {
     return SignalWatcher.AddAsync(this, nameof(OnClientConnected), reply);
   }
+
 
   // LoggedIn Signal
   public Task<IDisposable> WatchLoggedInAsync(Action<string> reply)
@@ -444,6 +504,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     return code;
   }
 
+
   /// <summary>
   /// This method is called when the account being logged into uses Steam Guard email authentication. This code is sent to the user's email.
   /// </summary>
@@ -475,6 +536,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     return code;
   }
 
+
   /// <summary>
   /// This method is called when the account being logged has the Steam Mobile App and accepts authentication notification prompts.
   ///
@@ -500,15 +562,18 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     return task;
   }
 
+
   Task<IDisposable> IAuthTwoFactorFlow.WatchTwoFactorRequiredAsync(Action<(bool previousCodeWasIncorrect, string message)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnTwoFactorRequired), reply);
   }
 
+
   Task<IDisposable> IAuthTwoFactorFlow.WatchEmailTwoFactorRequiredAsync(Action<(string email, bool previousCodeWasIncorrect, string message)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnEmailTwoFactorRequired), reply);
   }
+
 
   // Return the public key to the client to send encrypted messages
   Task<(string keyType, string data)> IAuthCryptography.GetPublicKeyAsync()
