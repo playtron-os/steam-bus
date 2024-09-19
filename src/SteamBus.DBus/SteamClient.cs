@@ -31,7 +31,7 @@ public class SteamClientProperties : IEnumerable<KeyValuePair<string, object>>
 [DBusInterface("one.playtron.SteamBus.SteamClient")]
 public interface IDBusSteamClient : IDBusObject
 {
-  Task<int> LoginAsync(string username, string password);
+  //Task<int> LoginAsync(string username, string password);
   Task<SteamClientProperties> GetAllAsync();
 
   Task<object> GetAsync(string prop);
@@ -42,10 +42,11 @@ public interface IDBusSteamClient : IDBusObject
   // Test signal
   Task<IDisposable> WatchPongAsync(Action<string> reply);
   Task<IDisposable> WatchConnectedAsync(Action<ObjectPath> reply);
-  Task<IDisposable> WatchLoggedInAsync(Action<string> reply);
+  //Task<IDisposable> WatchLoggedInAsync(Action<string> reply);
+  //Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 }
 
-class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow, IPluginLibraryProvider, IAuthenticator
+class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, IAuthTwoFactorFlow, IPluginLibraryProvider, IAuthenticator
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
@@ -53,6 +54,8 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   private SteamClient steamClient;
   // SteakKit2 callback manager for handling callbacks
   private CallbackManager manager;
+  // Logged in status
+  private bool loggedIn = false;
   // Unique login ID used to allow multiple active login sessions from the same account
   private uint? loginId;
   // Username used to login to Steam
@@ -61,7 +64,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   private string? pass;
   // Two-factor code used to login to Steam
   private string? tfaCode;
-  private bool isRunning = true;
   private bool shouldRememberPassword = true; // TODO: Make this configurable via dbus property
   private string? previouslyStoredGuardData = null; // For the sake of this sample, we do not persist guard data
   private string authFile = "auth.json";
@@ -75,6 +77,8 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   public event Action<string>? OnPing;
   public event Action<ObjectPath>? OnClientConnected;
   public event Action<string>? OnLoggedIn;
+  public event Action<string>? OnLoggedOut;
+  public event Action<PropertyChanges>? OnPasswordPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
 
@@ -84,8 +88,15 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   {
     // DBus path to this Steam Client instance
     this.Path = path;
+
+    // Create a steam client config
+    var config = SteamConfiguration.Create(builder =>
+    {
+      builder.WithConnectionTimeout(TimeSpan.FromSeconds(10));
+    });
+
     // Create the Steam Client instance
-    this.steamClient = new SteamClient();
+    this.steamClient = new SteamClient(config);
     // Create the callback manager which will route callbacks to function calls
     this.manager = new CallbackManager(steamClient);
 
@@ -130,7 +141,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     // create our callback handling loop
     _ = Task.Run(() =>
     {
-      while (this.isRunning)
+      while (true)
       {
         // in order for the callbacks to get routed, they need to be handled by the manager
         manager.RunWaitCallbacks(TimeSpan.FromSeconds(1));
@@ -150,10 +161,11 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     return Encoding.Unicode.GetString(decrypted);
   }
 
+  // --- Password flow Implementation ---
 
   // Login using the given credentials. The password string should be encrypted
   // using the provided public key to prevent session bus eavesdropping.
-  public Task<int> LoginAsync(string username, string password)
+  Task IAuthPasswordFlow.LoginAsync(string username, string password)
   {
     // TODO: prevent logging in if already logged in
     Console.WriteLine($"Logging in for user: {username}");
@@ -199,13 +211,71 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
 
 
   // Log out of the given account
-  public Task<int> LogoutAsync(string username)
+  Task IAuthPasswordFlow.LogoutAsync(string username)
   {
     // get the steamuser handler, which is used for logging on after successfully connecting
     var steamUser = this.steamClient.GetHandler<SteamUser>();
     steamUser?.LogOff();
+    this.loggedIn = false;
 
     return Task.FromResult(0);
+  }
+
+
+  // Returns all properties of the DBusSteamClient
+  Task<PasswordFlowProperties> IAuthPasswordFlow.GetAllAsync()
+  {
+    var properties = new PasswordFlowProperties();
+    properties.AuthenticatedUser = this.user is null ? "" : this.user!;
+    if (this.loggedIn)
+    {
+      properties.Status = 1;
+    }
+    return Task.FromResult(properties);
+  }
+
+  // Return the value of the given property
+  Task<object> IAuthPasswordFlow.GetAsync(string prop)
+  {
+    switch (prop)
+    {
+      case "AuthenticatedUser":
+        object user = this.user is null ? "" : this.user!;
+        return Task.FromResult(user);
+      case "Status":
+        var loggedIn = this.loggedIn;
+        object status = this.loggedIn ? 1 : 0;
+        return Task.FromResult(status);
+      default:
+        throw new NotImplementedException($"Invalid property: {prop}");
+    }
+  }
+
+  // Set the value for the given property
+  Task IAuthPasswordFlow.SetAsync(string prop, object val)
+  {
+    return Task.FromResult(0);
+  }
+
+
+  // LoggedIn Signal
+  Task<IDisposable> IAuthPasswordFlow.WatchLoggedInAsync(Action reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnLoggedIn), reply);
+  }
+
+
+  // LoggedOut Signal
+  Task<IDisposable> IAuthPasswordFlow.WatchLoggedOutAsync(Action reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnLoggedOut), reply);
+  }
+
+
+  // Sets up sending signals when properties have changed
+  Task<IDisposable> IAuthPasswordFlow.WatchPropertiesAsync(Action<PropertyChanges> handler)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnPasswordPropsChanged), handler);
   }
 
 
@@ -268,8 +338,9 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   void OnDisconnected(SteamClient.DisconnectedCallback callback)
   {
     Console.WriteLine("Disconnected from Steam");
+    this.loggedIn = false;
 
-    isRunning = false;
+    // TODO: Send logout signal
   }
 
 
@@ -279,8 +350,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     if (callback.Result != EResult.OK)
     {
       Console.WriteLine("Unable to logon to Steam: {0} / {1}", callback.Result, callback.ExtendedResult);
-
-      isRunning = false;
       return;
     }
 
@@ -291,6 +360,9 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     }
 
     Console.WriteLine("Successfully logged on!");
+
+    // Update local state
+    this.loggedIn = true;
 
     // Update the saved login sessions
     // Update the saved auth sessions with login details
@@ -332,6 +404,8 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
 
     // Emit dbus signal when logged in successfully
     OnLoggedIn?.Invoke(this.user is null ? "" : this.user!);
+    object user = this.user!;
+    OnPasswordPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("AuthenticatedUser", user)]));
 
     // Do stuff with SteamApps
     var steamApps = this.steamClient.GetHandler<SteamApps>();
@@ -343,6 +417,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
   {
     Console.WriteLine("Logged off of Steam: {0}", callback.Result);
+    this.loggedIn = false;
   }
 
 
@@ -438,18 +513,11 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
   }
 
 
-  public Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler)
-  {
-    throw new NotImplementedException();
-  }
-
-
   // Returns all properties of the DBusSteamClient
   public Task<SteamClientProperties> GetAllAsync()
   {
     return Task.FromResult(new SteamClientProperties());
   }
-
 
   // Test signal
   public Task<IDisposable> WatchPongAsync(Action<string> reply)
@@ -465,12 +533,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthCryptography, IAuthTwoFactorFlow,
     return SignalWatcher.AddAsync(this, nameof(OnClientConnected), reply);
   }
 
-
-  // LoggedIn Signal
-  public Task<IDisposable> WatchLoggedInAsync(Action<string> reply)
-  {
-    return SignalWatcher.AddAsync(this, nameof(OnLoggedIn), reply);
-  }
 
   // --- IAuthenticator implementation ---
 
