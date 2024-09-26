@@ -29,9 +29,9 @@ public interface IAuthPasswordFlow : IDBusObject
   Task LogoutAsync(string username);
 
   // Emitted when logged in
-  Task<IDisposable> WatchLoggedInAsync(Action reply);
+  Task<IDisposable> WatchLoggedInAsync(Action<string> reply);
   // Emitted when logged out
-  Task<IDisposable> WatchLoggedOutAsync(Action reply);
+  Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 
   // Get the given property
   Task<object> GetAsync(string prop);

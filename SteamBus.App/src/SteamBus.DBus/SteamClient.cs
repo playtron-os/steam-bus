@@ -65,7 +65,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   // Two-factor code used to login to Steam
   private string? tfaCode;
   private bool shouldRememberPassword = true; // TODO: Make this configurable via dbus property
+  // TODO: Just use SteamAuthSession for these properties
   private string? previouslyStoredGuardData = null; // For the sake of this sample, we do not persist guard data
+  private string? accessToken = null;
+  private string? refreshToken = null;
+  private string? accountName = null;
+
   private string authFile = "auth.json";
   private List<SteamApps.LicenseListCallback.License> licenses = new List<SteamApps.LicenseListCallback.License>();
 
@@ -171,14 +176,14 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     Console.WriteLine($"Logging in for user: {username}");
 
     // Decrypt the password using our private key
-    if (this.useEncryption)
+    if (this.useEncryption && password != "")
     {
       password = this.Decrypt(password);
     }
 
     // Configure the user/pass for the client
     this.user = username;
-    this.pass = password;
+    this.pass = password != "" ? password : null;
 
     // Look up any previously saved SteamGuard data for this user
     try
@@ -193,8 +198,10 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
         Console.WriteLine("Found saved auth session for user: {0}", username);
         // Get the session data
         var authSession = authSessions![username.ToLower()];
-        var guardData = authSession.steamGuard;
-        this.previouslyStoredGuardData = guardData;
+        this.accountName = authSession.accountName;
+        this.previouslyStoredGuardData = authSession.steamGuard;
+        this.refreshToken = authSession.refreshToken;
+        this.accessToken = authSession.accessToken;
       }
     }
     catch (Exception e)
@@ -259,14 +266,14 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
 
 
   // LoggedIn Signal
-  Task<IDisposable> IAuthPasswordFlow.WatchLoggedInAsync(Action reply)
+  Task<IDisposable> IAuthPasswordFlow.WatchLoggedInAsync(Action<string> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnLoggedIn), reply);
   }
 
 
   // LoggedOut Signal
-  Task<IDisposable> IAuthPasswordFlow.WatchLoggedOutAsync(Action reply)
+  Task<IDisposable> IAuthPasswordFlow.WatchLoggedOutAsync(Action<string> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnLoggedOut), reply);
   }
@@ -287,32 +294,42 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     // Emit DBus signal to inform interested applications
     OnClientConnected?.Invoke(Path);
 
-    // Begin authenticating via credentials
-    var authSession = await steamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
+    // Create a new authentication session if one does not yet exist for this user.
+    if (this.refreshToken == null)
     {
-      Username = this.user,
-      Password = this.pass,
-      IsPersistentSession = this.shouldRememberPassword,
+      // Begin authenticating via credentials
+      var authSession = await steamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
+      {
+        Username = this.user,
+        Password = this.pass,
+        IsPersistentSession = this.shouldRememberPassword,
 
-      // See NewGuardData comment below
-      GuardData = previouslyStoredGuardData,
+        // Set the user agent string
+        DeviceFriendlyName = $"{Environment.MachineName} (SteamBus)",
 
-      /// <see cref="UserConsoleAuthenticator"/> is the default authenticator implemention provided by SteamKit
-      /// for ease of use which blocks the thread and asks for user input to enter the code.
-      /// However, if you require special handling (e.g. you have the TOTP secret and can generate codes on the fly),
-      /// you can implement your own <see cref="SteamKit2.Authentication.IAuthenticator"/>.
-      Authenticator = this, // Use this class as the authenticator
-    });
+        // See NewGuardData comment below
+        GuardData = previouslyStoredGuardData,
 
-    // Starting polling Steam for authentication response
-    var pollResponse = await authSession.PollingWaitForResultAsync();
+        /// <see cref="UserConsoleAuthenticator"/> is the default authenticator implemention provided by SteamKit
+        /// for ease of use which blocks the thread and asks for user input to enter the code.
+        /// However, if you require special handling (e.g. you have the TOTP secret and can generate codes on the fly),
+        /// you can implement your own <see cref="SteamKit2.Authentication.IAuthenticator"/>.
+        Authenticator = this, // Use this class as the authenticator
+      });
 
-    if (pollResponse.NewGuardData != null)
-    {
-      // When using certain two factor methods (such as email 2fa), guard data may be provided by Steam
-      // for use in future authentication sessions to avoid triggering 2FA again (this works similarly to the old sentry file system).
-      // Do note that this guard data is also a JWT token and has an expiration date.
-      this.previouslyStoredGuardData = pollResponse.NewGuardData;
+      // Starting polling Steam for authentication response
+      var pollResponse = await authSession.PollingWaitForResultAsync();
+
+      if (pollResponse.NewGuardData != null)
+      {
+        // When using certain two factor methods (such as email 2fa), guard data may be provided by Steam
+        // for use in future authentication sessions to avoid triggering 2FA again (this works similarly to the old sentry file system).
+        // Do note that this guard data is also a JWT token and has an expiration date.
+        this.previouslyStoredGuardData = pollResponse.NewGuardData;
+      }
+      this.accountName = pollResponse.AccountName;
+      this.accessToken = pollResponse.AccessToken;
+      this.refreshToken = pollResponse.RefreshToken;
     }
 
     // get the steamuser handler, which is used for logging on after successfully connecting
@@ -322,15 +339,18 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     // Note that we are using RefreshToken for logging on here
     steamUser?.LogOn(new SteamUser.LogOnDetails
     {
-      Username = pollResponse.AccountName,
+      Username = this.accountName,
       LoginID = this.loginId,
-      AccessToken = pollResponse.RefreshToken,
+      AccessToken = this.refreshToken,
       ShouldRememberPassword = this.shouldRememberPassword, // If you set IsPersistentSession to true, this also must be set to true for it to work correctly
     });
 
     // This is not required, but it is possible to parse the JWT access token to see the scope and expiration date.
-    ParseJsonWebToken(pollResponse.AccessToken, nameof(pollResponse.AccessToken));
-    ParseJsonWebToken(pollResponse.RefreshToken, nameof(pollResponse.RefreshToken));
+    if (this.accessToken != null && this.refreshToken != null)
+    {
+      ParseJsonWebToken(this.accessToken!, nameof(this.accessToken));
+      ParseJsonWebToken(this.refreshToken!, nameof(this.refreshToken));
+    }
   }
 
 
@@ -383,8 +403,11 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
 
     // Create a new auth session for this login
     SteamAuthSession session = new SteamAuthSession();
-    session.steamGuard = previouslyStoredGuardData;
+    session.steamGuard = this.previouslyStoredGuardData;
     session.accountId = 0;
+    session.accountName = this.accountName;
+    session.accessToken = this.accessToken;
+    session.refreshToken = this.refreshToken;
     var steamUser = this.steamClient.GetHandler<SteamUser>();
     if (steamUser != null && steamUser!.SteamID != null)
     {
@@ -401,6 +424,13 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     writer.Write(authSessionsSerialized);
 
     Console.WriteLine($"Updated saved logins at '{authFile}'");
+
+    // TODO: We need to update all the appropriate VDF files to allow the Steam
+    // client to use this session. The refresh token is stored in 'local.vdf'
+    // encrypted using AES, with the key being the sha256 hash of the lowercased username.
+    // The SymmetricDecrypt function can help with decrypting these values.
+    var key = SHA256.HashData(Encoding.UTF8.GetBytes(this.user!.ToLower()));
+
 
     // Emit dbus signal when logged in successfully
     OnLoggedIn?.Invoke(this.user is null ? "" : this.user!);
@@ -443,8 +473,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     foreach (var license in callback.LicenseList)
     {
       this.licenses.Append(license);
-      Console.WriteLine("  Found license: {0}", license);
+      Console.WriteLine("Found license: {0}", license.ToString());
       Console.WriteLine("  PackageID: {0}", license.PackageID);
+      Console.WriteLine("  OwnerAccountID: {0}", license.OwnerAccountID);
+      Console.WriteLine("  LicenseType: {0}", license.LicenseType);
+      Console.WriteLine("  MasterPackageID: {0}", license.MasterPackageID);
+      Console.WriteLine("  LicenseFlags: {0}", license.LicenseFlags);
       var id = license.PackageID;
       var token = license.AccessToken;
       var req = new SteamApps.PICSRequest(id, token);
@@ -452,9 +486,10 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     }
 
 
+    // TODO: this
     // Request app information for all owned apps
-    var steamApps = this.steamClient.GetHandler<SteamApps>();
-    var result = await steamApps?.PICSGetProductInfo(requests, new List<SteamApps.PICSRequest>(), false);
+    //var steamApps = this.steamClient.GetHandler<SteamApps>();
+    //var result = await steamApps?.PICSGetProductInfo(requests, new List<SteamApps.PICSRequest>(), false);
   }
 
 
@@ -462,10 +497,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   void OnProductInfo(SteamApps.PICSProductInfoCallback callback)
   {
     Console.WriteLine("Got response for product info");
-    foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Apps)
+    foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Packages)
     {
       var appId = entry.Key;
       var appInfo = entry.Value;
+
+      Console.WriteLine($"Info: {appInfo.KeyValues.ToString()}");
     }
   }
 

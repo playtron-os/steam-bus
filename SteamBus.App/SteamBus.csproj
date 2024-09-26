@@ -9,7 +9,9 @@
 
   <ItemGroup>
     <PackageReference Include="SteamKit2" Version="2.5.0" />
+    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
     <PackageReference Include="Tmds.DBus" Version="0.18.0" />
+    <PackageReference Include="ValveKeyValue" Version="0.11.0.378" />
     <PackageReference Include="Xdg.Directories" Version="0.1.2" />
   </ItemGroup>
 

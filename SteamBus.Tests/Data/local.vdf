@@ -1,0 +1,16 @@
+"MachineUserConfigStore"
+{
+        "Software"
+        {
+                "Valve"
+                {
+                        "Steam"
+                        {
+                                "ConnectCache"
+                                {
+                                        "b98513741"         "e7b40a1ee908c0014b8d0106f0d2fda7250d25c6887b0e1416cca145b22a94a2ff5ab81f8844cd6f83bfa68e83802b55a14b522cef077c0e864a0bca407332bbfcbbf6f22e9cfadd1d7a09a5242bdfa007f1ad674e7d41b2cb655cab092e87d81a2feb34ddcff2c02ddf91af7f5a2dad15410945a05aa078fe8db0d3dd1214179b1153300ebaf1487e07cd763b0ef34f4e0307ca948eb34c65a759089ef0dbb2d093d093b1361d89e43c2c9cfe634ec3"
+                                }
+                        }
+                }
+        }
+}
