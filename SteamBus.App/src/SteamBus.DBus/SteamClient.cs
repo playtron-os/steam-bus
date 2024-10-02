@@ -140,7 +140,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     manager.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
     manager.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
     manager.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
-    manager.Subscribe<SteamApps.PICSProductInfoCallback>(OnProductInfo);
+    //manager.Subscribe<SteamApps.PICSProductInfoCallback>(OnProductInfo);
 
     // Run the callback manager
     // create our callback handling loop
@@ -475,6 +475,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       this.licenses.Append(license);
       Console.WriteLine("Found license: {0}", license.ToString());
       Console.WriteLine("  PackageID: {0}", license.PackageID);
+      Console.WriteLine("  Token: {0}", license.AccessToken);
       Console.WriteLine("  OwnerAccountID: {0}", license.OwnerAccountID);
       Console.WriteLine("  LicenseType: {0}", license.LicenseType);
       Console.WriteLine("  MasterPackageID: {0}", license.MasterPackageID);
@@ -482,29 +483,170 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       var id = license.PackageID;
       var token = license.AccessToken;
       var req = new SteamApps.PICSRequest(id, token);
-      requests.Append(req);
+      requests.Add(req);
     }
+
+    Console.WriteLine($"Requesting info for {requests.Count} number of packages");
+    Console.WriteLine($"Requests: {requests.ToString()}");
 
 
     // TODO: this
     // Request app information for all owned apps
-    //var steamApps = this.steamClient.GetHandler<SteamApps>();
-    //var result = await steamApps?.PICSGetProductInfo(requests, new List<SteamApps.PICSRequest>(), false);
+    var steamApps = this.steamClient.GetHandler<SteamApps>();
+    if (steamApps == null)
+    {
+      Console.WriteLine("Failed to get SteamApps handle");
+      return;
+    }
+
+    // Wait for the job to complete
+    Console.WriteLine("Waiting for product info request");
+    var result = await steamApps!.PICSGetProductInfo(new List<SteamApps.PICSRequest>(), requests, false);
+    if (result == null)
+    {
+      Console.WriteLine("Failed to get result for fetching package info");
+      return;
+    }
+
+    if (result.Complete)
+    {
+      if (result!.Results == null)
+      {
+        Console.WriteLine("No results were returned for fetching package info");
+        return;
+      }
+
+      // Loop through each result
+      foreach (SteamApps.PICSProductInfoCallback productInfo in result!.Results!)
+      {
+        // Loop through each package result
+        foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in productInfo.Packages)
+        {
+          var pkgId = entry.Key;
+          var pkgInfo = entry.Value;
+
+          pkgInfo.KeyValues.SaveToFile($"/tmp/pkgs/{pkgId}.vdf", false);
+
+          // Package KeyValues looks like this:
+          /*
+            "103387"
+            {
+                    "packageid"             "103387"
+                    "billingtype"           "10"
+                    "licensetype"           "1"
+                    "status"                "0"
+                    "extended"
+                    {
+                            "allowcrossregiontradingandgifting"             "false"
+                    }
+                    "appids"
+                    {
+                            "0"             "377160"
+                    }
+                    "depotids"
+                    {
+                            "0"             "377161"
+                            "1"             "377162"
+                            "2"             "377163"
+                            "3"             "377164"
+                            "4"             "377165"
+                            "5"             "377166"
+                            "6"             "377167"
+                            "7"             "377168"
+                            "8"             "393880"
+                            "9"             "393881"
+                            "10"            "393882"
+                            "11"            "393883"
+                            "12"            "393884"
+                    }
+                    "appitems"
+                    {
+                    }
+            }
+           */
+
+          // Get the app ids associated with this package
+          foreach (var value in pkgInfo.KeyValues["appids"].Children)
+          {
+            var appId = value.AsUnsignedInteger();
+            //
+          }
+
+          // Get the depot ids associated with this package
+          foreach (var value in pkgInfo.KeyValues["depotids"].Children)
+          {
+            var depotId = value.AsUnsignedInteger();
+          }
+        }
+      }
+
+      // ... do something with our product info
+    }
+    else if (result.Failed)
+    {
+      // the request partially completed, and then Steam encountered a remote failure. for async jobs with only a single result (such as
+      // GetDepotDecryptionKey), this would normally throw an AsyncJobFailedException. but since Steam had given us a partial set of callbacks
+      // we get to decide what to do with the data
+
+      // keep in mind that if Steam immediately fails to provide any data, or times out while waiting for the first result, an
+      // AsyncJobFailedException or TaskCanceledException will be thrown
+
+      // the result set might not have our data, so we need to test to see if we have results for our request
+      //SteamApps.PICSProductInfoCallback productInfo = resultSet.Results.FirstOrDefault(prodCallback => prodCallback.Apps.ContainsKey(appid));
+      Console.WriteLine("Some results failed");
+
+      //if (productInfo != null)
+      //{
+      //  // we were lucky and Steam gave us the info we requested before failing
+      //}
+      //else
+      //{
+      //  // bad luck
+      //}
+    }
+    else
+    {
+      // the request partially completed, but then we timed out. essentially the same as the previous case, but Steam didn't explicitly fail.
+      Console.WriteLine("Some other failures happened or timed out");
+
+      // we still need to check our result set to see if we have our data
+      //SteamApps.PICSProductInfoCallback productInfo = resultSet.Results.FirstOrDefault(prodCallback => prodCallback.Apps.ContainsKey(appid));
+
+      //if (productInfo != null)
+      //{
+      //  // we were lucky and Steam gave us the info we requested before timing out
+      //}
+      //else
+      //{
+      //  // bad luck
+      //}
+    }
+
   }
 
 
   // Invoked when SteamApps.PICSGetProductInfo() returns a result
-  void OnProductInfo(SteamApps.PICSProductInfoCallback callback)
-  {
-    Console.WriteLine("Got response for product info");
-    foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Packages)
-    {
-      var appId = entry.Key;
-      var appInfo = entry.Value;
+  //void OnProductInfo(SteamApps.PICSProductInfoCallback callback)
+  //{
+  //  Console.WriteLine($"Got response for product info: {callback.Packages.Count} {callback.Apps.Count}");
+  //  foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Packages)
+  //  {
+  //    var pkgId = entry.Key;
+  //    var pkgInfo = entry.Value;
 
-      Console.WriteLine($"Info: {appInfo.KeyValues.ToString()}");
-    }
-  }
+  //    pkgInfo.KeyValues.SaveToFile($"/tmp/pkgs/{pkgId}.vdf", false);
+  //    Console.WriteLine($"Info: {pkgInfo.KeyValues.ToString()}");
+  //  }
+
+  //  foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Apps)
+  //  {
+  //    var appId = entry.Key;
+  //    var appInfo = entry.Value;
+
+  //    Console.WriteLine($"Info: {appInfo.KeyValues.ToString()}");
+  //  }
+
+  //}
 
 
   // This is simply showing how to parse JWT, this is not required to login to Steam

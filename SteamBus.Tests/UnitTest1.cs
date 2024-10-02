@@ -77,4 +77,24 @@ public class Tests
     config.SetRefreshToken(username, token!);
     config.Save();
   }
+
+  [Test]
+  public void TestParsePackageInfo()
+  {
+    var filePath = $"{GetTestDataDirectory()}/packages/103387.vdf";
+    var data = File.ReadAllText(filePath);
+
+    var kv = KeyValue.LoadFromString(data);
+    Console.WriteLine("Got kv: '{0}'", kv["packageid"].Value);
+    Console.WriteLine("Got kv: '{0}'", kv["appids"]["0"]);
+    Console.WriteLine("Got kv: '{0}'", kv["IDONTEXIST"]);
+    Console.WriteLine("Got kv: '{0}'", kv["IDONTEXIST"].Children);
+    Console.WriteLine("Got kv: '{0}'", kv["depotids"].Value);
+
+    // Loop
+    foreach (var value in kv["depotids"].Children)
+    {
+      Console.WriteLine("Value: {0}", value.AsUnsignedInteger());
+    }
+  }
 }

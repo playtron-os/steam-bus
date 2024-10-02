@@ -1,0 +1,29 @@
+"949992"
+{
+	"packageid"		"949992"
+	"billingtype"		"0"
+	"licensetype"		"1"
+	"status"		"0"
+	"extended"
+	{
+		"basepackage"		"58881"
+		"disabletradingcards"		"1"
+		"dontgrantifappidowned"		"344740"
+		"expirytime"		"1697907600"
+		"freepromotion"		"1"
+		"starttime"		"1697734800"
+	}
+	"appids"
+	{
+		"0"		"344740"
+	}
+	"depotids"
+	{
+		"0"		"344741"
+		"1"		"344742"
+		"2"		"344743"
+	}
+	"appitems"
+	{
+	}
+}
