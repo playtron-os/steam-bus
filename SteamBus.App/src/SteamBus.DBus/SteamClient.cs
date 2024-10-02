@@ -6,6 +6,7 @@ using Playtron.Plugin;
 using SteamBus.Auth;
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.ObjectModel;
 using Xdg.Directories;
 
 namespace SteamBus.DBus;
@@ -72,7 +73,10 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   private string? accountName = null;
 
   private string authFile = "auth.json";
-  private List<SteamApps.LicenseListCallback.License> licenses = new List<SteamApps.LicenseListCallback.License>();
+  private string cacheDir = "cache";
+  private Dictionary<uint, SteamApps.LicenseListCallback.License> licenses = new Dictionary<uint, SteamApps.LicenseListCallback.License>();
+  private Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> packages = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
+  private Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> apps = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
 
   // Create an RSA keypair for secure secret sending
   private bool useEncryption = false;
@@ -129,6 +133,14 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       using StreamWriter writer = new StreamWriter(authFile, false);
       string? authSessionsSerialized = JsonSerializer.Serialize(authSessions);
       writer.Write(authSessionsSerialized);
+    }
+
+    // Ensure that the cache directory exists
+    this.cacheDir = $"{BaseDirectory.CacheHome}/steambus";
+    if (!Directory.Exists(cacheDir))
+    {
+      Console.WriteLine($"Cache directory does not exist at '{cacheDir}'. Creating it.");
+      Directory.CreateDirectory(this.cacheDir);
     }
 
     // register a few callbacks we're interested in
@@ -359,6 +371,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   {
     Console.WriteLine("Disconnected from Steam");
     this.loggedIn = false;
+    this.licenses.Clear();
 
     // TODO: Send logout signal
   }
@@ -463,23 +476,35 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   {
     Console.WriteLine("Licenses listed: {0}: {1}", callback.Result, callback.LicenseList);
 
-    // Clear any old licenses
-    this.licenses.Clear();
-
-    // Build a list of requests to get app info for each owned app.
-    var requests = new List<SteamApps.PICSRequest>();
-
-    // Loop through each license to build a request and save the info
+    // Update the license list
+    var licenses = new Dictionary<uint, SteamApps.LicenseListCallback.License>();
     foreach (var license in callback.LicenseList)
     {
-      this.licenses.Append(license);
-      Console.WriteLine("Found license: {0}", license.ToString());
-      Console.WriteLine("  PackageID: {0}", license.PackageID);
-      Console.WriteLine("  Token: {0}", license.AccessToken);
-      Console.WriteLine("  OwnerAccountID: {0}", license.OwnerAccountID);
-      Console.WriteLine("  LicenseType: {0}", license.LicenseType);
-      Console.WriteLine("  MasterPackageID: {0}", license.MasterPackageID);
-      Console.WriteLine("  LicenseFlags: {0}", license.LicenseFlags);
+      licenses[license.PackageID] = license;
+    }
+    this.licenses = licenses;
+
+    // Get all packages associated with the user's licenses
+    var packages = await this.GetPackagesFromLicenses(callback.LicenseList);
+    this.packages = packages;
+
+    // Get all the app information associated with the user's packages
+    var apps = await this.GetAppsFromPackages(licenses, packages);
+    this.apps = apps;
+  }
+
+
+  /// Returns all the packages for the given list of licenses
+  async Task<Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>> GetPackagesFromLicenses(ReadOnlyCollection<SteamApps.LicenseListCallback.License> licenseList)
+  {
+    var packages = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
+
+    // Build a list of requests to get package info for each license.
+    var requests = new List<SteamApps.PICSRequest>();
+
+    // Loop through each license to build a request
+    foreach (var license in licenseList)
+    {
       var id = license.PackageID;
       var token = license.AccessToken;
       var req = new SteamApps.PICSRequest(id, token);
@@ -489,14 +514,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     Console.WriteLine($"Requesting info for {requests.Count} number of packages");
     Console.WriteLine($"Requests: {requests.ToString()}");
 
-
-    // TODO: this
     // Request app information for all owned apps
     var steamApps = this.steamClient.GetHandler<SteamApps>();
     if (steamApps == null)
     {
       Console.WriteLine("Failed to get SteamApps handle");
-      return;
+      return packages;
     }
 
     // Wait for the job to complete
@@ -505,7 +528,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     if (result == null)
     {
       Console.WriteLine("Failed to get result for fetching package info");
-      return;
+      return packages;
     }
 
     if (result.Complete)
@@ -513,7 +536,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       if (result!.Results == null)
       {
         Console.WriteLine("No results were returned for fetching package info");
-        return;
+        return packages;
       }
 
       // Loop through each result
@@ -525,62 +548,19 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
           var pkgId = entry.Key;
           var pkgInfo = entry.Value;
 
-          pkgInfo.KeyValues.SaveToFile($"/tmp/pkgs/{pkgId}.vdf", false);
+          packages[pkgId] = pkgInfo;
 
-          // Package KeyValues looks like this:
-          /*
-            "103387"
-            {
-                    "packageid"             "103387"
-                    "billingtype"           "10"
-                    "licensetype"           "1"
-                    "status"                "0"
-                    "extended"
-                    {
-                            "allowcrossregiontradingandgifting"             "false"
-                    }
-                    "appids"
-                    {
-                            "0"             "377160"
-                    }
-                    "depotids"
-                    {
-                            "0"             "377161"
-                            "1"             "377162"
-                            "2"             "377163"
-                            "3"             "377164"
-                            "4"             "377165"
-                            "5"             "377166"
-                            "6"             "377167"
-                            "7"             "377168"
-                            "8"             "393880"
-                            "9"             "393881"
-                            "10"            "393882"
-                            "11"            "393883"
-                            "12"            "393884"
-                    }
-                    "appitems"
-                    {
-                    }
-            }
-           */
-
-          // Get the app ids associated with this package
-          foreach (var value in pkgInfo.KeyValues["appids"].Children)
+          // Cache the package info
+          var cacheDir = $"{this.cacheDir}/pkgs";
+          if (!Directory.Exists(cacheDir))
           {
-            var appId = value.AsUnsignedInteger();
-            //
+            Directory.CreateDirectory(cacheDir);
           }
-
-          // Get the depot ids associated with this package
-          foreach (var value in pkgInfo.KeyValues["depotids"].Children)
-          {
-            var depotId = value.AsUnsignedInteger();
-          }
+          pkgInfo.KeyValues.SaveToFile($"{cacheDir}/{pkgId}.vdf", false);
         }
       }
 
-      // ... do something with our product info
+      return packages;
     }
     else if (result.Failed)
     {
@@ -622,31 +602,142 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       //}
     }
 
+    return packages;
   }
 
 
-  // Invoked when SteamApps.PICSGetProductInfo() returns a result
-  //void OnProductInfo(SteamApps.PICSProductInfoCallback callback)
-  //{
-  //  Console.WriteLine($"Got response for product info: {callback.Packages.Count} {callback.Apps.Count}");
-  //  foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Packages)
-  //  {
-  //    var pkgId = entry.Key;
-  //    var pkgInfo = entry.Value;
+  /// Returns app information for the given map of licenses and packages
+  async Task<Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>> GetAppsFromPackages(Dictionary<uint, SteamApps.LicenseListCallback.License> licenses, Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> packages)
+  {
+    var apps = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
 
-  //    pkgInfo.KeyValues.SaveToFile($"/tmp/pkgs/{pkgId}.vdf", false);
-  //    Console.WriteLine($"Info: {pkgInfo.KeyValues.ToString()}");
-  //  }
+    // Get the SteamApps handler
+    var steamApps = this.steamClient.GetHandler<SteamApps>();
+    if (steamApps == null)
+    {
+      Console.WriteLine("Failed to get SteamApps handle");
+      return apps;
+    }
 
-  //  foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in callback.Apps)
-  //  {
-  //    var appId = entry.Key;
-  //    var appInfo = entry.Value;
+    // Build a list of requests to get app info for each package.
+    var requests = new List<SteamApps.PICSRequest>();
 
-  //    Console.WriteLine($"Info: {appInfo.KeyValues.ToString()}");
-  //  }
+    // Loop through each package result
+    foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in packages)
+    {
+      var pkgId = entry.Key;
+      var pkgInfo = entry.Value;
 
-  //}
+      // Package KeyValues looks like this:
+      /*
+        "103387"
+        {
+                "packageid"             "103387"
+                "billingtype"           "10"
+                "licensetype"           "1"
+                "status"                "0"
+                "extended"
+                {
+                        "allowcrossregiontradingandgifting"             "false"
+                }
+                "appids"
+                {
+                        "0"             "377160"
+                }
+                "depotids"
+                {
+                        "0"             "377161"
+                        "1"             "377162"
+                        "2"             "377163"
+                        "3"             "377164"
+                        "4"             "377165"
+                        "5"             "377166"
+                        "6"             "377167"
+                        "7"             "377168"
+                        "8"             "393880"
+                        "9"             "393881"
+                        "10"            "393882"
+                        "11"            "393883"
+                        "12"            "393884"
+                }
+                "appitems"
+                {
+                }
+        }
+       */
+
+      // Get the license associated with this package
+      var license = this.licenses[pkgId];
+      if (license == null)
+      {
+        Console.WriteLine($"Unable to find license for package ID: {pkgId}");
+        continue;
+      }
+
+      // Get the app ids associated with this package
+      foreach (var value in pkgInfo.KeyValues["appids"].Children)
+      {
+        var appId = value.AsUnsignedInteger();
+        var token = license.AccessToken;
+        var req = new SteamApps.PICSRequest(appId, token);
+        requests.Add(req);
+      }
+    }
+
+
+    // Wait for the job to complete
+    Console.WriteLine("Waiting for app info request");
+    var result = await steamApps!.PICSGetProductInfo(requests, new List<SteamApps.PICSRequest>(), false);
+    if (result == null)
+    {
+      Console.WriteLine("Failed to get result for fetching app info");
+      return apps;
+    }
+
+    if (result.Complete)
+    {
+      if (result!.Results == null)
+      {
+        Console.WriteLine("No results were returned for fetching app info");
+        return apps;
+      }
+
+      // Loop through each result
+      foreach (SteamApps.PICSProductInfoCallback productInfo in result!.Results!)
+      {
+        // Loop through each app result
+        foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in productInfo.Apps)
+        {
+          var appId = entry.Key;
+          var appInfo = entry.Value;
+
+          apps[appId] = appInfo;
+
+          // Cache the app info
+          var cacheDir = $"{this.cacheDir}/apps";
+          if (!Directory.Exists(cacheDir))
+          {
+            Directory.CreateDirectory(cacheDir);
+          }
+          appInfo.KeyValues.SaveToFile($"{cacheDir}/{appId}.vdf", false);
+        }
+      }
+
+      return apps;
+    }
+    else if (result.Failed)
+    {
+      Console.WriteLine("Some results failed");
+
+    }
+    else
+    {
+      // the request partially completed, but then we timed out. essentially the same as the previous case, but Steam didn't explicitly fail.
+      Console.WriteLine("Some other failures happened or timed out");
+    }
+
+    return apps;
+  }
 
 
   // This is simply showing how to parse JWT, this is not required to login to Steam
