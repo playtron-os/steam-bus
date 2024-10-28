@@ -19,6 +19,11 @@ help: ## Display this help.
 build: ## Build the project
 	cd ./SteamBus.App && dotnet build
 
+.PHONY: clean
+clean: ## Remove build artifacts
+	rm -rf ./SteamBus.Tests/obj/ ./SteamBus.Tests/bin/
+	rm -rf ./SteamBus.App/bin/ ./SteamBus.App/obj/
+
 .PHONY: run
 run: ## Run the project
 	cd ./SteamBus.App && dotnet run

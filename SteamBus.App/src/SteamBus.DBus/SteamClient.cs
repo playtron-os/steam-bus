@@ -1,15 +1,19 @@
-using System.Text.Json;
-using Tmds.DBus;
-using SteamKit2;
-using SteamKit2.Authentication;
 using Playtron.Plugin;
+using Steam.Content;
+using Steam.Session;
 using SteamBus.Auth;
-using System.Security.Cryptography;
-using System.Text;
+using SteamKit2.Authentication;
+using SteamKit2;
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text;
+using Tmds.DBus;
 using Xdg.Directories;
 
 namespace SteamBus.DBus;
+
+using InstallOptionDescription = (string, string, string[]);
 
 [Dictionary]
 public class SteamClientProperties : IEnumerable<KeyValuePair<string, object>>
@@ -51,26 +55,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
-  // Instance of the SteamKit2 steam client
-  private SteamClient steamClient;
-  // SteakKit2 callback manager for handling callbacks
-  private CallbackManager manager;
-  // Logged in status
-  private bool loggedIn = false;
   // Unique login ID used to allow multiple active login sessions from the same account
   private uint? loginId;
-  // Username used to login to Steam
-  private string? user;
-  // Password used to login to Steam
-  private string? pass;
   // Two-factor code used to login to Steam
   private string? tfaCode;
-  private bool shouldRememberPassword = true; // TODO: Make this configurable via dbus property
-  // TODO: Just use SteamAuthSession for these properties
-  private string? previouslyStoredGuardData = null; // For the sake of this sample, we do not persist guard data
-  private string? accessToken = null;
-  private string? refreshToken = null;
-  private string? accountName = null;
+  // Steam session instance
+  private SteamSession? session = null;
 
   private string authFile = "auth.json";
   private string cacheDir = "cache";
@@ -87,6 +77,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   public event Action<ObjectPath>? OnClientConnected;
   public event Action<string>? OnLoggedIn;
   public event Action<string>? OnLoggedOut;
+  public event Action<(string, float)>? OnInstallProgressed;
   public event Action<PropertyChanges>? OnPasswordPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
@@ -103,11 +94,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     {
       builder.WithConnectionTimeout(TimeSpan.FromSeconds(10));
     });
-
-    // Create the Steam Client instance
-    this.steamClient = new SteamClient(config);
-    // Create the callback manager which will route callbacks to function calls
-    this.manager = new CallbackManager(steamClient);
 
     // Create a unique random login ID for this client. This is required to
     // allow multiple active login sessions from the same public IP address.
@@ -142,31 +128,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       Console.WriteLine($"Cache directory does not exist at '{cacheDir}'. Creating it.");
       Directory.CreateDirectory(this.cacheDir);
     }
-
-    // register a few callbacks we're interested in
-    // these are registered upon creation to a callback manager, which will then route the callbacks
-    // to the functions specified
-    manager.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
-    manager.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
-    manager.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
-    manager.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
-    manager.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
-    manager.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
-    //manager.Subscribe<SteamApps.PICSProductInfoCallback>(OnProductInfo);
-
-    // Run the callback manager
-    // create our callback handling loop
-    _ = Task.Run(() =>
-    {
-      while (true)
-      {
-        // in order for the callbacks to get routed, they need to be handled by the manager
-        manager.RunWaitCallbacks(TimeSpan.FromSeconds(1));
-      }
-
-    });
-
-    Console.WriteLine("Callback handler is running");
   }
 
 
@@ -178,13 +139,94 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     return Encoding.Unicode.GetString(decrypted);
   }
 
+  // --- LibraryProvider Implementation
+
+  Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appId)
+  {
+    // TODO: Query the app for available versions, branches, languages, etc.
+    var version = new InstallOption("version", "Version of the game to install");
+    var branch = new InstallOption("branch", "Branch to install from", ["public"]);
+    var language = new InstallOption("language", "Language of the game to install", ["english"]);
+    var os = new InstallOption("os", "OS platform version of the game", ["windows", "macos", "linux"]);
+    var arch = new InstallOption("architecture", "Architecture version of the game", ["32", "64"]);
+
+    InstallOptionDescription[] options = [version.AsTuple(), branch.AsTuple(), language.AsTuple(), os.AsTuple(), arch.AsTuple()];
+
+    return Task.FromResult<InstallOptionDescription[]>(options);
+  }
+
+  Task IPluginLibraryProvider.InstallAsync(string appId, string disk, InstallOptions options)
+  {
+    Console.WriteLine($"Installing app: {appId}");
+
+    // Ensure that a Steam session exists
+    if (this.session is null)
+    {
+      Console.WriteLine("No active Steam session found to install app");
+      return Task.FromResult(1);
+    }
+    if (!this.session.IsLoggedOn)
+    {
+      Console.WriteLine("Not logged in to Steam to install app");
+      return Task.FromResult(1);
+    }
+
+    // Convert the app id to a numerical id
+    uint appIdNumber;
+    try
+    {
+      appIdNumber = UInt32.Parse(appId);
+    }
+    catch (Exception exception)
+    {
+      Console.WriteLine($"Invalid app id '{appId}': {exception.ToString()}");
+      return Task.FromResult(1);
+    }
+
+    // Configure the download options
+    var downloadOptions = new AppDownloadOptions(options);
+
+    // TODO: Determine the install path to use based on the block device passed
+
+    // Create a content downloader for the given app
+    var downloader = new ContentDownloader(this.session);
+
+    // Start downloading the app
+    try
+    {
+      // Run this in the background
+      Task.Run(() => downloader.DownloadAppAsync(appIdNumber, downloadOptions, this.OnInstallProgressed));
+    }
+    catch (Exception exception)
+    {
+      Console.WriteLine($"Failed to start app download for '{appId}': {exception.ToString()}");
+      return Task.FromResult(1);
+    }
+
+    return Task.FromResult(0);
+  }
+
+  // InstallProgressed Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<(string, float)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnInstallProgressed), reply);
+  }
+
+
   // --- Password flow Implementation ---
 
   // Login using the given credentials. The password string should be encrypted
   // using the provided public key to prevent session bus eavesdropping.
   Task IAuthPasswordFlow.LoginAsync(string username, string password)
   {
-    // TODO: prevent logging in if already logged in
+    // If an existing session exists, disconnect from it.
+    // TODO: prevent logging in if already logged in?
+    if (this.session != null)
+    {
+      Console.WriteLine("Disconnecting existing Steam session");
+      this.session.Disconnect();
+    }
+
     Console.WriteLine($"Logging in for user: {username}");
 
     // Decrypt the password using our private key
@@ -193,9 +235,12 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       password = this.Decrypt(password);
     }
 
-    // Configure the user/pass for the client
-    this.user = username;
-    this.pass = password != "" ? password : null;
+    // Configure the user/pass for the session
+    var login = new SteamUser.LogOnDetails();
+    login.Username = username;
+    login.Password = password != "" ? password : null;
+    login.LoginID = this.loginId;
+    string? steamGuardData = null;
 
     // Look up any previously saved SteamGuard data for this user
     try
@@ -210,10 +255,15 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
         Console.WriteLine("Found saved auth session for user: {0}", username);
         // Get the session data
         var authSession = authSessions![username.ToLower()];
-        this.accountName = authSession.accountName;
-        this.previouslyStoredGuardData = authSession.steamGuard;
-        this.refreshToken = authSession.refreshToken;
-        this.accessToken = authSession.accessToken;
+        //this.accountName = authSession.accountName;
+        //this.previouslyStoredGuardData = authSession.steamGuard;
+        //this.refreshToken = authSession.refreshToken;
+        //this.accessToken = authSession.accessToken;
+
+        login.Password = null;
+        login.AccessToken = authSession.refreshToken;
+        login.ShouldRememberPassword = true;
+        steamGuardData = authSession.steamGuard;
       }
     }
     catch (Exception e)
@@ -223,7 +273,21 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
 
     // Initiate the connection
     Console.WriteLine("Initializing Steam Client connection");
-    this.steamClient.Connect();
+    //this.steamClient.Connect();
+
+    // Create a new Steam session using the given login details and the DBus interface
+    // as an authenticator implementation.
+    this.session = new SteamSession(login, steamGuardData, this);
+
+    // Subscribe to client callbacks
+    this.session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
+    this.session.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
+    this.session.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
+    this.session.Callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
+    this.session.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
+    //this.session.callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+
+    this.session.Login();
 
     return Task.FromResult(0);
   }
@@ -233,9 +297,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   Task IAuthPasswordFlow.LogoutAsync(string username)
   {
     // get the steamuser handler, which is used for logging on after successfully connecting
-    var steamUser = this.steamClient.GetHandler<SteamUser>();
-    steamUser?.LogOff();
-    this.loggedIn = false;
+    this.session?.Disconnect();
 
     return Task.FromResult(0);
   }
@@ -245,10 +307,15 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   Task<PasswordFlowProperties> IAuthPasswordFlow.GetAllAsync()
   {
     var properties = new PasswordFlowProperties();
-    properties.AuthenticatedUser = this.user is null ? "" : this.user!;
-    if (this.loggedIn)
+    if (this.session != null)
     {
-      properties.Status = 1;
+      var username = this.session!.GetLogonDetails().Username;
+      properties.AuthenticatedUser = username is null ? "" : username;
+
+      if (this.session!.IsLoggedOn)
+      {
+        properties.Status = 1;
+      }
     }
     return Task.FromResult(properties);
   }
@@ -259,11 +326,13 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     switch (prop)
     {
       case "AuthenticatedUser":
-        object user = this.user is null ? "" : this.user!;
+        var username = this.session?.GetLogonDetails().Username;
+        object user = username is null ? "" : username!;
         return Task.FromResult(user);
       case "Status":
-        var loggedIn = this.loggedIn;
-        object status = this.loggedIn ? 1 : 0;
+        var isLoggedOn = this.session?.IsLoggedOn;
+        bool loggedIn = (bool)(isLoggedOn is null ? false : isLoggedOn!);
+        object status = loggedIn ? 1 : 0;
         return Task.FromResult(status);
       default:
         throw new NotImplementedException($"Invalid property: {prop}");
@@ -299,70 +368,17 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
 
 
   // Invoked when connected to Steam
-  async void OnConnected(SteamClient.ConnectedCallback callback)
+  void OnConnected(SteamClient.ConnectedCallback callback)
   {
-    Console.WriteLine("Connected to Steam! Logging in '{0}'...", this.user);
+    if (this.session == null)
+    {
+      return;
+    }
+    var logOnDetails = this.session.GetLogonDetails();
+    Console.WriteLine("Connected to Steam! Logging in '{0}'...", logOnDetails.Username);
 
     // Emit DBus signal to inform interested applications
     OnClientConnected?.Invoke(Path);
-
-    // Create a new authentication session if one does not yet exist for this user.
-    if (this.refreshToken == null)
-    {
-      // Begin authenticating via credentials
-      var authSession = await steamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
-      {
-        Username = this.user,
-        Password = this.pass,
-        IsPersistentSession = this.shouldRememberPassword,
-
-        // Set the user agent string
-        DeviceFriendlyName = $"{Environment.MachineName} (SteamBus)",
-
-        // See NewGuardData comment below
-        GuardData = previouslyStoredGuardData,
-
-        /// <see cref="UserConsoleAuthenticator"/> is the default authenticator implemention provided by SteamKit
-        /// for ease of use which blocks the thread and asks for user input to enter the code.
-        /// However, if you require special handling (e.g. you have the TOTP secret and can generate codes on the fly),
-        /// you can implement your own <see cref="SteamKit2.Authentication.IAuthenticator"/>.
-        Authenticator = this, // Use this class as the authenticator
-      });
-
-      // Starting polling Steam for authentication response
-      var pollResponse = await authSession.PollingWaitForResultAsync();
-
-      if (pollResponse.NewGuardData != null)
-      {
-        // When using certain two factor methods (such as email 2fa), guard data may be provided by Steam
-        // for use in future authentication sessions to avoid triggering 2FA again (this works similarly to the old sentry file system).
-        // Do note that this guard data is also a JWT token and has an expiration date.
-        this.previouslyStoredGuardData = pollResponse.NewGuardData;
-      }
-      this.accountName = pollResponse.AccountName;
-      this.accessToken = pollResponse.AccessToken;
-      this.refreshToken = pollResponse.RefreshToken;
-    }
-
-    // get the steamuser handler, which is used for logging on after successfully connecting
-    var steamUser = this.steamClient.GetHandler<SteamUser>();
-
-    // Logon to Steam with the access token we have received
-    // Note that we are using RefreshToken for logging on here
-    steamUser?.LogOn(new SteamUser.LogOnDetails
-    {
-      Username = this.accountName,
-      LoginID = this.loginId,
-      AccessToken = this.refreshToken,
-      ShouldRememberPassword = this.shouldRememberPassword, // If you set IsPersistentSession to true, this also must be set to true for it to work correctly
-    });
-
-    // This is not required, but it is possible to parse the JWT access token to see the scope and expiration date.
-    if (this.accessToken != null && this.refreshToken != null)
-    {
-      ParseJsonWebToken(this.accessToken!, nameof(this.accessToken));
-      ParseJsonWebToken(this.refreshToken!, nameof(this.refreshToken));
-    }
   }
 
 
@@ -370,8 +386,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   void OnDisconnected(SteamClient.DisconnectedCallback callback)
   {
     Console.WriteLine("Disconnected from Steam");
-    this.loggedIn = false;
-    this.licenses.Clear();
 
     // TODO: Send logout signal
   }
@@ -386,16 +400,14 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       return;
     }
 
-    if (this.user == null)
+    if (this.session == null)
     {
-      Console.WriteLine("Successfully logged in, but username was unset!");
+      Console.WriteLine("Successfully logged in, but no session exists!");
       return;
     }
 
     Console.WriteLine("Successfully logged on!");
-
-    // Update local state
-    this.loggedIn = true;
+    var loginDetails = this.session!.GetLogonDetails()!;
 
     // Update the saved login sessions
     // Update the saved auth sessions with login details
@@ -415,21 +427,20 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     }
 
     // Create a new auth session for this login
-    SteamAuthSession session = new SteamAuthSession();
-    session.steamGuard = this.previouslyStoredGuardData;
-    session.accountId = 0;
-    session.accountName = this.accountName;
-    session.accessToken = this.accessToken;
-    session.refreshToken = this.refreshToken;
-    var steamUser = this.steamClient.GetHandler<SteamUser>();
+    SteamAuthSession authSession = new SteamAuthSession();
+    authSession.steamGuard = this.session.GetSteamGuardData();
+    authSession.accountId = 0;
+    authSession.accountName = loginDetails.Username;
+    authSession.refreshToken = loginDetails.AccessToken;
+    var steamUser = this.session.SteamUser;
     if (steamUser != null && steamUser!.SteamID != null)
     {
-      session.accountId = steamUser!.SteamID!.AccountID;
+      authSession.accountId = steamUser!.SteamID!.AccountID;
     }
     Console.WriteLine($"Found steam id: {steamUser?.SteamID}");
 
     // Store the updated session for this user
-    authSessions[this.user!.ToLower()] = session;
+    authSessions[authSession.accountName!.ToLower()] = authSession;
 
     // Update the auth file with the updated session details
     using StreamWriter writer = new StreamWriter(authFile, false);
@@ -442,25 +453,18 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     // client to use this session. The refresh token is stored in 'local.vdf'
     // encrypted using AES, with the key being the sha256 hash of the lowercased username.
     // The SymmetricDecrypt function can help with decrypting these values.
-    var key = SHA256.HashData(Encoding.UTF8.GetBytes(this.user!.ToLower()));
+    var key = SHA256.HashData(Encoding.UTF8.GetBytes(authSession.accountName!.ToLower()));
 
 
     // Emit dbus signal when logged in successfully
-    OnLoggedIn?.Invoke(this.user is null ? "" : this.user!);
-    object user = this.user!;
+    OnLoggedIn?.Invoke(authSession.accountName is null ? "" : authSession.accountName!);
+    object user = authSession.accountName!;
     OnPasswordPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("AuthenticatedUser", user)]));
-
-    // Do stuff with SteamApps
-    var steamApps = this.steamClient.GetHandler<SteamApps>();
-
-    // at this point, we'd be able to perform actions on Steam
-
   }
 
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
   {
     Console.WriteLine("Logged off of Steam: {0}", callback.Result);
-    this.loggedIn = false;
   }
 
 
@@ -468,304 +472,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   void OnAccountInfo(SteamUser.AccountInfoCallback callback)
   {
     Console.WriteLine($"Account persona name: {callback.PersonaName}");
-  }
-
-
-  // Invoked on login to list the game/app licenses associated with the user.
-  async void OnLicenseList(SteamApps.LicenseListCallback callback)
-  {
-    Console.WriteLine("Licenses listed: {0}: {1}", callback.Result, callback.LicenseList);
-
-    // Update the license list
-    var licenses = new Dictionary<uint, SteamApps.LicenseListCallback.License>();
-    foreach (var license in callback.LicenseList)
-    {
-      licenses[license.PackageID] = license;
-    }
-    this.licenses = licenses;
-
-    // Get all packages associated with the user's licenses
-    var packages = await this.GetPackagesFromLicenses(callback.LicenseList);
-    this.packages = packages;
-
-    // Get all the app information associated with the user's packages
-    var apps = await this.GetAppsFromPackages(licenses, packages);
-    this.apps = apps;
-  }
-
-
-  /// Returns all the packages for the given list of licenses
-  async Task<Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>> GetPackagesFromLicenses(ReadOnlyCollection<SteamApps.LicenseListCallback.License> licenseList)
-  {
-    var packages = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
-
-    // Build a list of requests to get package info for each license.
-    var requests = new List<SteamApps.PICSRequest>();
-
-    // Loop through each license to build a request
-    foreach (var license in licenseList)
-    {
-      var id = license.PackageID;
-      var token = license.AccessToken;
-      var req = new SteamApps.PICSRequest(id, token);
-      requests.Add(req);
-    }
-
-    Console.WriteLine($"Requesting info for {requests.Count} number of packages");
-    Console.WriteLine($"Requests: {requests.ToString()}");
-
-    // Request app information for all owned apps
-    var steamApps = this.steamClient.GetHandler<SteamApps>();
-    if (steamApps == null)
-    {
-      Console.WriteLine("Failed to get SteamApps handle");
-      return packages;
-    }
-
-    // Wait for the job to complete
-    Console.WriteLine("Waiting for product info request");
-    var result = await steamApps!.PICSGetProductInfo(new List<SteamApps.PICSRequest>(), requests, false);
-    if (result == null)
-    {
-      Console.WriteLine("Failed to get result for fetching package info");
-      return packages;
-    }
-
-    if (result.Complete)
-    {
-      if (result!.Results == null)
-      {
-        Console.WriteLine("No results were returned for fetching package info");
-        return packages;
-      }
-
-      // Loop through each result
-      foreach (SteamApps.PICSProductInfoCallback productInfo in result!.Results!)
-      {
-        // Loop through each package result
-        foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in productInfo.Packages)
-        {
-          var pkgId = entry.Key;
-          var pkgInfo = entry.Value;
-
-          packages[pkgId] = pkgInfo;
-
-          // Cache the package info
-          var cacheDir = $"{this.cacheDir}/pkgs";
-          if (!Directory.Exists(cacheDir))
-          {
-            Directory.CreateDirectory(cacheDir);
-          }
-          pkgInfo.KeyValues.SaveToFile($"{cacheDir}/{pkgId}.vdf", false);
-        }
-      }
-
-      return packages;
-    }
-    else if (result.Failed)
-    {
-      // the request partially completed, and then Steam encountered a remote failure. for async jobs with only a single result (such as
-      // GetDepotDecryptionKey), this would normally throw an AsyncJobFailedException. but since Steam had given us a partial set of callbacks
-      // we get to decide what to do with the data
-
-      // keep in mind that if Steam immediately fails to provide any data, or times out while waiting for the first result, an
-      // AsyncJobFailedException or TaskCanceledException will be thrown
-
-      // the result set might not have our data, so we need to test to see if we have results for our request
-      //SteamApps.PICSProductInfoCallback productInfo = resultSet.Results.FirstOrDefault(prodCallback => prodCallback.Apps.ContainsKey(appid));
-      Console.WriteLine("Some results failed");
-
-      //if (productInfo != null)
-      //{
-      //  // we were lucky and Steam gave us the info we requested before failing
-      //}
-      //else
-      //{
-      //  // bad luck
-      //}
-    }
-    else
-    {
-      // the request partially completed, but then we timed out. essentially the same as the previous case, but Steam didn't explicitly fail.
-      Console.WriteLine("Some other failures happened or timed out");
-
-      // we still need to check our result set to see if we have our data
-      //SteamApps.PICSProductInfoCallback productInfo = resultSet.Results.FirstOrDefault(prodCallback => prodCallback.Apps.ContainsKey(appid));
-
-      //if (productInfo != null)
-      //{
-      //  // we were lucky and Steam gave us the info we requested before timing out
-      //}
-      //else
-      //{
-      //  // bad luck
-      //}
-    }
-
-    return packages;
-  }
-
-
-  /// Returns app information for the given map of licenses and packages
-  async Task<Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>> GetAppsFromPackages(Dictionary<uint, SteamApps.LicenseListCallback.License> licenses, Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> packages)
-  {
-    var apps = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
-
-    // Get the SteamApps handler
-    var steamApps = this.steamClient.GetHandler<SteamApps>();
-    if (steamApps == null)
-    {
-      Console.WriteLine("Failed to get SteamApps handle");
-      return apps;
-    }
-
-    // Build a list of requests to get app info for each package.
-    var requests = new List<SteamApps.PICSRequest>();
-
-    // Loop through each package result
-    foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in packages)
-    {
-      var pkgId = entry.Key;
-      var pkgInfo = entry.Value;
-
-      // Package KeyValues looks like this:
-      /*
-        "103387"
-        {
-                "packageid"             "103387"
-                "billingtype"           "10"
-                "licensetype"           "1"
-                "status"                "0"
-                "extended"
-                {
-                        "allowcrossregiontradingandgifting"             "false"
-                }
-                "appids"
-                {
-                        "0"             "377160"
-                }
-                "depotids"
-                {
-                        "0"             "377161"
-                        "1"             "377162"
-                        "2"             "377163"
-                        "3"             "377164"
-                        "4"             "377165"
-                        "5"             "377166"
-                        "6"             "377167"
-                        "7"             "377168"
-                        "8"             "393880"
-                        "9"             "393881"
-                        "10"            "393882"
-                        "11"            "393883"
-                        "12"            "393884"
-                }
-                "appitems"
-                {
-                }
-        }
-       */
-
-      // Get the license associated with this package
-      var license = this.licenses[pkgId];
-      if (license == null)
-      {
-        Console.WriteLine($"Unable to find license for package ID: {pkgId}");
-        continue;
-      }
-
-      // Get the app ids associated with this package
-      foreach (var value in pkgInfo.KeyValues["appids"].Children)
-      {
-        var appId = value.AsUnsignedInteger();
-        var token = license.AccessToken;
-        var req = new SteamApps.PICSRequest(appId, token);
-        requests.Add(req);
-      }
-    }
-
-
-    // Wait for the job to complete
-    Console.WriteLine("Waiting for app info request");
-    var result = await steamApps!.PICSGetProductInfo(requests, new List<SteamApps.PICSRequest>(), false);
-    if (result == null)
-    {
-      Console.WriteLine("Failed to get result for fetching app info");
-      return apps;
-    }
-
-    if (result.Complete)
-    {
-      if (result!.Results == null)
-      {
-        Console.WriteLine("No results were returned for fetching app info");
-        return apps;
-      }
-
-      // Loop through each result
-      foreach (SteamApps.PICSProductInfoCallback productInfo in result!.Results!)
-      {
-        // Loop through each app result
-        foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> entry in productInfo.Apps)
-        {
-          var appId = entry.Key;
-          var appInfo = entry.Value;
-
-          apps[appId] = appInfo;
-
-          // Cache the app info
-          var cacheDir = $"{this.cacheDir}/apps";
-          if (!Directory.Exists(cacheDir))
-          {
-            Directory.CreateDirectory(cacheDir);
-          }
-          appInfo.KeyValues.SaveToFile($"{cacheDir}/{appId}.vdf", false);
-        }
-      }
-
-      return apps;
-    }
-    else if (result.Failed)
-    {
-      Console.WriteLine("Some results failed");
-
-    }
-    else
-    {
-      // the request partially completed, but then we timed out. essentially the same as the previous case, but Steam didn't explicitly fail.
-      Console.WriteLine("Some other failures happened or timed out");
-    }
-
-    return apps;
-  }
-
-
-  // This is simply showing how to parse JWT, this is not required to login to Steam
-  void ParseJsonWebToken(string token, string name)
-  {
-    // You can use a JWT library to do the parsing for you
-    var tokenComponents = token.Split('.');
-
-    // Fix up base64url to normal base64
-    var base64 = tokenComponents[1].Replace('-', '+').Replace('_', '/');
-
-    if (base64.Length % 4 != 0)
-    {
-      base64 += new string('=', 4 - base64.Length % 4);
-    }
-
-    var payloadBytes = Convert.FromBase64String(base64);
-
-    // Payload can be parsed as JSON, and then fields such expiration date, scope, etc can be accessed
-    var payload = JsonDocument.Parse(payloadBytes);
-
-    // For brevity we will simply output formatted json to console
-    var formatted = JsonSerializer.Serialize(payload, new JsonSerializerOptions
-    {
-      WriteIndented = true,
-    });
-    Console.WriteLine($"{name}: {formatted}");
-    Console.WriteLine();
   }
 
 
