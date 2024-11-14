@@ -63,10 +63,10 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
   //Task GetProviderItem(appId);
   //Task GetProviderItems();
-  //Task GetSavePathPatterns(appId);
   //Task Refresh();
   //Task DiskAdded(diskPath); // We could just listen to udisks2 directly
   //Task DiskRemoved(diskPath);
+  Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
 
   // Signals
   //Task<IDisposable> WatchInstallProgressedAsync(string appId, float percent);

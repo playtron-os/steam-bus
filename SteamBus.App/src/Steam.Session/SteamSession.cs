@@ -10,6 +10,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Steam.Cloud;
 using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
@@ -38,7 +39,8 @@ class SteamSession
   public SteamUser? SteamUser;
   public SteamContent? SteamContentRef;
   readonly SteamApps? steamApps;
-  readonly SteamCloud? steamCloud;
+  public Steam.Cloud.SteamCloud steamCloud;
+  readonly SteamKit2.SteamCloud? steamCloudKit;
   //readonly PublishedFile steamPublishedFile;
 
   public CallbackManager Callbacks;
@@ -76,8 +78,14 @@ class SteamSession
 
     this.SteamUser = this.SteamClient.GetHandler<SteamUser>();
     this.steamApps = this.SteamClient.GetHandler<SteamApps>();
-    this.steamCloud = this.SteamClient.GetHandler<SteamCloud>();
-    //var steamUnifiedMessages = this.steamClient.GetHandler<SteamUnifiedMessages>();
+    this.steamCloudKit = this.SteamClient.GetHandler<SteamKit2.SteamCloud>();
+    var steamUnifiedMessages = this.SteamClient.GetHandler<SteamUnifiedMessages>();
+    if (steamUnifiedMessages == null)
+    {
+      Console.WriteLine("Failed to obtain unified messages handler");
+      throw new ArgumentNullException();
+    }
+    this.steamCloud = new Steam.Cloud.SteamCloud(steamUnifiedMessages);
     //this.steamPublishedFile = steamUnifiedMessages.CreateService<PublishedFile>();
     this.SteamContentRef = this.SteamClient.GetHandler<SteamContent>();
 
@@ -313,9 +321,9 @@ class SteamSession
 
 
   /// Get details for the given user generated content
-  public async Task<SteamCloud.UGCDetailsCallback> GetUGCDetails(UGCHandle ugcHandle)
+  public async Task<SteamKit2.SteamCloud.UGCDetailsCallback> GetUGCDetails(UGCHandle ugcHandle)
   {
-    var callback = await steamCloud.RequestUGCDetails(ugcHandle);
+    var callback = await steamCloudKit.RequestUGCDetails(ugcHandle);
 
     if (callback.Result == EResult.OK)
     {

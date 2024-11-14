@@ -1,15 +1,17 @@
+using System.Text.Json;
+using Tmds.DBus;
+using SteamKit2;
+using SteamKit2.Authentication;
 using Playtron.Plugin;
 using Steam.Content;
 using Steam.Session;
 using SteamBus.Auth;
-using SteamKit2.Authentication;
-using SteamKit2;
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
-using System.Text.Json;
 using System.Text;
-using Tmds.DBus;
 using Xdg.Directories;
+using Steam.Config;
+using Steam.Cloud;
 
 namespace SteamBus.DBus;
 
@@ -51,7 +53,7 @@ public interface IDBusSteamClient : IDBusObject
   //Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 }
 
-class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, IAuthTwoFactorFlow, IPluginLibraryProvider, IAuthenticator
+class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, IAuthTwoFactorFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
@@ -92,7 +94,8 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     // Create a steam client config
     var config = SteamConfiguration.Create(builder =>
     {
-      builder.WithConnectionTimeout(TimeSpan.FromSeconds(10));
+      builder.WithConnectionTimeout(TimeSpan.FromSeconds(30));
+      builder.WithDirectoryFetch(true);
     });
 
     // Create a unique random login ID for this client. This is required to
@@ -612,7 +615,6 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     return SignalWatcher.AddAsync(this, nameof(OnEmailTwoFactorRequired), reply);
   }
 
-
   // Return the public key to the client to send encrypted messages
   Task<(string keyType, string data)> IAuthCryptography.GetPublicKeyAsync()
   {
@@ -621,5 +623,263 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   }
 
   public ObjectPath ObjectPath { get { return Path; } }
-}
 
+  // -- Cloud saves Implementation --
+
+  Task<CloudPathObject[]> IPluginLibraryProvider.GetSavePathPatternsAsync(string appid, string platform)
+  {
+    uint appidParsed = uint.Parse(appid);
+    Console.WriteLine("Getting paths for {0}", appid);
+    var appInfo = this.apps[appidParsed];
+    if (appInfo == null)
+    {
+      Console.WriteLine("Unable to load appInfo");
+      return Task.FromResult<CloudPathObject[]>([]);
+    }
+    List<CloudPathObject> results = [];
+    List<KeyValue> overrides = [];
+    var ufs = appInfo.KeyValues["ufs"];
+
+    if (ufs.Children.Count == 0)
+    {
+      Console.WriteLine("Steam Cloud is not configured for this game.");
+      return Task.FromResult<CloudPathObject[]>([]);
+    }
+
+    // Get overrides that match this platform
+    foreach (var rootoverride in ufs["rootoverrides"].Children)
+    {
+      var os = rootoverride["os"].AsString()?.ToLower();
+      if (os != platform) continue;
+      overrides.Add(rootoverride);
+    }
+
+    var savefiles = ufs["savefiles"].Children;
+    // Unsure if usage of remote directory is bound to the number of savefiles or even its existance.
+    var defaultPath = RemoteCache.GetRemoteSavePath(this.session.steamUser.SteamID.AccountID, appidParsed);
+    results.Add(new CloudPathObject { alias = "", path = defaultPath, recursive = true });
+
+
+    foreach (var location in savefiles)
+    {
+      if (location["platforms"].Children.Count != 0)
+      {
+        foreach (var locPlatform in location["platforms"].Children)
+        {
+          var platformToCheck = locPlatform.AsString()?.ToLower();
+          if (platformToCheck == "all" || platformToCheck == platform) goto Matched;
+
+        }
+        continue;
+      }
+    Matched:
+      var root = location["root"].AsString()!;
+      var path = location["path"].AsString()!;
+      var pattern = location["pattern"].AsString()!;
+      var recursive = location["recursive"].AsBoolean(defaultValue: false);
+      path = path.Replace("{64BitSteamID}", this.session.steamUser.SteamID.ConvertToUInt64().ToString());
+      path = path.Replace("{Steam3AccountID}", this.session.steamUser.SteamID.AccountID.ToString());
+
+      if (root == "gameinstall")
+      {
+        root = "GameInstall"; // The GameInstall is used for downloads, not sure if steam has distinction betweeen lower and PascalCase, I don't want to find out about that the hard way
+      }
+      var alias = $"%{root}%{path}";
+
+      // Apply overrides
+      foreach (var rootoverride in overrides)
+      {
+        if (rootoverride["root"].AsString() != root) continue;
+        root = rootoverride["useinstead"].AsString();
+        var addpath = rootoverride["addpath"].AsString();
+        if (addpath != null)
+        {
+          path = addpath + path;
+        }
+        var transforms = rootoverride["pathtransforms"];
+        foreach (var transform in transforms.Children)
+        {
+          var find = transform["find"].AsString();
+          var replace = transform["replace"].AsString();
+          if (find != null && replace != null)
+          {
+            path.Replace(find, replace);
+          }
+        }
+      }
+
+      var mappedroot = root;
+
+      var home = Environment.GetEnvironmentVariable("HOME") ?? "~";
+      switch (root)
+      {
+        case "GameInstall":
+          Console.WriteLine("FIXME: Game install path in save location IS NOT replaced with actual install location.");
+          mappedroot = "{INSTALL}"; // FIXME: Replace it with actual install path if available
+          break;
+        case "WinMyDocuments":
+          mappedroot = "C:/Users/{USER}/Documents";
+          break;
+        case "WinAppDataLocal":
+          mappedroot = "C:/Users/{USER}/AppData/Local";
+          break;
+        case "WinAppDataLocalLow":
+          mappedroot = "C:/Users/{USER}/AppData/LocalLow";
+          break;
+        case "WinAppDataRoaming":
+          mappedroot = "C:/Users/{USER}/AppData/Roaming";
+          break;
+        case "WinSavedGames":
+          mappedroot = "C:/Users/{USER}/Saved Games";
+          break;
+        case "MacHome":
+        case "LinuxHome":
+          mappedroot = home;
+          break;
+        case "MacAppSupport":
+          mappedroot = System.IO.Path.Join(home, "Library/Application Support");
+          break;
+        case "MacDocuments":
+          mappedroot = System.IO.Path.Join(home, "Documents");
+          break;
+        case "MacCaches":
+          mappedroot = System.IO.Path.Join(home, "Library/Caches");
+          break;
+        case "LinuxXdgDataHome":
+          var xdgData = Environment.GetEnvironmentVariable("XDG_DATA_HOME") ?? System.IO.Path.Join(home, ".local/share");
+          mappedroot = xdgData;
+          break;
+        case "LinuxXdgConfigHome":
+          var xdgConfig = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") ?? System.IO.Path.Join(home, ".config");
+          mappedroot = xdgConfig;
+          break;
+        default:
+          throw new Exception($"Unknown root name {root}");
+      }
+      var newPath = System.IO.Path.Join(mappedroot, path);
+      Console.WriteLine("Appending new path {0} - {1}", alias, newPath);
+      results.Add(new CloudPathObject { alias = alias, path = newPath, recursive = recursive, pattern = pattern });
+    }
+    return Task.FromResult(results.ToArray());
+  }
+
+  async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appid, CloudPathObject[] paths)
+  {
+    if (this.session?.steamCloud == null)
+    {
+      Console.WriteLine("Steam Cloud not initialized");
+      return;
+    }
+    uint appidParsed = uint.Parse(appid);
+    ERemoteStoragePlatform platformToSync = ERemoteStoragePlatform.Windows; // Decide what platform we sync
+    var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
+
+    Console.WriteLine("CloudDownload for {0}", appidParsed);
+    var remoteCacheFile = new RemoteCache(this.session.steamUser.SteamID.AccountID, appidParsed);
+    var changeNumber = remoteCacheFile.GetChangeNumber();
+    Console.WriteLine("Cached change number {0}", changeNumber);
+    // Request changelist
+    var changelist = await this.session.steamCloud.GetFilesChangelistAsync(appidParsed, changeNumber);
+    if (changelist == null)
+    {
+      return;
+    }
+    if (changelist.files.Count == 0)
+    {
+      Console.WriteLine("Up to date");  
+      return;
+    }
+    Console.WriteLine("Current change: {0}", changelist.current_change_number);
+    var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
+
+    var client = new HttpClient();
+    // FIXME: Concurrency is appreciated here
+    foreach (var file in changelist.files)
+    {
+      if (((ERemoteStoragePlatform)file.platforms_to_sync & platformToSync) == 0) continue;
+      var path = "";
+      if (changelist.path_prefixes.Count > 0)
+      {
+        path = changelist.path_prefixes[(int)file.path_prefix_index];
+      }
+      var cloudpath = $"{path}{file.file_name}";
+      var fspath = cloudpath;
+      var response = await this.session.steamCloud.DownloadFileAsync(appidParsed, cloudpath);
+      if (response == null)
+      {
+        Console.WriteLine("Unable to get file {0}", file.file_name);
+        return;
+      }
+      // Prepare get request for actual file
+      var http = response.use_https ? "https" : "http";
+      var url = $"{http}://{response.url_host}{response.url_path}";
+      Console.WriteLine("Writing files to appropriate directories is not implemented yet");
+      // Map the path to file system
+      foreach (var location in paths)
+      {
+        // If there is no variable, we want a default location
+        if (location.alias.Length == 0)
+        {
+          if (fspath[0] != '%')
+          {
+            fspath = System.IO.Path.Join(location.path, fspath);
+          }
+          continue;
+        }
+        var newpath = fspath.Replace(location.alias, location.path, StringComparison.CurrentCultureIgnoreCase);
+        if (newpath != fspath)
+        {
+          fspath = newpath;
+          break;
+        }
+      }
+      Console.WriteLine("{0} - {1}", cloudpath, fspath);
+      continue;
+      var request = new HttpRequestMessage(HttpMethod.Get, url);
+      foreach (var header in response.request_headers)
+      {
+        request.Headers.Add(header.name, header.value); // Set headers that steam expects us to send to the CDN
+      }
+      // We may also want to get files concurrently
+      try
+      {
+        // We can also make it return after headers were read, unsure how big files can get.
+        var fileRes = await client.SendAsync(request, HttpCompletionOption.ResponseContentRead);
+        Console.WriteLine("Response for {0} received", cloudpath);
+        fileRes.EnsureSuccessStatusCode();
+        var fileData = await fileRes.Content.ReadAsByteArrayAsync();
+        // FIXME: Where to write it???
+      }
+      catch (Exception e)
+      {
+        Console.WriteLine("Failed to get a file {0}: {1}", cloudpath, e);
+        return;
+      }
+    }
+    return;
+  }
+  async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, CloudPathObject[] paths)
+  {
+    if (this.session?.steamCloud == null)
+    {
+      Console.WriteLine("Steam Cloud not initialized");
+      return;
+    }
+    uint appidParsed = uint.Parse(appid);
+    var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
+    Console.WriteLine("CloudUpload for {0}", appidParsed);
+    var remoteCacheFile = new RemoteCache(this.session.steamUser.SteamID.AccountID, appidParsed);
+    var changeNumber = remoteCacheFile.GetChangeNumber();
+    var changelist = await this.session.steamCloud.GetFilesChangelistAsync(appidParsed, changeNumber);
+    if (changelist == null)
+    {
+      return;
+    }
+    if (changelist.current_change_number != changeNumber)
+    {
+      Console.WriteLine("Potential conflict, different change numbers detected");
+      return;
+    }
+    Console.WriteLine("Uploading is not implemented yet");
+  }
+}
