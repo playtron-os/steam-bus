@@ -22,6 +22,24 @@ busctl --user call one.playtron.SteamBus \
   SendCode s XXXXX
 ```
 
+Getting install options
+
+```bash
+busctl --user call one.playtron.SteamBus \
+  /one/playtron/SteamBus/SteamClient0 \
+  one.playtron.plugin.LibraryProvider \
+  GetInstallOptions s <appId>
+```
+
+Install a game
+
+```bash
+busctl --user call one.playtron.SteamBus \
+  /one/playtron/SteamBus/SteamClient0 \
+  one.playtron.plugin.LibraryProvider \
+  Install "ssa{sv}" "<appId>" "/dev/sda1" 2 'os' s windows 'language' s english
+```
+
 ## Attributions
 
 - [SteamKit2](https://github.com/SteamRE/SteamKit) is licensed under the [LGPL v2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html)
