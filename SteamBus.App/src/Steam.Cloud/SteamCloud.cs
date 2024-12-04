@@ -11,9 +11,9 @@ namespace Steam.Cloud;
 class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
 {
   // Handles requests to actual cloud
-  private SteamUnifiedMessages.UnifiedService<ICloud> unifiedCloud = steamUnifiedMessages.CreateService<ICloud>();
+  private SteamKit2.Internal.Cloud unifiedCloud = steamUnifiedMessages.CreateService<SteamKit2.Internal.Cloud>();
   // Handles notifications to and from the api
-  private SteamUnifiedMessages.UnifiedService<ICloudClient> unifiedClient = steamUnifiedMessages.CreateService<ICloudClient>();
+  private SteamKit2.Internal.CloudClient unifiedClient = steamUnifiedMessages.CreateService<SteamKit2.Internal.CloudClient>();
 
   /// <summary>
   /// Gets changelist based on the synced save state
@@ -28,13 +28,13 @@ class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
     {
       request.synced_change_number = syncedChangeNumber.Value;
     }
-    var response = await unifiedCloud.SendMessage(x => x.GetAppFileChangelist(request));
+    var response = await unifiedCloud.GetAppFileChangelist(request);
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to get changelist for {0}, {1}", request.appid, response.Result);
       return null;
     }
-    return response.GetDeserializedResponse<CCloud_GetAppFileChangelist_Response>();
+    return response.Body;
   }
 
   /// <summary>
@@ -47,13 +47,13 @@ class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
   {
     // It is possible to force proxification and particular realm, not useful for us I guess.
     var request = new CCloud_ClientFileDownload_Request { appid = appid, filename = filename };
-    var response = await unifiedCloud.SendMessage(x => x.ClientFileDownload(request));
+    var response = await unifiedCloud.ClientFileDownload(request);
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to get data for file download of {0} in {1}, {2}", filename, appid, response.Result);
       return null;
     }
-    return response.GetDeserializedResponse<CCloud_ClientFileDownload_Response>();
+    return response.Body;
   }
 
   public async Task<CCloud_BeginAppUploadBatch_Response?> BeginAppUploadBatch(uint appid, string[] filesToUpload, string[] filesToDelete)
@@ -63,13 +63,13 @@ class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
     request.files_to_upload.AddRange(filesToUpload);
     request.files_to_delete.AddRange(filesToDelete);
 
-    var response = await unifiedCloud.SendMessage(x => x.BeginAppUploadBatch(request));
+    var response = await unifiedCloud.BeginAppUploadBatch(request);
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to begin upload batch for {0}: {1}", appid, response.Result);
       return null;
     }
-    return response.GetDeserializedResponse<CCloud_BeginAppUploadBatch_Response>();
+    return response.Body;
   }
 
 
@@ -87,13 +87,13 @@ class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
       upload_batch_id = upload_batch_id,
       time_stamp = time_stamp
     };
-    var response = await unifiedCloud.SendMessage(x => x.ClientBeginFileUpload(request));
+    var response = await unifiedCloud.ClientBeginFileUpload(request);
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to begin upload for {0} of {1}: {2}", filename, appid, response.Result);
       return null;
     }
-    return response.GetDeserializedResponse<CCloud_ClientBeginFileUpload_Response>();
+    return response.Body;
   }
 
   public async Task<CCloud_ClientCommitFileUpload_Response?> CientCommitFileUpload(uint appid, bool transfer_succeeded, string filename, byte[] file_sha)
@@ -105,13 +105,13 @@ class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
       transfer_succeeded = transfer_succeeded,
       file_sha = file_sha
     };
-    var response = await unifiedCloud.SendMessage(x => x.ClientCommitFileUpload(request));
+    var response = await unifiedCloud.ClientCommitFileUpload(request);
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to commit upload for {0} of {1}: {2}", filename, appid, response.Result);
       return null;
     }
-    return response.GetDeserializedResponse<CCloud_ClientCommitFileUpload_Response>();
+    return response.Body;
   }
 
   public async Task<CCloud_CompleteAppUploadBatch_Response?> CompleteAppUploadBatch(uint appid, ulong batch_id, uint batch_eresult)
@@ -122,13 +122,13 @@ class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
       batch_id = batch_id,
       batch_eresult = batch_eresult,
     };
-    var response = await unifiedCloud.SendMessage(x => x.CompleteAppUploadBatchBlocking(request));
+    var response = await unifiedCloud.CompleteAppUploadBatchBlocking(request);
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to complete upload for {0}: {1}", appid, response.Result);
       return null;
     }
-    return response.GetDeserializedResponse<CCloud_CompleteAppUploadBatch_Response>();
+    return response.Body;
   }
 
   public static Dictionary<string, LocalFile> MapFilePaths(CloudPathObject[] paths)

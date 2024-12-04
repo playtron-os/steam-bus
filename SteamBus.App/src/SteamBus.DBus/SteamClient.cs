@@ -656,7 +656,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
 
     var savefiles = ufs["savefiles"].Children;
     // Unsure if usage of remote directory is bound to the number of savefiles or even its existance.
-    var defaultPath = RemoteCache.GetRemoteSavePath(this.session.steamUser.SteamID.AccountID, appidParsed);
+    var defaultPath = RemoteCache.GetRemoteSavePath(this.session.SteamUser.SteamID.AccountID, appidParsed);
     results.Add(new CloudPathObject { alias = "", path = defaultPath, recursive = true });
 
 
@@ -677,8 +677,8 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
       var path = location["path"].AsString()!;
       var pattern = location["pattern"].AsString()!;
       var recursive = location["recursive"].AsBoolean(defaultValue: false);
-      path = path.Replace("{64BitSteamID}", this.session.steamUser.SteamID.ConvertToUInt64().ToString());
-      path = path.Replace("{Steam3AccountID}", this.session.steamUser.SteamID.AccountID.ToString());
+      path = path.Replace("{64BitSteamID}", this.session.SteamUser.SteamID.ConvertToUInt64().ToString());
+      path = path.Replace("{Steam3AccountID}", this.session.SteamUser.SteamID.AccountID.ToString());
 
       if (root == "gameinstall")
       {
@@ -775,7 +775,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
 
     Console.WriteLine("CloudDownload for {0}", appidParsed);
-    var remoteCacheFile = new RemoteCache(this.session.steamUser.SteamID.AccountID, appidParsed);
+    var remoteCacheFile = new RemoteCache(this.session.SteamUser.SteamID.AccountID, appidParsed);
     var changeNumber = remoteCacheFile.GetChangeNumber();
     Console.WriteLine("Cached change number {0}", changeNumber);
     // Request changelist
@@ -868,7 +868,7 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     uint appidParsed = uint.Parse(appid);
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
     Console.WriteLine("CloudUpload for {0}", appidParsed);
-    var remoteCacheFile = new RemoteCache(this.session.steamUser.SteamID.AccountID, appidParsed);
+    var remoteCacheFile = new RemoteCache(this.session.SteamUser.SteamID.AccountID, appidParsed);
     var changeNumber = remoteCacheFile.GetChangeNumber();
     var changelist = await this.session.steamCloud.GetFilesChangelistAsync(appidParsed, changeNumber);
     if (changelist == null)
