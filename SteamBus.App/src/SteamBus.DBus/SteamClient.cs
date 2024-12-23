@@ -53,7 +53,7 @@ public interface IDBusSteamClient : IDBusObject
   //Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 }
 
-class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, IAuthTwoFactorFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
+class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IAuthTwoFactorFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
@@ -69,6 +69,8 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
   private Dictionary<uint, SteamApps.LicenseListCallback.License> licenses = new Dictionary<uint, SteamApps.LicenseListCallback.License>();
   private Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> packages = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
   private Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> apps = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
+
+  private PlaytronPluginProperties pluginInfo = new PlaytronPluginProperties();
 
   // Create an RSA keypair for secure secret sending
   private bool useEncryption = false;
@@ -142,7 +144,42 @@ class DBusSteamClient : IDBusSteamClient, IAuthPasswordFlow, IAuthCryptography, 
     return Encoding.Unicode.GetString(decrypted);
   }
 
+  Task<PlaytronPluginProperties> IPlaytronPlugin.GetAllAsync() {
+    return Task.FromResult(pluginInfo);
+  }
+
+  Task<object> IPlaytronPlugin.GetAsync(string prop) {
+    switch (prop) {
+      case "Id":
+        return Task.FromResult((object)pluginInfo.Id);
+      case "Version":
+        return Task.FromResult((object)pluginInfo.Version);
+      case "Name":
+        return Task.FromResult((object)pluginInfo.Name);
+      case "MinimumApiVersion":
+        return Task.FromResult((object)pluginInfo.MinimumApiVersion);
+      default:
+        throw new NotSupportedException();
+    }
+  }
+
   // --- LibraryProvider Implementation
+  
+  Task<LibraryProviderProperties> IPluginLibraryProvider.GetAllAsync() {
+    return Task.FromResult(new LibraryProviderProperties());
+  }
+
+  Task<object> IPluginLibraryProvider.GetAsync(string prop) {
+    var props = new LibraryProviderProperties();
+    switch (prop) {
+      case "Name": 
+        return Task.FromResult((object)props.Name);
+      case "Provider":
+        return Task.FromResult((object)props.Provider);
+      default:
+        throw new NotSupportedException();
+    }
+  }
 
   Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appId)
   {

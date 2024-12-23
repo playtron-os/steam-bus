@@ -1,5 +1,6 @@
 ﻿using Tmds.DBus;
 using SteamBus.DBus;
+using System.Reflection;
 
 namespace SteamBus;
 
@@ -7,7 +8,7 @@ class SteamBus
 {
   static async Task Main(string[] args)
   {
-    Console.WriteLine("Starting SteamBus v0.0.0");
+    Console.WriteLine("Starting SteamBus v{0}", Assembly.GetExecutingAssembly().GetName().Version);
 
     string? busAddress = Address.Session;
     if (busAddress is null)

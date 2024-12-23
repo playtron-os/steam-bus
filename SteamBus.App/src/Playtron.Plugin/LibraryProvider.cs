@@ -48,10 +48,20 @@ public class InstallOptions
   public string architecture = "";
 }
 
+[Dictionary]
+public class LibraryProviderProperties
+{
+  public string Name = "Steam";
+  public string Provider = "Steam";
+}
+
 /// Interface definition for a library provider
 [DBusInterface("one.playtron.plugin.LibraryProvider")]
 public interface IPluginLibraryProvider : IDBusObject
 {
+  // Properties
+  Task<object> GetAsync(string prop);
+  Task<LibraryProviderProperties> GetAllAsync();
   // Methods
 
   // Downloads and installs the app with the given app id to the target disk.
