@@ -33,6 +33,13 @@ class SteamBus
     DBusSteamClient client = new DBusSteamClient(new ObjectPath(path));
     await connection.RegisterObjectAsync(client);
 
+    // Register with Playserve
+    var pluginManager = connection.CreateProxy<IPluginManager>(
+      "one.playtron.Playserve",
+      "/one/playtron/plugins/Manager"
+    );
+    await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
+
     // Run forever
     await Task.Delay(-1);
 

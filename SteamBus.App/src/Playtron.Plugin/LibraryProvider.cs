@@ -79,8 +79,8 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
 
   // Signals
-  //Task<IDisposable> WatchInstallProgressedAsync(string appId, float percent);
-  Task<IDisposable> WatchInstallProgressedAsync(Action<(string, float)> reply);
+  //Task<IDisposable> WatchInstallProgressedAsync(string appId, double percent);
+  Task<IDisposable> WatchInstallProgressedAsync(Action<(string, double)> reply);
   // WatchInstallCompleted(appId)
   // WatchInstallFailed(appId, code, reason)
   // WatchUpdateProgressed(appId, percent)

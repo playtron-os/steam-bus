@@ -104,7 +104,7 @@ class SteamSession
   private readonly object steamLock = new();
 
 
-  public bool WaitUntilCallback(Action submitter, WaitCondition waiter)
+  public async Task<bool> WaitUntilCallback(Action submitter, WaitCondition waiter)
   {
     while (!bAborted && !waiter())
     {
@@ -120,19 +120,23 @@ class SteamSession
         {
           Callbacks.RunWaitCallbacks(TimeSpan.FromSeconds(1));
         }
+
+        await Task.Delay(1);
       } while (!bAborted && this.seq == seq && !waiter());
+
+      await Task.Delay(1);
     }
 
     return bAborted;
   }
 
 
-  public bool WaitForCredentials()
+  public async Task<bool> WaitForCredentials()
   {
     if (IsLoggedOn || bAborted)
       return IsLoggedOn;
 
-    WaitUntilCallback(() => { }, () => IsLoggedOn);
+    await WaitUntilCallback(() => { }, () => IsLoggedOn);
 
     return IsLoggedOn;
   }
@@ -346,18 +350,18 @@ class SteamSession
   }
 
 
-  public void Login()
+  public async Task Login()
   {
-    Console.Write("Connecting to Steam...");
+    Console.WriteLine("Connecting to Steam...");
     this.Connect();
 
-    if (!this.WaitForCredentials())
+    if (!(await this.WaitForCredentials()))
     {
       Console.WriteLine("Unable to get Steam credentials");
       return;
     }
 
-    Task.Run(this.TickCallbacks);
+    await Task.Run(this.TickCallbacks);
   }
 
 

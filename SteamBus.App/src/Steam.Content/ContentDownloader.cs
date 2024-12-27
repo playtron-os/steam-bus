@@ -36,7 +36,7 @@ class ContentDownloader
   private CDNClientPool? cdnPool;
   private AppDownloadOptions? options;
 
-  private event Action<(string, float)>? OnInstallProgressed;
+  private event Action<(string, double)>? OnInstallProgressed;
 
   private sealed class DepotDownloadInfo(
       uint depotid, uint appId, ulong manifestId, string branch,
@@ -59,19 +59,19 @@ class ContentDownloader
 
   private class DepotFilesData
   {
-    public DepotDownloadInfo depotDownloadInfo;
-    public DepotDownloadCounter depotCounter;
-    public string stagingDir;
-    public DepotManifest manifest;
-    public DepotManifest previousManifest;
-    public List<DepotManifest.FileData> filteredFiles;
-    public HashSet<string> allFileNames;
+    public required DepotDownloadInfo depotDownloadInfo;
+    public required DepotDownloadCounter depotCounter;
+    public required string stagingDir;
+    public required DepotManifest manifest;
+    public required DepotManifest previousManifest;
+    public required List<DepotManifest.FileData> filteredFiles;
+    public required HashSet<string> allFileNames;
   }
 
   private class FileStreamData
   {
-    public FileStream fileStream;
-    public SemaphoreSlim fileLock;
+    public required FileStream fileStream;
+    public required SemaphoreSlim fileLock;
     public int chunksToDownload;
   }
 
@@ -99,14 +99,14 @@ class ContentDownloader
   }
 
 
-  public async Task DownloadAppAsync(uint appId, Action<(string, float)> onInstallProgressed)
+  public async Task DownloadAppAsync(uint appId, Action<(string, double)> onInstallProgressed)
   {
     var options = new AppDownloadOptions();
     await DownloadAppAsync(appId, options, onInstallProgressed);
   }
 
 
-  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<(string, float)> onInstallProgressed)
+  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<(string, double)>? onInstallProgressed)
   {
     // TODO: Handle download already in progress
     this.options = options;
@@ -123,7 +123,7 @@ class ContentDownloader
     var lv = options.LowViolence;
     var isUgc = options.IsUgc;
 
-    await this.session?.RequestAppInfo(appId);
+    await this.session.RequestAppInfo(appId);
 
     if (!await AccountHasAccess(appId))
     {
@@ -185,7 +185,7 @@ class ContentDownloader
                   depotConfig["oslist"] != KeyValue.Invalid &&
                   !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
               {
-                var oslist = depotConfig["oslist"].Value.Split(',');
+                var oslist = depotConfig["oslist"].Value?.Split(',') ?? [];
                 if (Array.IndexOf(oslist, os ?? GetSteamOS()) == -1)
                   continue;
               }

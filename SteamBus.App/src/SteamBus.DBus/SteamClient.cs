@@ -59,8 +59,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public ObjectPath Path;
   // Unique login ID used to allow multiple active login sessions from the same account
   private uint? loginId;
-  // Two-factor code used to login to Steam
-  private string? tfaCode;
+  // Two factor code task used to login to Steam
+  private TaskCompletionSource<string>? tfaCodeTask;
   // Steam session instance
   private SteamSession? session = null;
 
@@ -81,7 +81,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<ObjectPath>? OnClientConnected;
   public event Action<string>? OnLoggedIn;
   public event Action<string>? OnLoggedOut;
-  public event Action<(string, float)>? OnInstallProgressed;
+  public event Action<(string, double)>? OnInstallProgressed;
   public event Action<PropertyChanges>? OnPasswordPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
@@ -144,12 +144,15 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Encoding.Unicode.GetString(decrypted);
   }
 
-  Task<PlaytronPluginProperties> IPlaytronPlugin.GetAllAsync() {
+  Task<PlaytronPluginProperties> IPlaytronPlugin.GetAllAsync()
+  {
     return Task.FromResult(pluginInfo);
   }
 
-  Task<object> IPlaytronPlugin.GetAsync(string prop) {
-    switch (prop) {
+  Task<object> IPlaytronPlugin.GetAsync(string prop)
+  {
+    switch (prop)
+    {
       case "Id":
         return Task.FromResult((object)pluginInfo.Id);
       case "Version":
@@ -164,15 +167,18 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   }
 
   // --- LibraryProvider Implementation
-  
-  Task<LibraryProviderProperties> IPluginLibraryProvider.GetAllAsync() {
+
+  Task<LibraryProviderProperties> IPluginLibraryProvider.GetAllAsync()
+  {
     return Task.FromResult(new LibraryProviderProperties());
   }
 
-  Task<object> IPluginLibraryProvider.GetAsync(string prop) {
+  Task<object> IPluginLibraryProvider.GetAsync(string prop)
+  {
     var props = new LibraryProviderProperties();
-    switch (prop) {
-      case "Name": 
+    switch (prop)
+    {
+      case "Name":
         return Task.FromResult((object)props.Name);
       case "Provider":
         return Task.FromResult((object)props.Provider);
@@ -247,7 +253,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   }
 
   // InstallProgressed Signal
-  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<(string, float)> reply)
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<(string, double)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnInstallProgressed), reply);
   }
@@ -257,7 +263,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   // Login using the given credentials. The password string should be encrypted
   // using the provided public key to prevent session bus eavesdropping.
-  Task IAuthPasswordFlow.LoginAsync(string username, string password)
+  async Task IAuthPasswordFlow.LoginAsync(string username, string password)
   {
     // If an existing session exists, disconnect from it.
     // TODO: prevent logging in if already logged in?
@@ -327,9 +333,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     this.session.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
     //this.session.callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
 
-    this.session.Login();
-
-    return Task.FromResult(0);
+    await this.session.Login();
   }
 
 
@@ -549,6 +553,24 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnClientConnected), reply);
   }
 
+  async Task<string> WaitForTfaCode()
+  {
+    if (tfaCodeTask != null)
+      tfaCodeTask.TrySetCanceled();
+    tfaCodeTask = new();
+
+    var timeoutTask = Task.Delay(60000);
+    var completedTask = await Task.WhenAny(tfaCodeTask.Task, timeoutTask);
+
+    if (completedTask == timeoutTask)
+    {
+      tfaCodeTask.TrySetCanceled();
+      throw new TimeoutException("Waiting for 2fa code timed out");
+    }
+
+    return await tfaCodeTask.Task;
+  }
+
 
   // --- IAuthenticator implementation ---
 
@@ -559,21 +581,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   /// <returns>The 2-factor auth code used to login. This is the code that can be received from the authenticator app.</returns>
   async Task<string> IAuthenticator.GetDeviceCodeAsync(bool previousCodeWasIncorrect)
   {
-    // Clear any old 2FA code
-    this.tfaCode = "";
-
     // Emit a signal that a 2-factor code is required using the authenticator app
     OnTwoFactorRequired?.Invoke((previousCodeWasIncorrect, "Enter the two-factor code from the Steam authenticator app."));
 
     // Wait for a UI to call SendTwoFactor() with the code
     Console.WriteLine("Waiting for application to send two-factor code");
-    // TODO: Add timeout and better signaling to determine if 2FA code was sent
-    string code = "";
-    while (code == "")
-    {
-      await Task.Delay(500);
-      code = this.tfaCode is null ? "" : this.tfaCode!;
-    }
+    string code = await WaitForTfaCode();
     Console.WriteLine("TFA code was sent");
 
     Console.WriteLine($"Sending 2FA code: {code}");
@@ -591,21 +604,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   /// <returns>The Steam Guard auth code used to login.</returns>
   async Task<string> IAuthenticator.GetEmailCodeAsync(string email, bool previousCodeWasIncorrect)
   {
-    // Clear any old 2FA code
-    this.tfaCode = "";
-
     // Emit a signal that a 2-factor code is required using Steam Guard email authentication
     OnEmailTwoFactorRequired?.Invoke((email, previousCodeWasIncorrect, $"Enter the two-factor code sent to {email}"));
 
     // Wait for a UI to call SendTwoFactor() with the code
     Console.WriteLine("Waiting for application to send two-factor code");
-    // TODO: Add timeout and better signaling to determine if 2FA code was sent
-    string code = "";
-    while (code == "")
-    {
-      await Task.Delay(500);
-      code = this.tfaCode is null ? "" : this.tfaCode!;
-    }
+    string code = await WaitForTfaCode();
     Console.WriteLine("TFA code was sent");
 
     Console.WriteLine($"Sending 2FA code: {code}");
@@ -633,8 +637,15 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     Task task = Task.Run(() =>
     {
-      Console.WriteLine($"Got 2FA code: {code}");
-      this.tfaCode = code;
+      if (tfaCodeTask != null)
+      {
+        Console.WriteLine($"Got 2FA code: {code}");
+        tfaCodeTask.TrySetResult(code);
+      }
+      else
+      {
+        Console.WriteLine("No login session in progress");
+      }
     });
 
     return task;
@@ -823,7 +834,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     if (changelist.files.Count == 0)
     {
-      Console.WriteLine("Up to date");  
+      Console.WriteLine("Up to date");
       return;
     }
     Console.WriteLine("Current change: {0}", changelist.current_change_number);
