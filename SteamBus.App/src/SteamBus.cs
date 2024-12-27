@@ -34,11 +34,18 @@ class SteamBus
     await connection.RegisterObjectAsync(client);
 
     // Register with Playserve
-    var pluginManager = connection.CreateProxy<IPluginManager>(
-      "one.playtron.Playserve",
-      "/one/playtron/plugins/Manager"
-    );
-    await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
+    try
+    {
+      var pluginManager = connection.CreateProxy<IPluginManager>(
+        "one.playtron.Playserve",
+        "/one/playtron/plugins/Manager"
+      );
+      await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
+    }
+    catch (Exception ex)
+    {
+      Console.WriteLine($"Error registering plugin to playserve, ex:{ex}");
+    }
 
     // Run forever
     await Task.Delay(-1);
