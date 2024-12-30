@@ -358,7 +358,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
       if (this.session!.IsLoggedOn)
       {
-        properties.Status = 1;
+        properties.Status = 2;
       }
     }
     return Task.FromResult(properties);
@@ -376,7 +376,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       case "Status":
         var isLoggedOn = this.session?.IsLoggedOn;
         bool loggedIn = (bool)(isLoggedOn is null ? false : isLoggedOn!);
-        object status = loggedIn ? 1 : 0;
+        object status = loggedIn ? 2 : 0;
         return Task.FromResult(status);
       default:
         throw new NotImplementedException($"Invalid property: {prop}");
@@ -503,7 +503,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Emit dbus signal when logged in successfully
     OnLoggedIn?.Invoke(authSession.accountName is null ? "" : authSession.accountName!);
     object user = authSession.accountName!;
-    OnPasswordPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("AuthenticatedUser", user)]));
+    OnPasswordPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("AuthenticatedUser", user), new KeyValuePair<string, object>("Status", 2)]));
   }
 
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
@@ -628,6 +628,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task<bool> IAuthenticator.AcceptDeviceConfirmationAsync()
   {
     // TODO: Have this be configurable
+    Console.WriteLine("Waiting for mobile confirmation...");
     return Task.FromResult(true);
   }
 
