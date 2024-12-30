@@ -21,6 +21,7 @@ namespace Steam.Session;
 class SteamSession
 {
   public bool IsLoggedOn { get; private set; }
+  public string PersonaName { get; private set; } = "";
 
   public ReadOnlyCollection<SteamApps.LicenseListCallback.License> Licenses
   {
@@ -95,6 +96,7 @@ class SteamSession
     this.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
     this.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLogIn);
     this.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+    this.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
   }
 
 
@@ -355,13 +357,14 @@ class SteamSession
     Console.WriteLine("Connecting to Steam...");
     this.Connect();
 
-    if (!(await this.WaitForCredentials()))
+    if (!await this.WaitForCredentials())
     {
       Console.WriteLine("Unable to get Steam credentials");
       return;
     }
 
-    await Task.Run(this.TickCallbacks);
+    Console.WriteLine("Got credentials...");
+    Task.Run(this.TickCallbacks);
   }
 
 
@@ -658,5 +661,12 @@ class SteamSession
         PackageTokens.TryAdd(license.PackageID, license.AccessToken);
       }
     }
+  }
+
+  // Invoked shortly after login to provide account information
+  private void OnAccountInfo(SteamUser.AccountInfoCallback callback)
+  {
+    Console.WriteLine($"Account persona name: {callback.PersonaName}");
+    this.PersonaName = callback.PersonaName;
   }
 }

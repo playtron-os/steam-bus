@@ -53,7 +53,7 @@ public interface IDBusSteamClient : IDBusObject
   //Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 }
 
-class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IAuthTwoFactorFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
+class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IUser, IAuthTwoFactorFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
@@ -61,6 +61,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   private uint? loginId;
   // Two factor code task used to login to Steam
   private TaskCompletionSource<string>? tfaCodeTask;
+  private bool needsDeviceConfirmation = false;
   // Steam session instance
   private SteamSession? session = null;
 
@@ -79,12 +80,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Signal events
   public event Action<string>? OnPing;
   public event Action<ObjectPath>? OnClientConnected;
-  public event Action<string>? OnLoggedIn;
-  public event Action<string>? OnLoggedOut;
   public event Action<(string, double)>? OnInstallProgressed;
-  public event Action<PropertyChanges>? OnPasswordPropsChanged;
+  public event Action<PropertyChanges>? OnUserPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
+  public event Action<string>? OnConfirmationRequired;
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
@@ -259,6 +259,33 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   }
 
 
+  SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData, IAuthenticator authenticator)
+  {
+    // Create a new Steam session using the given login details and the DBus interface
+    // as an authenticator implementation.
+    var session = new SteamSession(login, steamGuardData, this);
+
+    // Subscribe to client callbacks
+    session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
+    session.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
+    session.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
+    session.Callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
+    //this.session.callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+
+    return session;
+  }
+
+  // Gets current status of the auth
+  int GetCurrentAuthStatus()
+  {
+    var isLoggedOn = this.session?.IsLoggedOn ?? false;
+    int status = isLoggedOn ? 2 : 0;
+    if (this.needsDeviceConfirmation || (this.tfaCodeTask != null)) {
+      status = 1;
+    }
+    return status;
+  }
+
   // --- Password flow Implementation ---
 
   // Login using the given credentials. The password string should be encrypted
@@ -288,7 +315,32 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     login.LoginID = this.loginId;
     string? steamGuardData = null;
 
-    // Look up any previously saved SteamGuard data for this user
+    // Initiate the connection
+    Console.WriteLine("Initializing Steam Client connection");
+    //this.steamClient.Connect();
+
+    this.session = InitSession(login, steamGuardData, this);
+
+    await this.session.Login();
+  }
+
+
+  async Task<bool> IUser.ChangeUserAsync(string user_id)
+  {
+    // If the same user is logged in just skip this.
+    if (this.session != null)
+    {
+      var currentDetails = this.session.GetLogonDetails();
+      if (currentDetails.Username?.ToLower() == user_id.ToLower())
+      {
+        return true;
+      }
+    }
+    // Configure the user/pass for the session
+    var login = new SteamUser.LogOnDetails();
+    login.Username = user_id;
+    login.LoginID = this.loginId;
+    string? steamGuardData;
     try
     {
       Console.WriteLine("Checking {0} for exisiting auth session", authFile);
@@ -296,11 +348,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Dictionary<string, SteamAuthSession>? authSessions = JsonSerializer.Deserialize<Dictionary<string, SteamAuthSession>>(authFileJson);
 
       // If a session exists for this user, set the previously stored guard data from it
-      if (authSessions != null && authSessions!.ContainsKey(username.ToLower()))
+      if (authSessions != null && authSessions!.ContainsKey(user_id.ToLower()))
       {
-        Console.WriteLine("Found saved auth session for user: {0}", username);
+        Console.WriteLine("Found saved auth session for user: {0}", user_id);
         // Get the session data
-        var authSession = authSessions![username.ToLower()];
+        var authSession = authSessions![user_id.ToLower()];
         //this.accountName = authSession.accountName;
         //this.previouslyStoredGuardData = authSession.steamGuard;
         //this.refreshToken = authSession.refreshToken;
@@ -311,103 +363,84 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         login.ShouldRememberPassword = true;
         steamGuardData = authSession.steamGuard;
       }
+      else
+      {
+        return false;
+      }
     }
     catch (Exception e)
     {
       Console.WriteLine("Failed to open auth.json for stored auth sessions: {0}", e);
+      return false;
     }
-
-    // Initiate the connection
-    Console.WriteLine("Initializing Steam Client connection");
-    //this.steamClient.Connect();
-
-    // Create a new Steam session using the given login details and the DBus interface
-    // as an authenticator implementation.
-    this.session = new SteamSession(login, steamGuardData, this);
-
-    // Subscribe to client callbacks
-    this.session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
-    this.session.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
-    this.session.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
-    this.session.Callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
-    this.session.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
-    //this.session.callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
-
+    this.session?.Disconnect();
+    this.session = InitSession(login, steamGuardData, this);
     await this.session.Login();
+    if (this.session.IsLoggedOn) {
+      OnUserPropsChanged?.Invoke(new PropertyChanges([],["Avatar", "Username", "Identifier", "Status"]));
+    }
+    return this.session.IsLoggedOn;
   }
 
-
   // Log out of the given account
-  Task IAuthPasswordFlow.LogoutAsync(string username)
+  Task IUser.LogoutAsync(string userId)
   {
     // get the steamuser handler, which is used for logging on after successfully connecting
     this.session?.Disconnect();
+    this.session = null;
+
+    // TODO: Remove cached session
+
+    // This should invalidate all properties essentially making clients reload them
+    OnUserPropsChanged?.Invoke(new PropertyChanges([],["Avatar", "Username", "Identifier", "Status"]));
 
     return Task.FromResult(0);
   }
 
-
   // Returns all properties of the DBusSteamClient
-  Task<PasswordFlowProperties> IAuthPasswordFlow.GetAllAsync()
+  Task<UserProperties> IUser.GetAllAsync()
   {
-    var properties = new PasswordFlowProperties();
+    var properties = new UserProperties();
     if (this.session != null)
     {
-      var username = this.session!.GetLogonDetails().Username;
-      properties.AuthenticatedUser = username is null ? "" : username;
-
-      if (this.session!.IsLoggedOn)
-      {
-        properties.Status = 2;
-      }
+      var username = this.session.GetLogonDetails().Username;
+      properties.Username = this.session.PersonaName;
+      properties.Identifier = username is null ? "" : username;
+      properties.Status = GetCurrentAuthStatus();
     }
     return Task.FromResult(properties);
   }
 
   // Return the value of the given property
-  Task<object> IAuthPasswordFlow.GetAsync(string prop)
+  Task<object> IUser.GetAsync(string prop)
   {
     switch (prop)
     {
-      case "AuthenticatedUser":
+      case "Username":
+        return Task.FromResult((object)(this.session?.PersonaName ?? ""));
+      case "Avatar":
+        return Task.FromResult((object)""); // TODO: Fetch avatar hash
+      case "Identifier":
         var username = this.session?.GetLogonDetails().Username;
         object user = username is null ? "" : username!;
         return Task.FromResult(user);
       case "Status":
-        var isLoggedOn = this.session?.IsLoggedOn;
-        bool loggedIn = (bool)(isLoggedOn is null ? false : isLoggedOn!);
-        object status = loggedIn ? 2 : 0;
-        return Task.FromResult(status);
+        return Task.FromResult((object)GetCurrentAuthStatus());
       default:
         throw new NotImplementedException($"Invalid property: {prop}");
     }
   }
 
   // Set the value for the given property
-  Task IAuthPasswordFlow.SetAsync(string prop, object val)
+  Task IUser.SetAsync(string prop, object val)
   {
     return Task.FromResult(0);
   }
 
-
-  // LoggedIn Signal
-  Task<IDisposable> IAuthPasswordFlow.WatchLoggedInAsync(Action<string> reply)
-  {
-    return SignalWatcher.AddAsync(this, nameof(OnLoggedIn), reply);
-  }
-
-
-  // LoggedOut Signal
-  Task<IDisposable> IAuthPasswordFlow.WatchLoggedOutAsync(Action<string> reply)
-  {
-    return SignalWatcher.AddAsync(this, nameof(OnLoggedOut), reply);
-  }
-
-
   // Sets up sending signals when properties have changed
-  Task<IDisposable> IAuthPasswordFlow.WatchPropertiesAsync(Action<PropertyChanges> handler)
+  Task<IDisposable> IUser.WatchPropertiesAsync(Action<PropertyChanges> handler)
   {
-    return SignalWatcher.AddAsync(this, nameof(OnPasswordPropsChanged), handler);
+    return SignalWatcher.AddAsync(this, nameof(OnUserPropsChanged), handler);
   }
 
 
@@ -499,23 +532,15 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // The SymmetricDecrypt function can help with decrypting these values.
     var key = SHA256.HashData(Encoding.UTF8.GetBytes(authSession.accountName!.ToLower()));
 
-
-    // Emit dbus signal when logged in successfully
-    OnLoggedIn?.Invoke(authSession.accountName is null ? "" : authSession.accountName!);
     object user = authSession.accountName!;
-    OnPasswordPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("AuthenticatedUser", user), new KeyValuePair<string, object>("Status", 2)]));
+    needsDeviceConfirmation = false;
+    tfaCodeTask = null;
+    OnUserPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("Identifier", user), new KeyValuePair<string, object>("Status", 2)], ["Avatar", "Username"]));
   }
 
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
   {
     Console.WriteLine("Logged off of Steam: {0}", callback.Result);
-  }
-
-
-  // Invoked shortly after login to provide account information
-  void OnAccountInfo(SteamUser.AccountInfoCallback callback)
-  {
-    Console.WriteLine($"Account persona name: {callback.PersonaName}");
   }
 
 
@@ -629,6 +654,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     // TODO: Have this be configurable
     Console.WriteLine("Waiting for mobile confirmation...");
+    needsDeviceConfirmation = true;
+    OnConfirmationRequired?.Invoke("Confirm sign in on the Steam Mobile App");
     return Task.FromResult(true);
   }
 
@@ -662,6 +689,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task<IDisposable> IAuthTwoFactorFlow.WatchEmailTwoFactorRequiredAsync(Action<(string email, bool previousCodeWasIncorrect, string message)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnEmailTwoFactorRequired), reply);
+  }
+
+  Task<IDisposable> IAuthTwoFactorFlow.WatchConfirmationRequiredAsync(System.Action<string> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnConfirmationRequired), reply);
   }
 
   // Return the public key to the client to send encrypted messages
