@@ -74,7 +74,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   private PlaytronPluginProperties pluginInfo = new PlaytronPluginProperties();
 
   // Create an RSA keypair for secure secret sending
-  private bool useEncryption = false;
+  private bool useEncryption = true;
   private RSA rsa = RSA.Create(2048);
 
   // Signal events
@@ -141,7 +141,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     byte[] base64EncodedBytes = Convert.FromBase64String(base64EncodedString);
     byte[] decrypted = this.rsa.Decrypt(base64EncodedBytes, RSAEncryptionPadding.OaepSHA256);
-    return Encoding.Unicode.GetString(decrypted);
+    return Encoding.UTF8.GetString(decrypted);
   }
 
   Task<PlaytronPluginProperties> IPlaytronPlugin.GetAllAsync()
@@ -280,7 +280,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     var isLoggedOn = this.session?.IsLoggedOn ?? false;
     int status = isLoggedOn ? 2 : 0;
-    if (this.needsDeviceConfirmation || (this.tfaCodeTask != null)) {
+    if (this.needsDeviceConfirmation || (this.tfaCodeTask != null))
+    {
       status = 1;
     }
     return status;
@@ -376,8 +377,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     this.session?.Disconnect();
     this.session = InitSession(login, steamGuardData, this);
     await this.session.Login();
-    if (this.session.IsLoggedOn) {
-      OnUserPropsChanged?.Invoke(new PropertyChanges([],["Avatar", "Username", "Identifier", "Status"]));
+    if (this.session.IsLoggedOn)
+    {
+      OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
     }
     return this.session.IsLoggedOn;
   }
@@ -392,7 +394,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // TODO: Remove cached session
 
     // This should invalidate all properties essentially making clients reload them
-    OnUserPropsChanged?.Invoke(new PropertyChanges([],["Avatar", "Username", "Identifier", "Status"]));
+    OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
 
     return Task.FromResult(0);
   }
