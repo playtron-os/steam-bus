@@ -46,7 +46,6 @@ class SteamSession
 
   public CallbackManager Callbacks;
 
-  readonly bool authenticatedUser;
   bool bConnecting;
   bool bAborted;
   bool bExpectingDisconnectRemote;
@@ -55,6 +54,8 @@ class SteamSession
   int connectionBackoff;
   int seq; // more hack fixes
   AuthSession? authSession;
+  QrAuthSession? qrAuthSession;
+  public Action<string>? OnNewQrCode;
   readonly CancellationTokenSource abortedToken = new();
 
   // input
@@ -68,7 +69,6 @@ class SteamSession
   {
     this.logonDetails = details;
     this.authenticator = authenticator;
-    this.authenticatedUser = details.Username != null;
     this.SteamGuardData = steamGuardData;
 
     var clientConfiguration = SteamConfiguration.Create(config =>
@@ -102,9 +102,12 @@ class SteamSession
 
   public delegate bool WaitCondition();
 
-
   private readonly object steamLock = new();
 
+  private bool AuthenticatedUser()
+  {
+    return this.logonDetails.Username != null;
+  }
 
   public async Task<bool> WaitUntilCallback(Action submitter, WaitCondition waiter)
   {
@@ -122,7 +125,6 @@ class SteamSession
         {
           Callbacks.RunWaitCallbacks(TimeSpan.FromSeconds(1));
         }
-
         await Task.Delay(1);
       } while (!bAborted && this.seq == seq && !waiter());
 
@@ -356,7 +358,6 @@ class SteamSession
   {
     Console.WriteLine("Connecting to Steam...");
     this.Connect();
-
     if (!await this.WaitForCredentials())
     {
       Console.WriteLine("Unable to get Steam credentials");
@@ -436,14 +437,20 @@ class SteamSession
     // e.g. if the authentication phase takes a while and therefore multiple connections.
     connectionBackoff = 0;
 
-    if (!authenticatedUser)
+    if (!AuthenticatedUser())
     {
-      Console.Write("Logging anonymously into Steam...");
-      SteamUser?.LogOnAnonymous();
-      return;
-    }
+      Console.Write("No credentials specified. Initializing QR flow");
+      qrAuthSession = await SteamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails {
+        DeviceFriendlyName = $"{Environment.MachineName} (SteamBus)",
+      });
 
-    if (logonDetails.Username != null)
+      qrAuthSession.ChallengeURLChanged = () =>
+      {
+        OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+      };
+      OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+    }
+    else
     {
       Console.WriteLine("Logging '{0}' into Steam...", logonDetails.Username);
     }
@@ -455,7 +462,7 @@ class SteamSession
       {
         try
         {
-          authSession = await SteamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new SteamKit2.Authentication.AuthSessionDetails
+          authSession = await SteamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
           {
             Username = logonDetails.Username,
             Password = logonDetails.Password,
@@ -485,11 +492,45 @@ class SteamSession
 
     // If an auth session exists, wait for the result and update the access token
     // in the login details.
-    if (authSession != null)
+    if (qrAuthSession != null)
     {
       try
       {
-        var result = await authSession.PollingWaitForResultAsync();
+        Console.WriteLine("Polling for QR result");
+        var result = await qrAuthSession.PollingWaitForResultAsync(abortedToken.Token);
+        Console.WriteLine("Got QR result");
+        logonDetails.Username = result.AccountName;
+        logonDetails.AccessToken = result.RefreshToken;
+        if (result.NewGuardData != null)
+        {
+          this.SteamGuardData = result.NewGuardData;
+        }
+        else
+        {
+          this.SteamGuardData = null;
+        }
+      }
+      catch (TaskCanceledException)
+      {
+        Console.WriteLine("Login failure, task cancelled");
+        return;
+      }
+      catch (Exception ex)
+      {
+        Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
+        Abort(false);
+        return;
+      }
+      finally
+      {
+        qrAuthSession = null;
+      }
+    }
+    else if (authSession != null)
+    {
+      try
+      {
+        var result = await authSession.PollingWaitForResultAsync(abortedToken.Token);
 
         logonDetails.Username = result.AccountName;
         logonDetails.Password = null;
@@ -514,8 +555,10 @@ class SteamSession
         Abort(false);
         return;
       }
-
-      authSession = null;
+      finally
+      {
+        authSession = null;
+      }
     }
 
     SteamUser?.LogOn(logonDetails);

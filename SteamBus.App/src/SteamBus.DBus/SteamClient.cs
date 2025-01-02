@@ -53,7 +53,7 @@ public interface IDBusSteamClient : IDBusObject
   //Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 }
 
-class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IUser, IAuthTwoFactorFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
+class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IUser, IAuthTwoFactorFlow, IAuthQrFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
@@ -85,6 +85,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
   public event Action<string>? OnConfirmationRequired;
+  public event Action<string>? OnQrCodeUpdated;
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
@@ -259,7 +260,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   }
 
 
-  SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData, IAuthenticator authenticator)
+  SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)
   {
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
@@ -299,6 +300,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       Console.WriteLine("Disconnecting existing Steam session");
       this.session.Disconnect();
+      needsDeviceConfirmation = false;
     }
 
     Console.WriteLine($"Logging in for user: {username}");
@@ -319,12 +321,38 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Initiate the connection
     Console.WriteLine("Initializing Steam Client connection");
     //this.steamClient.Connect();
-
-    this.session = InitSession(login, steamGuardData, this);
-
+    this.session = InitSession(login, steamGuardData);
     await this.session.Login();
   }
 
+  Task IAuthQrFlow.BeginAsync()
+  {
+    Console.WriteLine("Starting new auth session.");
+    this.session?.Disconnect();
+    var login = new SteamUser.LogOnDetails();
+    string? steamGuardData = null;
+
+    this.session = InitSession(login, steamGuardData);
+    this.session.OnNewQrCode = OnQrCodeUpdated;
+    Console.WriteLine("Connecting to Steam...");
+    Task.Run(this.session.Login);
+    return Task.FromResult(0);
+  }
+
+  Task IAuthQrFlow.CancelAsync()
+  {
+    if (this.session is not null && this.session.GetLogonDetails().Username is null)
+    {
+      this.session.Disconnect();
+    }
+    return Task.FromResult(0);
+  }
+
+
+  Task<IDisposable> IAuthQrFlow.WatchCodeUpdatedAsync(System.Action<string> handler)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnQrCodeUpdated), handler);
+  }
 
   async Task<bool> IUser.ChangeUserAsync(string user_id)
   {
@@ -374,8 +402,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Console.WriteLine("Failed to open auth.json for stored auth sessions: {0}", e);
       return false;
     }
+    needsDeviceConfirmation = false;
     this.session?.Disconnect();
-    this.session = InitSession(login, steamGuardData, this);
+    this.session = InitSession(login, steamGuardData);
     await this.session.Login();
     if (this.session.IsLoggedOn)
     {
@@ -387,11 +416,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Log out of the given account
   Task IUser.LogoutAsync(string userId)
   {
-    // get the steamuser handler, which is used for logging on after successfully connecting
-    this.session?.Disconnect();
-    this.session = null;
-
-    // TODO: Remove cached session
+    if (session is not null && session.GetLogonDetails().Username == userId)
+    {
+      // get the steamuser handler, which is used for logging on after successfully connecting
+      session?.Disconnect();
+      session = null;
+    }
 
     // This should invalidate all properties essentially making clients reload them
     OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
