@@ -440,7 +440,8 @@ class SteamSession
     if (!AuthenticatedUser())
     {
       Console.Write("No credentials specified. Initializing QR flow");
-      qrAuthSession = await SteamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails {
+      qrAuthSession = await SteamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
+      {
         DeviceFriendlyName = $"{Environment.MachineName} (SteamBus)",
       });
 
@@ -561,7 +562,16 @@ class SteamSession
       }
     }
 
-    SteamUser?.LogOn(logonDetails);
+    try
+    {
+      SteamUser?.LogOn(logonDetails);
+    }
+    catch (Exception ex)
+    {
+      Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
+      Abort(false);
+      return;
+    }
   }
 
 

@@ -15,6 +15,7 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using System.Threading;
 using System;
+using Playtron.Plugin;
 
 
 namespace Steam.Content;
@@ -96,6 +97,108 @@ class ContentDownloader
   public ContentDownloader(SteamSession steamSession)
   {
     this.session = steamSession;
+  }
+
+  public async Task<InstallOption[]> GetInstallOptions(uint appId)
+  {
+    await session.RequestAppInfo(appId);
+
+    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    if (depots == null) return [];
+    var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    if (common == null) return [];
+
+    // TODO: Handle user generated content
+
+    List<string> branchOptions = [];
+    List<string> versionOptions = [];
+    List<string> languageOptions = [];
+    List<string> osOptions = [];
+    List<string> archOptions = [];
+
+    // Get languages
+    var supportedLanguages = common["supported_languages"];
+    if (supportedLanguages != null)
+    {
+      foreach (var languageSection in supportedLanguages.Children)
+      {
+        if (languageSection.Children.Count == 0)
+          continue;
+
+        var language = languageSection.Name;
+        if (language == null || language == "")
+          continue;
+
+        var supported = languageSection["supported"];
+        if (supported == null || supported.AsString() != "true")
+          continue;
+
+        languageOptions.Add(language);
+      }
+    }
+
+    // Get OS
+    var oslist = common["oslist"];
+    if (oslist != null)
+    {
+      foreach (var os in oslist.AsString()?.Split(",") ?? [])
+      {
+        if (os != "")
+          osOptions.Add(os);
+      }
+    }
+
+    // Get arch
+    var osarch = common["osarch"];
+    if (osarch != null)
+    {
+      foreach (var arch in osarch.AsString()?.Split(",") ?? [])
+      {
+        if (arch != "")
+          archOptions.Add(arch);
+      }
+    }
+
+    foreach (var depotSection in depots.Children)
+    {
+      if (depotSection.Children.Count == 0)
+        continue;
+
+      // Get branches and versions
+      if (depotSection.Name == "branches")
+      {
+        foreach (var branchSection in depotSection.Children)
+        {
+          if (branchSection.Children.Count == 0)
+            continue;
+
+          var branch = branchSection.Name;
+          if (branch == null || branch == "")
+            continue;
+
+          var version = branchSection["buildid"]?.AsString();
+          if (version == null || version == "")
+            continue;
+
+          var pwdRequired = branchSection["pwdrequired"]?.AsString();
+          if (pwdRequired == "1")
+            continue;
+
+          branchOptions.Add(branch);
+          versionOptions.Add(version);
+        }
+
+        continue;
+      }
+    }
+
+    return [
+      new InstallOption(InstallOptionType.Version.ToString().ToLowerInvariant(), InstallOptionType.Version.GetDescription(), versionOptions.ToArray()),
+      new InstallOption(InstallOptionType.Branch.ToString().ToLowerInvariant(), InstallOptionType.Branch.GetDescription(), branchOptions.ToArray()),
+      new InstallOption(InstallOptionType.Language.ToString().ToLowerInvariant(), InstallOptionType.Language.GetDescription(), languageOptions.ToArray()),
+      new InstallOption(InstallOptionType.OS.ToString().ToLowerInvariant(), InstallOptionType.OS.GetDescription(), osOptions.ToArray()),
+      new InstallOption(InstallOptionType.Architecture.ToString().ToLowerInvariant(), InstallOptionType.Architecture.GetDescription(), archOptions.ToArray()),
+    ];
   }
 
 

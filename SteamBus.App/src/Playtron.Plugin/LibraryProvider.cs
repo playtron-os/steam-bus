@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.ComponentModel;
 using Tmds.DBus;
 
 namespace Playtron.Plugin;
@@ -7,6 +8,20 @@ namespace Playtron.Plugin;
 /// DBus does not actually support structs, so they are instead represented as
 /// typed tuples.
 using InstallOptionDescription = (string, string, string[]);
+
+public enum InstallOptionType
+{
+  [Description("Version of the game to install")]
+  Version,
+  [Description("Branch to install from")]
+  Branch,
+  [Description("Language of the game to install")]
+  Language,
+  [Description("OS platform version of the game")]
+  OS,
+  [Description("Architecture version of the game")]
+  Architecture,
+}
 
 /// InstallOption describes a single install option that can be used when
 /// installing an app.
@@ -67,7 +82,7 @@ public interface IPluginLibraryProvider : IDBusObject
   // Downloads and installs the app with the given app id to the target disk.
   // Available install options can be queried using the `GetInstallOptionsAsync`
   // method.
-  Task InstallAsync(string appId, string disk, InstallOptions options);
+  Task<int> InstallAsync(string appId, string disk, InstallOptions options);
   //Task Update(appId);
   //Task Uninstall(appId);
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);

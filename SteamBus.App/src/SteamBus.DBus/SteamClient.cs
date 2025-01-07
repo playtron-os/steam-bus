@@ -188,47 +188,55 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
-  Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appId)
+  Task<bool> EnsureConnected()
   {
-    // TODO: Query the app for available versions, branches, languages, etc.
-    var version = new InstallOption("version", "Version of the game to install");
-    var branch = new InstallOption("branch", "Branch to install from", ["public"]);
-    var language = new InstallOption("language", "Language of the game to install", ["english"]);
-    var os = new InstallOption("os", "OS platform version of the game", ["windows", "macos", "linux"]);
-    var arch = new InstallOption("architecture", "Architecture version of the game", ["32", "64"]);
-
-    InstallOptionDescription[] options = [version.AsTuple(), branch.AsTuple(), language.AsTuple(), os.AsTuple(), arch.AsTuple()];
-
-    return Task.FromResult<InstallOptionDescription[]>(options);
-  }
-
-  Task IPluginLibraryProvider.InstallAsync(string appId, string disk, InstallOptions options)
-  {
-    Console.WriteLine($"Installing app: {appId}");
-
     // Ensure that a Steam session exists
     if (this.session is null)
     {
-      Console.WriteLine("No active Steam session found to install app");
-      return Task.FromResult(1);
+      Console.WriteLine("No active Steam session found");
+      return Task.FromResult(false);
     }
     if (!this.session.IsLoggedOn)
     {
-      Console.WriteLine("Not logged in to Steam to install app");
-      return Task.FromResult(1);
+      Console.WriteLine("Not logged in to Steam");
+      return Task.FromResult(false);
     }
 
+    return Task.FromResult(true);
+  }
+
+  uint? ParseAppId(string appIdString)
+  {
     // Convert the app id to a numerical id
-    uint appIdNumber;
     try
     {
-      appIdNumber = UInt32.Parse(appId);
+      return uint.Parse(appIdString);
     }
     catch (Exception exception)
     {
-      Console.WriteLine($"Invalid app id '{appId}': {exception.ToString()}");
-      return Task.FromResult(1);
+      Console.WriteLine($"Invalid app id '{appIdString}': {exception}");
+      return null;
     }
+  }
+
+  async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
+  {
+    if (!await EnsureConnected()) return [];
+    if (ParseAppId(appIdString) is not uint appId) return [];
+
+    var downloader = new ContentDownloader(session!);
+    var options = await downloader.GetInstallOptions(appId);
+
+    InstallOptionDescription[] res = options.Select((option) => option.AsTuple()).ToArray();
+
+    return res;
+  }
+
+  async Task<int> IPluginLibraryProvider.InstallAsync(string appIdString, string disk, InstallOptions options)
+  {
+    Console.WriteLine($"Installing app: {appIdString}");
+    if (!await EnsureConnected()) return 1;
+    if (ParseAppId(appIdString) is not uint appId) return 1;
 
     // Configure the download options
     var downloadOptions = new AppDownloadOptions(options);
@@ -236,21 +244,21 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // TODO: Determine the install path to use based on the block device passed
 
     // Create a content downloader for the given app
-    var downloader = new ContentDownloader(this.session);
+    var downloader = new ContentDownloader(session!);
 
     // Start downloading the app
     try
     {
       // Run this in the background
-      Task.Run(() => downloader.DownloadAppAsync(appIdNumber, downloadOptions, this.OnInstallProgressed));
+      _ = Task.Run(() => downloader.DownloadAppAsync(appId, downloadOptions, OnInstallProgressed));
     }
     catch (Exception exception)
     {
       Console.WriteLine($"Failed to start app download for '{appId}': {exception.ToString()}");
-      return Task.FromResult(1);
+      return 1;
     }
 
-    return Task.FromResult(0);
+    return 0;
   }
 
   // InstallProgressed Signal
