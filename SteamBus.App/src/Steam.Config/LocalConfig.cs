@@ -62,6 +62,7 @@ public class LocalConfig
 
     var data = KeyValue.LoadFromString(content);
     this.data = data;
+    stream.Close();
   }
 
   // Save the configuration

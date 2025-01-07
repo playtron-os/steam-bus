@@ -113,7 +113,7 @@ public interface IPluginLibraryProvider : IDBusObject
   //Task Update(appId);
   //Task Uninstall(appId);
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
-  
+
   Task<ProviderItem> GetProviderItemAsync(string appId);
   Task<ProviderItem[]> GetProviderItemsAsync();
   Task RefreshAsync();
@@ -122,14 +122,15 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
 
   // Signals
-  //Task<IDisposable> WatchInstallProgressedAsync(string appId, double percent);
-  Task<IDisposable> WatchInstallProgressedAsync(Action<(string, double)> reply);
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);
   // WatchInstallCompleted(appId)
   // WatchInstallFailed(appId, code, reason)
   // WatchUpdateProgressed(appId, percent)
   // WatchUpdateCompleted(appId)
   // WatchUpdateFailed(appId, code, reason)
+  Task<IDisposable> WatchInstallProgressedAsync(Action<(string appId, double progress)> reply);
+  Task<IDisposable> WatchInstallCompletedAsync(Action<string> reply);
+  Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
 }
 
 

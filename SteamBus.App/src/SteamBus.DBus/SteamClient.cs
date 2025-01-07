@@ -80,7 +80,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Signal events
   public event Action<string>? OnPing;
   public event Action<ObjectPath>? OnClientConnected;
-  public event Action<(string, double)>? OnInstallProgressed;
+  public event Action<(string appId, double progress)>? OnInstallProgressed;
+  public event Action<string>? OnInstallCompleted;
+  public event Action<(string appId, string error)>? OnInstallFailed;
   public event Action<PropertyChanges>? OnUserPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
@@ -268,19 +270,18 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (!await EnsureConnected()) return 1;
     if (ParseAppId(appIdString) is not uint appId) return 1;
 
-    // Configure the download options
-    var downloadOptions = new AppDownloadOptions(options);
-
-    // TODO: Determine the install path to use based on the block device passed
-
     // Create a content downloader for the given app
     var downloader = new ContentDownloader(session!);
+
+    // Configure the download options
+    var installdir = await downloader.GetAppInstallDir(appId);
+    var downloadOptions = new AppDownloadOptions(options, await Disk.GetInstallRootFromDevice(disk, installdir));
 
     // Start downloading the app
     try
     {
       // Run this in the background
-      _ = Task.Run(() => downloader.DownloadAppAsync(appId, downloadOptions, OnInstallProgressed));
+      _ = Task.Run(() => downloader.DownloadAppAsync(appId, downloadOptions, OnInstallProgressed, OnInstallCompleted, OnInstallFailed));
     }
     catch (Exception exception)
     {
@@ -292,7 +293,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   }
 
   // InstallProgressed Signal
-  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<(string, double)> reply)
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<(string appId, double progress)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnInstallProgressed), reply);
   }
@@ -300,6 +301,18 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task<IDisposable> IPluginLibraryProvider.WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnLibraryUpdated), reply);
+  }
+
+  // InstallCompleted Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallCompletedAsync(Action<string> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnInstallCompleted), reply);
+  }
+
+  // InstallFailed Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallFailedAsync(Action<(string appId, string error)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnInstallFailed), reply);
   }
 
   SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)

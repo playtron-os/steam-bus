@@ -1,0 +1,158 @@
+using System.Security.Cryptography;
+using System.Text;
+using SteamKit2;
+
+
+namespace Steam.Config;
+
+/*
+"libraryfolders"
+{
+    "0"
+    {
+        "path"          ".../.local/share/Steam"
+        "label"         ""
+        "contentid"             "9188593632319197941"
+        "totalsize"             "0"
+        "update_clean_bytes_tally"              "649081694"
+        "time_last_update_verified"             "1736267851"
+        "apps"
+        {
+                "123"                "0"
+        }
+    }
+}
+*/
+
+public class LibraryFoldersConfig
+{
+    private KeyValue? data;
+    public string path;
+
+    public const string FILENAME = "libraryfolders.vdf";
+
+    // Content of the main libraryfolders config file
+    const string DEFAULT_MAIN_LIBRARY_FOLDERS_CONTENT = """
+    "libraryfolder"
+    {
+    }
+    """;
+
+    // Content of the library folders config file that goes inside the library folder
+    const string DEFAULT_EXTERNAL_LIBRARY_FOLDERS_CONTENT = """
+    "libraryfolder"
+    {
+        "contentid"             ""
+        "label"         ""
+    }
+    """;
+
+    // Load the local config from the given custom path
+    public LibraryFoldersConfig(string path)
+    {
+        this.path = path;
+    }
+
+    public static async Task<LibraryFoldersConfig> CreateAsync()
+    {
+        var config = new LibraryFoldersConfig(DefaultPath());
+
+        if (File.Exists(config.path))
+            await config.Reload();
+        else
+            await config.CreateFile();
+
+        return config;
+    }
+
+    // Returns the default path to libraryfolders.vdf: "~/.local/share/Steam/config/libraryfolders.vdf"
+    public static string DefaultPath()
+    {
+        string baseDir = SteamConfig.GetConfigDirectory();
+        return Path.Join(baseDir, "config", FILENAME);
+    }
+
+    // Load the configuration file from the filesystem
+    public async Task Reload()
+    {
+        var stream = File.OpenText(this.path);
+        var content = await stream.ReadToEndAsync();
+
+        this.data = KeyValue.LoadFromString(content);
+        stream.Close();
+    }
+
+    // Creates the file in case it didn't exist
+    async Task CreateFile()
+    {
+        DirectoryInfo parentDirectory = new DirectoryInfo(path).Parent!;
+        Directory.CreateDirectory(parentDirectory.FullName);
+        await File.WriteAllTextAsync(path, DEFAULT_MAIN_LIBRARY_FOLDERS_CONTENT);
+        this.data = KeyValue.LoadFromString(DEFAULT_MAIN_LIBRARY_FOLDERS_CONTENT);
+    }
+
+    // Save the configuration
+    public void Save()
+    {
+        this.data?.SaveToFile(this.path, false);
+    }
+
+    // Adds an entry to the libraryfolders config
+    public void AddDiskEntry(string mountPoint)
+    {
+        string installPath;
+        bool isMainDisk = Disk.IsMountPointMainDisk(mountPoint);
+        if (isMainDisk)
+            installPath = SteamConfig.GetConfigDirectory();
+        else
+            installPath = Path.Join(mountPoint, "SteamLibrary");
+
+        var index = data!.Children.Count.ToString();
+        var newEntry = new KeyValue(index);
+        newEntry["path"] = new KeyValue("path", installPath);
+        newEntry["label"] = new KeyValue("label", "");
+        newEntry["contentid"] = new KeyValue("contentid", "");
+        newEntry["totalsize"] = new KeyValue("totalsize", "0");
+        newEntry["update_clean_bytes_tally"] = new KeyValue("update_clean_bytes_tally", "0");
+        newEntry["time_last_update_verified"] = new KeyValue("time_last_update_verified", "0");
+        newEntry["apps"] = new KeyValue("apps");
+        data[index] = newEntry;
+
+        var steamappsFolder = Path.Join(installPath, "steamapps");
+        Directory.CreateDirectory(steamappsFolder);
+
+        if (isMainDisk)
+        {
+            File.CreateSymbolicLink(Path.Join(steamappsFolder, FILENAME), path);
+        }
+        else
+        {
+            var externalLibraryFoldersConfigFile = Path.Join(installPath, FILENAME);
+
+            if (!File.Exists(externalLibraryFoldersConfigFile))
+            {
+                var singleEntry = KeyValue.LoadFromString(DEFAULT_EXTERNAL_LIBRARY_FOLDERS_CONTENT)!;
+                singleEntry.SaveToFile(externalLibraryFoldersConfigFile, false);
+            }
+        }
+    }
+
+    // Get install directory
+    public string? GetInstallDirectory(string mountPoint)
+    {
+        foreach (var entry in data!.Children)
+        {
+            var path = entry["path"]?.AsString();
+
+            if (path?.Contains(mountPoint) == true)
+            {
+                var finalPath = Path.Join(path, "steamapps", "common");
+                Directory.CreateDirectory(finalPath);
+                return finalPath;
+            }
+        }
+
+        return null;
+    }
+}
+
