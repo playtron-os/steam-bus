@@ -22,6 +22,7 @@ class SteamSession
 {
   public bool IsLoggedOn { get; private set; }
   public string PersonaName { get; private set; } = "";
+  public string AvatarUrl { get; private set; } = "";
 
   public ReadOnlyCollection<SteamApps.LicenseListCallback.License> Licenses
   {
@@ -53,6 +54,7 @@ class SteamSession
   bool bIsConnectionRecovery;
   int connectionBackoff;
   int seq; // more hack fixes
+  bool isLoadingLibrary = true;
   AuthSession? authSession;
   QrAuthSession? qrAuthSession;
   public Action<string>? OnNewQrCode;
@@ -143,6 +145,18 @@ class SteamSession
     await WaitUntilCallback(() => { }, () => IsLoggedOn);
 
     return IsLoggedOn;
+  }
+
+  public async Task WaitForLibrary()
+  {
+    if (!isLoadingLibrary || Licenses.Count == 0)
+      return;
+
+    while (!bAborted)
+    {
+      if (!isLoadingLibrary) break;
+      await Task.Delay(1);
+    }
   }
 
 
@@ -694,7 +708,7 @@ class SteamSession
 
 
   // Invoked on login to list the game/app licenses associated with the user.
-  private void OnLicenseList(SteamApps.LicenseListCallback licenseList)
+  private async void OnLicenseList(SteamApps.LicenseListCallback licenseList)
   {
     if (licenseList.Result != EResult.OK)
     {
@@ -704,16 +718,73 @@ class SteamSession
       return;
     }
 
+    isLoadingLibrary = true;
     Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
     this.Licenses = licenseList.LicenseList;
-
+    List<uint> packageIds = [];
     foreach (var license in licenseList.LicenseList)
     {
+      packageIds.Add(license.PackageID);
       if (license.AccessToken > 0)
       {
         PackageTokens.TryAdd(license.PackageID, license.AccessToken);
       }
+      if (PackageInfo.TryGetValue(license.PackageID, out SteamApps.PICSProductInfoCallback.PICSProductInfo? packageInfo))
+      {
+        if (packageInfo.ChangeNumber != license.LastChangeNumber)
+        {
+          PackageInfo.Remove(license.PackageID);
+        }
+      }
     }
+    Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
+    await RequestPackageInfo(packageIds);
+    Console.WriteLine("Got packages");
+
+    var requests = new List<SteamApps.PICSRequest>();
+    var appids = new List<uint>();
+    foreach (var package in PackageInfo.Values)
+    {
+      ulong token = PackageTokens.GetValueOrDefault(package.ID);
+      foreach (var appid in package.KeyValues["appids"].Children)
+      {
+        var appidI = appid.AsUnsignedInteger();
+        if (appids.Contains(appidI)) continue;
+        var req = new SteamApps.PICSRequest(appidI, token);
+        requests.Add(req);
+        appids.Add(appidI);
+      }
+    }
+    Console.WriteLine("Making requests for {0} apps", requests.Count);
+    var result = await steamApps!.PICSGetProductInfo(requests, []);
+    if (result == null)
+    {
+      // TODO: Handle error
+      Console.WriteLine("Failed to get apps");
+      return;
+    }
+
+    if (result.Complete)
+    {
+      if (result.Results == null || result.Results.Count == 0)
+      {
+        Console.WriteLine("No results retrieved");
+        return;
+      }
+      foreach (var productInfo in result.Results)
+      {
+        foreach (var entry in productInfo.Apps)
+        {
+          AppInfo[entry.Key] = entry.Value;
+        }
+      }
+    }
+    else if (result.Failed)
+    {
+      Console.WriteLine("Some requests failed");
+    }
+    Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
+    isLoadingLibrary = false;
   }
 
   // Invoked shortly after login to provide account information

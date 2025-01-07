@@ -219,6 +219,72 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
+  ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
+  {
+    var app_type = AppType.Game;
+    switch (appKeyValues["common"]["type"].Value?.ToLower())
+    {
+      case "game":
+        app_type = AppType.Game;
+        break;
+      case "dlc":
+        app_type = AppType.Dlc;
+        break;
+      case "tool":
+        app_type = AppType.Tool;
+        break;
+      case "application":
+        app_type = AppType.Application;
+        break;
+      case "music":
+        app_type = AppType.Music;
+        break;
+      case "config":
+        app_type = AppType.Config;
+        break;
+      case "demo":
+        app_type = AppType.Demo;
+        break;
+      case "beta":
+        app_type = AppType.Beta;
+        break;
+    }
+    return new ProviderItem
+    {
+      id = appId,
+      name = appKeyValues["common"]["name"].Value?.ToString() ?? "",
+      app_type = app_type,
+    };
+  }
+
+  async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appId)
+  {
+    uint appid = ParseAppId(appId) ?? throw new DBusException("steambus.Error.Argument", "Invalid appid");
+    await this.session.WaitForLibrary();
+    if (!this.session.AppInfo.TryGetValue(appid, out var appinfo))
+    {
+      throw new DBusException("steambus.Error.Argument", "Invalid appid");
+    }
+    return GetProviderItem(appId, appinfo.KeyValues);
+  }
+
+  async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
+  {
+    await this.session.WaitForLibrary();
+    List<ProviderItem> providerItems = new(session.AppInfo.Count);
+    foreach (var app in this.session.AppInfo)
+    {
+      providerItems.Add(GetProviderItem(app.Key.ToString(), app.Value.KeyValues));
+    }
+    return providerItems.ToArray();
+  }
+
+  Task IPluginLibraryProvider.RefreshAsync()
+  {
+    Console.WriteLine("Refresh called, this is ignored...");
+    return Task.FromResult(0);
+  }
+
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
     if (!await EnsureConnected()) return [];
@@ -279,7 +345,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     session.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
     session.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
     session.Callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
-    //this.session.callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+    // session.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
 
     return session;
   }
@@ -368,7 +434,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (this.session != null)
     {
       var currentDetails = this.session.GetLogonDetails();
-      if (currentDetails.Username?.ToLower() == user_id.ToLower())
+      if (this.session.IsLoggedOn && currentDetails.Username?.ToLower() == user_id.ToLower())
       {
         return true;
       }
@@ -444,6 +510,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (this.session != null)
     {
       var username = this.session.GetLogonDetails().Username;
+      properties.Avatar = this.session.AvatarUrl;
       properties.Username = this.session.PersonaName;
       properties.Identifier = username is null ? "" : username;
       properties.Status = GetCurrentAuthStatus();
@@ -459,7 +526,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       case "Username":
         return Task.FromResult((object)(this.session?.PersonaName ?? ""));
       case "Avatar":
-        return Task.FromResult((object)""); // TODO: Fetch avatar hash
+        return Task.FromResult((object)(this.session?.AvatarUrl ?? ""));
       case "Identifier":
         var username = this.session?.GetLogonDetails().Username;
         object user = username is null ? "" : username!;
