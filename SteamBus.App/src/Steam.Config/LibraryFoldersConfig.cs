@@ -47,12 +47,19 @@ public class LibraryFoldersConfig
     }
     """;
 
-    // Load the local config from the given custom path
-    public LibraryFoldersConfig(string path)
+    /// <summary>
+    /// Load the local config from the given custom path
+    /// </summary>
+    /// <param name="path"></param>
+    private LibraryFoldersConfig(string path)
     {
         this.path = path;
     }
 
+    /// <summary>
+    /// Creates a new instance of the LibraryFoldersConfig with the default path
+    /// </summary>
+    /// <returns></returns>
     public static async Task<LibraryFoldersConfig> CreateAsync()
     {
         var config = new LibraryFoldersConfig(DefaultPath());
@@ -65,14 +72,20 @@ public class LibraryFoldersConfig
         return config;
     }
 
-    // Returns the default path to libraryfolders.vdf: "~/.local/share/Steam/config/libraryfolders.vdf"
+    /// <summary>
+    /// Returns the default path to libraryfolders.vdf: "~/.local/share/Steam/config/libraryfolders.vdf"
+    /// </summary>
+    /// <returns></returns>
     public static string DefaultPath()
     {
         string baseDir = SteamConfig.GetConfigDirectory();
         return Path.Join(baseDir, "config", FILENAME);
     }
 
-    // Load the configuration file from the filesystem
+    /// <summary>
+    /// Load the configuration file from the filesystem
+    /// </summary>
+    /// <returns></returns>
     public async Task Reload()
     {
         var stream = File.OpenText(this.path);
@@ -82,7 +95,10 @@ public class LibraryFoldersConfig
         stream.Close();
     }
 
-    // Creates the file in case it didn't exist
+    /// <summary>
+    /// Creates the file in case it didn't exist
+    /// </summary>
+    /// <returns></returns>
     async Task CreateFile()
     {
         DirectoryInfo parentDirectory = new DirectoryInfo(path).Parent!;
@@ -91,13 +107,18 @@ public class LibraryFoldersConfig
         this.data = KeyValue.LoadFromString(DEFAULT_MAIN_LIBRARY_FOLDERS_CONTENT);
     }
 
-    // Save the configuration
+    /// <summary>
+    /// Save the configuration
+    /// </summary>
     public void Save()
     {
         this.data?.SaveToFile(this.path, false);
     }
 
-    // Adds an entry to the libraryfolders config
+    /// <summary>
+    /// Adds an entry to the libraryfolders config
+    /// </summary>
+    /// <param name="mountPoint"></param>
     public void AddDiskEntry(string mountPoint)
     {
         string installPath;
@@ -137,7 +158,11 @@ public class LibraryFoldersConfig
         }
     }
 
-    // Get install directory
+    /// <summary>
+    /// Get install directory
+    /// </summary>
+    /// <param name="mountPoint"></param>
+    /// <returns></returns>
     public string? GetInstallDirectory(string mountPoint)
     {
         foreach (var entry in data!.Children)
@@ -153,6 +178,28 @@ public class LibraryFoldersConfig
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Gets a list of all the install directories
+    /// </summary>
+    /// <returns></returns>
+    public List<string> GetInstallDirectories()
+    {
+        var dirs = new List<string>();
+
+        foreach (var entry in data!.Children)
+        {
+            var path = entry["path"]?.AsString();
+
+            if (path != null)
+            {
+                var finalPath = Path.Join(path, "steamapps", "common");
+                dirs.Add(finalPath);
+            }
+        }
+
+        return dirs;
     }
 }
 

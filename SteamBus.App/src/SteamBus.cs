@@ -10,6 +10,8 @@ class SteamBus
   {
     Console.WriteLine("Starting SteamBus v{0}", Assembly.GetExecutingAssembly().GetName().Version);
 
+    var depotConfigStore = await DepotConfigStore.CreateAsync();
+
     string? busAddress = Address.Session;
     if (busAddress is null)
     {
@@ -26,11 +28,12 @@ class SteamBus
     Console.WriteLine("Registered address: one.playtron.SteamBus");
 
     // Register the Steam Manager object
-    await connection.RegisterObjectAsync(new Manager(connection));
+    await connection.RegisterObjectAsync(new Manager(connection, depotConfigStore));
 
     // Create a default DBusSteamClient instance
     string path = "/one/playtron/SteamBus/SteamClient0";
-    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path));
+
+    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore);
     await connection.RegisterObjectAsync(client);
 
     // Register with Playserve

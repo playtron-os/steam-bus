@@ -57,6 +57,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
+  // Depot Config Store used to retrieve installed apps informations
+  private DepotConfigStore depotConfigStore;
   // Unique login ID used to allow multiple active login sessions from the same account
   private uint? loginId;
   // Two factor code task used to login to Steam
@@ -92,10 +94,13 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
-  public DBusSteamClient(ObjectPath path)
+  public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore)
   {
     // DBus path to this Steam Client instance
     this.Path = path;
+
+    // Depot configure store
+    this.depotConfigStore = depotConfigStore;
 
     // Create a steam client config
     var config = SteamConfiguration.Create(builder =>
@@ -256,7 +261,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (!await EnsureConnected()) return [];
     if (ParseAppId(appIdString) is not uint appId) return [];
 
-    var downloader = new ContentDownloader(session!);
+    var downloader = new ContentDownloader(session!, depotConfigStore);
     var options = await downloader.GetInstallOptions(appId);
 
     InstallOptionDescription[] res = options.Select((option) => option.AsTuple()).ToArray();
@@ -271,7 +276,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (ParseAppId(appIdString) is not uint appId) return 1;
 
     // Create a content downloader for the given app
-    var downloader = new ContentDownloader(session!);
+    var downloader = new ContentDownloader(session!, depotConfigStore);
 
     // Configure the download options
     var installdir = await downloader.GetAppInstallDir(appId);

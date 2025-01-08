@@ -34,6 +34,7 @@ class ContentDownloader
   private static readonly string STAGING_DIR = Path.Combine(CONFIG_DIR, "staging");
 
   private SteamSession session;
+  private DepotConfigStore depotConfigStore;
   private static CDNClientPool? cdnPool;
   private AppDownloadOptions? options;
 
@@ -97,9 +98,10 @@ class ContentDownloader
   }
 
 
-  public ContentDownloader(SteamSession steamSession)
+  public ContentDownloader(SteamSession steamSession, DepotConfigStore depotConfigStore)
   {
     this.session = steamSession;
+    this.depotConfigStore = depotConfigStore;
   }
 
   public async Task<InstallOption[]> GetInstallOptions(uint appId)
@@ -369,7 +371,7 @@ class ContentDownloader
 
       try
       {
-        await DownloadSteam3Async(appId, infos).ConfigureAwait(false);
+        await DownloadSteam3Async(appId, options.InstallDirectory, infos).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
       }
       catch (OperationCanceledException)
@@ -637,7 +639,7 @@ class ContentDownloader
   }
 
 
-  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots)
+  private async Task DownloadSteam3Async(uint appId, string installDirectory, List<DepotDownloadInfo> depots)
   {
     if (this.options is null)
     {
@@ -655,7 +657,7 @@ class ContentDownloader
     // First, fetch all the manifests for each depot (including previous manifests) and perform the initial setup
     foreach (var depot in depots)
     {
-      var depotFileData = await ProcessDepotManifestAndFiles(cts, depot, downloadCounter);
+      var depotFileData = await ProcessDepotManifestAndFiles(appId, cts, depot, downloadCounter);
 
       if (depotFileData != null)
       {
@@ -681,19 +683,22 @@ class ContentDownloader
       }
     }
 
+    Console.WriteLine("Downloading: {0} bytes ({1} bytes uncompressed) from {2} depots, {3} / {4}",
+        downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count, downloadCounter.sizeDownloaded, downloadCounter.completeDownloadSize);
+
     foreach (var depotFileData in depotsToDownload)
     {
-      await DownloadSteam3AsyncDepotFiles(appId, cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+      await DownloadSteam3AsyncDepotFiles(appId, installDirectory, cts, downloadCounter, depotFileData, allFileNamesAllDepots);
     }
 
     //Ansi.Progress(Ansi.ProgressState.Hidden);
 
-    Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots",
-        downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count);
+    Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots, {3} / {4}",
+        downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count, downloadCounter.sizeDownloaded, downloadCounter.completeDownloadSize);
   }
 
 
-  private async Task<DepotFilesData?> ProcessDepotManifestAndFiles(CancellationTokenSource cts, DepotDownloadInfo depot, GlobalDownloadCounter downloadCounter)
+  private async Task<DepotFilesData?> ProcessDepotManifestAndFiles(uint appId, CancellationTokenSource cts, DepotDownloadInfo depot, GlobalDownloadCounter downloadCounter)
   {
     var depotCounter = new DepotDownloadCounter();
 
@@ -703,19 +708,16 @@ class ContentDownloader
     DepotManifest? newManifest = null;
     var configDir = Path.Combine(depot.InstallDir, CONFIG_DIR);
 
-    var lastManifestId = INVALID_MANIFEST_ID;
-
-    // TODO: This
-    //DepotConfigStore.Instance.InstalledManifestIDs.TryGetValue(depot.DepotId, out lastManifestId);
+    var lastManifestId = depotConfigStore.GetManifestID(appId, depot.DepotId) ?? INVALID_MANIFEST_ID;
 
     //// In case we have an early exit, this will force equiv of verifyall next run.
-    //DepotConfigStore.Instance.InstalledManifestIDs[depot.DepotId] = INVALID_MANIFEST_ID;
-    //DepotConfigStore.Save();
+    depotConfigStore.RemoveManifestID(appId, depot.DepotId);
+    depotConfigStore.Save(appId);
 
     if (lastManifestId != INVALID_MANIFEST_ID)
     {
       // We only have to show this warning if the old manifest ID was different
-      var badHashWarning = (lastManifestId != depot.ManifestId);
+      var badHashWarning = lastManifestId != depot.ManifestId;
       oldManifest = LoadManifestFromFile(configDir, depot.DepotId, lastManifestId, badHashWarning);
     }
 
@@ -978,7 +980,7 @@ class ContentDownloader
     return true;
   }
 
-  private async Task DownloadSteam3AsyncDepotFiles(uint appId, CancellationTokenSource cts,
+  private async Task DownloadSteam3AsyncDepotFiles(uint appId, string installDirectory, CancellationTokenSource cts,
       GlobalDownloadCounter downloadCounter, DepotFilesData depotFilesData, HashSet<string> allFileNamesAllDepots)
   {
     var depot = depotFilesData.depotDownloadInfo;
@@ -1031,9 +1033,8 @@ class ContentDownloader
       }
     }
 
-    // TODO: This
-    //DepotConfigStore.Instance.InstalledManifestIDs[depot.DepotId] = depot.ManifestId;
-    //DepotConfigStore.Save();
+    depotConfigStore.SetManifestID(installDirectory, appId, depot.DepotId, depot.ManifestId);
+    depotConfigStore.Save(appId);
 
     Console.WriteLine("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);
   }
@@ -1189,7 +1190,7 @@ class ContentDownloader
           }
         }
 
-        Console.WriteLine("Validating {0}", fileFinalPath);
+        Console.WriteLine("Validating file not found in old manifest {0}", fileFinalPath);
         neededChunks = ValidateSteam3FileChecksums(fs, [.. file.Chunks.OrderBy(x => x.Offset)]);
       }
 
