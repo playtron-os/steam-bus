@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using Tmds.DBus;
 
 namespace Playtron.Plugin;
@@ -8,6 +9,15 @@ namespace Playtron.Plugin;
 /// DBus does not actually support structs, so they are instead represented as
 /// typed tuples.
 using InstallOptionDescription = (string, string, string[]);
+
+[StructLayout(LayoutKind.Sequential)]
+public struct InstalledAppDescription
+{
+  public string AppId { get; set; }
+  public string InstalledPath { get; set; }
+  public ulong DownloadedBytes { get; set; }
+  public ulong TotalDownloadSize { get; set; }
+}
 
 public enum InstallOptionType
 {
@@ -111,6 +121,9 @@ public interface IPluginLibraryProvider : IDBusObject
   // method.
   Task<int> InstallAsync(string appId, string disk, InstallOptions options);
 
+  // Gets information about installed apps
+  Task<InstalledAppDescription[]> GetInstalledAppsAsync();
+
   // Pauses the current install that is in progress
   Task PauseInstallAsync();
 
@@ -124,7 +137,7 @@ public interface IPluginLibraryProvider : IDBusObject
   Task RefreshAsync();
   //Task DiskAdded(diskPath); // We could just listen to udisks2 directly
   //Task DiskRemoved(diskPath);
-  CloudPathObject[] GetSavePathPatterns(string appId, string platform);
+  Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
 
   // Signals
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);

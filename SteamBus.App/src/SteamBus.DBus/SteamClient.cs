@@ -274,6 +274,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return res;
   }
 
+  Task<InstalledAppDescription[]> IPluginLibraryProvider.GetInstalledAppsAsync()
+  {
+    return Task.FromResult(depotConfigStore.GetInstalledAppInfo());
+  }
+
   async Task<int> IPluginLibraryProvider.InstallAsync(string appIdString, string disk, InstallOptions options)
   {
     Console.WriteLine($"Installing app: {appIdString}");
@@ -812,9 +817,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   // -- Cloud saves Implementation --
 
-  CloudPathObject[] IPluginLibraryProvider.GetSavePathPatterns(string appid, string platform)
+  Task<CloudPathObject[]> IPluginLibraryProvider.GetSavePathPatternsAsync(string appid, string platform)
   {
-    if (!EnsureConnected()) return [];
+    if (!EnsureConnected()) return Task.FromResult(Array.Empty<CloudPathObject>());
 
     uint appidParsed = uint.Parse(appid);
     Console.WriteLine("Getting paths for {0}", appid);
@@ -822,7 +827,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (appInfo == null)
     {
       Console.WriteLine("Unable to load appInfo");
-      return [];
+      return Task.FromResult(Array.Empty<CloudPathObject>());
     }
     List<CloudPathObject> results = [];
     List<KeyValue> overrides = [];
@@ -831,7 +836,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (ufs.Children.Count == 0)
     {
       Console.WriteLine("Steam Cloud is not configured for this game.");
-      return [];
+      return Task.FromResult(Array.Empty<CloudPathObject>());
     }
 
     // Get overrides that match this platform
@@ -949,7 +954,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Console.WriteLine("Appending new path {0} - {1}", alias, newPath);
       results.Add(new CloudPathObject { alias = alias, path = newPath, recursive = recursive, pattern = pattern });
     }
-    return results.ToArray();
+    return Task.FromResult(results.ToArray());
   }
 
   async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appid, CloudPathObject[] paths)

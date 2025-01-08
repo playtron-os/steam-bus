@@ -1,3 +1,4 @@
+using Playtron.Plugin;
 using Steam.Config;
 using SteamKit2;
 
@@ -158,5 +159,22 @@ public class DepotConfigStore
         {
             manifestMap[appId]["depots"] = new KeyValue("depots");
         }
+    }
+
+    /// <summary>
+    /// List of installed apps with their install information
+    /// </summary>
+    /// <returns></returns>
+    public InstalledAppDescription[] GetInstalledAppInfo()
+    {
+        return manifestMap.Where((entry) => manifestPathMap.ContainsKey(entry.Key)).Select((entry) =>
+            new InstalledAppDescription
+            {
+                AppId = entry.Value["appid"].AsString()!,
+                InstalledPath = Directory.GetParent(manifestPathMap[entry.Key])!.FullName,
+                DownloadedBytes = entry.Value["downloaded"].AsUnsignedLong(),
+                TotalDownloadSize = entry.Value["totaldownload"].AsUnsignedLong(),
+            })
+            .ToArray();
     }
 }

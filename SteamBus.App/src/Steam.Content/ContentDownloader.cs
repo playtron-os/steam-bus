@@ -1052,13 +1052,13 @@ class ContentDownloader
 
     await InvokeAsync(
         files.Select(file => new Func<Task>(async () =>
-            await Task.Run(() => DownloadSteam3AsyncDepotFile(appId, cts, downloadCounter, depotFilesData, file, networkChunkQueue)))),
+            await Task.Run(() => DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue)))),
         maxDegreeOfParallelism: this.options!.MaxDownloads
     );
 
     await InvokeAsync(
         networkChunkQueue.Select(q => new Func<Task>(async () =>
-            await Task.Run(() => DownloadSteam3AsyncDepotFileChunk(appId, cts, downloadCounter, depotFilesData,
+            await Task.Run(() => DownloadSteam3AsyncDepotFileChunk(cts, downloadCounter, depotFilesData,
                 q.fileData, q.fileStreamData, q.chunk)))),
         maxDegreeOfParallelism: this.options.MaxDownloads
     );
@@ -1099,7 +1099,6 @@ class ContentDownloader
   }
 
   private void DownloadSteam3AsyncDepotFile(
-      uint appId,
       CancellationTokenSource cts,
       GlobalDownloadCounter downloadCounter,
       DepotFilesData depotFilesData,
@@ -1305,7 +1304,6 @@ class ContentDownloader
   }
 
   private async Task DownloadSteam3AsyncDepotFileChunk(
-      uint appId,
       CancellationTokenSource cts,
       GlobalDownloadCounter downloadCounter,
       DepotFilesData depotFilesData,
