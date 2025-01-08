@@ -139,6 +139,15 @@ class ContentDownloader
     this.depotConfigStore = depotConfigStore;
   }
 
+  public static async Task PauseInstall()
+  {
+    if (cdnPool != null)
+    {
+      if (cdnPool.ExhaustedToken != null)
+        await cdnPool.ExhaustedToken.CancelAsync();
+    }
+  }
+
   public async Task<InstallOption[]> GetInstallOptions(uint appId)
   {
     await session.RequestAppInfo(appId);
@@ -263,6 +272,8 @@ class ContentDownloader
     {
       this.options = options;
       cdnPool = new CDNClientPool(this.session.SteamClient, appId);
+      var cts = new CancellationTokenSource();
+      cdnPool!.ExhaustedToken = cts;
 
       // Keep track of signal handlers
       this.OnInstallProgressed = onInstallProgressed;
@@ -407,7 +418,7 @@ class ContentDownloader
       try
       {
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
-        await DownloadSteam3Async(appId, infos).ConfigureAwait(false);
+        await DownloadSteam3Async(appId, infos, cts).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
       }
       catch (OperationCanceledException)
@@ -675,16 +686,13 @@ class ContentDownloader
   }
 
 
-  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots)
+  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots, CancellationTokenSource cts)
   {
-    if (this.options is null)
+    if (this.options is null || cdnPool is null)
     {
       return;
     }
     //Ansi.Progress(Ansi.ProgressState.Indeterminate);
-
-    var cts = new CancellationTokenSource();
-    cdnPool!.ExhaustedToken = cts;
 
     var downloadCounter = new GlobalDownloadCounter();
     var depotsToDownload = new List<DepotFilesData>(depots.Count);

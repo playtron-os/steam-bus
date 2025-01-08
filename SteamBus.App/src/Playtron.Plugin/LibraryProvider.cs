@@ -110,8 +110,13 @@ public interface IPluginLibraryProvider : IDBusObject
   // Available install options can be queried using the `GetInstallOptionsAsync`
   // method.
   Task<int> InstallAsync(string appId, string disk, InstallOptions options);
+
+  // Pauses the current install that is in progress
+  Task PauseInstallAsync();
+
   //Task Update(appId);
   //Task Uninstall(appId);
+
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
 
   Task<ProviderItem> GetProviderItemAsync(string appId);
@@ -119,7 +124,7 @@ public interface IPluginLibraryProvider : IDBusObject
   Task RefreshAsync();
   //Task DiskAdded(diskPath); // We could just listen to udisks2 directly
   //Task DiskRemoved(diskPath);
-  Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
+  CloudPathObject[] GetSavePathPatterns(string appId, string platform);
 
   // Signals
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);
