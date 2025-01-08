@@ -722,19 +722,13 @@ class SteamSession
     Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
     this.Licenses = licenseList.LicenseList;
     List<uint> packageIds = [];
+    // Parse licenses and associate their access tokens
     foreach (var license in licenseList.LicenseList)
     {
       packageIds.Add(license.PackageID);
       if (license.AccessToken > 0)
       {
         PackageTokens.TryAdd(license.PackageID, license.AccessToken);
-      }
-      if (PackageInfo.TryGetValue(license.PackageID, out SteamApps.PICSProductInfoCallback.PICSProductInfo? packageInfo))
-      {
-        if (packageInfo.ChangeNumber != license.LastChangeNumber)
-        {
-          PackageInfo.Remove(license.PackageID);
-        }
       }
     }
     Console.WriteLine("Requesting info for {0} packages", packageIds.Count);

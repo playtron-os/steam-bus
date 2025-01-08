@@ -89,14 +89,12 @@ public class LibraryProviderProperties
   public string Provider = "Steam";
 }
 
-[Dictionary]
-public class ProviderItem
+public struct ProviderItem
 {
-  public string id = "";
-  public string name = "";
-  public string provider = "Steam";
-  public AppType app_type;
-
+  public string id;
+  public string name;
+  public string provider;
+  public uint app_type;
 }
 
 /// Interface definition for a library provider
@@ -115,6 +113,7 @@ public interface IPluginLibraryProvider : IDBusObject
   //Task Update(appId);
   //Task Uninstall(appId);
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
+  
   Task<ProviderItem> GetProviderItemAsync(string appId);
   Task<ProviderItem[]> GetProviderItemsAsync();
   Task RefreshAsync();

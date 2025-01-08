@@ -253,7 +253,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       id = appId,
       name = appKeyValues["common"]["name"].Value?.ToString() ?? "",
-      app_type = app_type,
+      provider = "Steam",
+      app_type = (uint)app_type,
     };
   }
 
@@ -270,6 +271,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
   {
+    if (this.session is null) return [];
     await this.session.WaitForLibrary();
     List<ProviderItem> providerItems = new(session.AppInfo.Count);
     foreach (var app in this.session.AppInfo)
