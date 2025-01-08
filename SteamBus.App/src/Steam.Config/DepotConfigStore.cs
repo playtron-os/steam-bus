@@ -106,7 +106,40 @@ public class DepotConfigStore
     /// <param name="appId"></param>
     /// <param name="depotId"></param>
     /// <param name="manifestId"></param>
-    public void SetManifestID(string installDirectory, uint appId, uint depotId, ulong manifestId)
+    public void SetManifestID(uint appId, uint depotId, ulong manifestId)
+    {
+        if (!manifestMap.ContainsKey(appId)) return;
+        manifestMap[appId]["depots"][depotId.ToString()] = new KeyValue(depotId.ToString(), manifestId.ToString());
+    }
+
+    /// <summary>
+    /// Sets the total download property of the manifest
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="size"></param>
+    public void SetTotalSize(uint appId, ulong size)
+    {
+        if (!manifestMap.ContainsKey(appId)) return;
+        manifestMap[appId]["totaldownload"] = new KeyValue("totaldownload", size.ToString());
+    }
+
+    /// <summary>
+    /// Sets the downloaded property of the manifest
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="size"></param>
+    public void SetCurrentSize(uint appId, ulong size)
+    {
+        if (!manifestMap.ContainsKey(appId)) return;
+        manifestMap[appId]["downloaded"] = new KeyValue("downloaded", size.ToString());
+    }
+
+    /// <summary>
+    /// Ensures the necessary entry exists in the manifest map
+    /// </summary>
+    /// <param name="installDirectory"></param>
+    /// <param name="appId"></param>
+    public void EnsureEntryExists(string installDirectory, uint appId)
     {
         var manifestPath = Path.Join(installDirectory, STORE_FILENAME);
 
@@ -125,7 +158,5 @@ public class DepotConfigStore
         {
             manifestMap[appId]["depots"] = new KeyValue("depots");
         }
-
-        manifestMap[appId]["depots"][depotId.ToString()] = new KeyValue(depotId.ToString(), manifestId.ToString());
     }
 }

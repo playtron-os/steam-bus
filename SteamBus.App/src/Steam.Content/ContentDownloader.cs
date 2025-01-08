@@ -16,6 +16,7 @@ using System.Threading.Tasks;
 using System.Threading;
 using System;
 using Playtron.Plugin;
+using System.ComponentModel;
 
 
 namespace Steam.Content;
@@ -80,12 +81,46 @@ class ContentDownloader
   }
 
 
-  private class GlobalDownloadCounter
+  private class GlobalDownloadCounter : INotifyPropertyChanged
   {
-    public ulong completeDownloadSize;
-    public ulong sizeDownloaded;
+    private ulong _sizeDownloaded;
+    private ulong _completeDownloadSize;
+
     public ulong totalBytesCompressed;
     public ulong totalBytesUncompressed;
+
+    public ulong sizeDownloaded
+    {
+      get => _sizeDownloaded;
+      set
+      {
+        if (_sizeDownloaded != value)
+        {
+          _sizeDownloaded = value;
+          OnPropertyChanged(nameof(sizeDownloaded));
+        }
+      }
+    }
+
+    public ulong completeDownloadSize
+    {
+      get => _completeDownloadSize;
+      set
+      {
+        if (_completeDownloadSize != value)
+        {
+          _completeDownloadSize = value;
+          OnPropertyChanged(nameof(completeDownloadSize));
+        }
+      }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    protected virtual void OnPropertyChanged(string propertyName)
+    {
+      PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
   }
 
 
@@ -371,7 +406,8 @@ class ContentDownloader
 
       try
       {
-        await DownloadSteam3Async(appId, options.InstallDirectory, infos).ConfigureAwait(false);
+        depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
+        await DownloadSteam3Async(appId, infos).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
       }
       catch (OperationCanceledException)
@@ -639,7 +675,7 @@ class ContentDownloader
   }
 
 
-  private async Task DownloadSteam3Async(uint appId, string installDirectory, List<DepotDownloadInfo> depots)
+  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots)
   {
     if (this.options is null)
     {
@@ -653,6 +689,21 @@ class ContentDownloader
     var downloadCounter = new GlobalDownloadCounter();
     var depotsToDownload = new List<DepotFilesData>(depots.Count);
     var allFileNamesAllDepots = new HashSet<string>();
+
+    downloadCounter.PropertyChanged += (sender, args) =>
+    {
+      if (args.PropertyName == nameof(GlobalDownloadCounter.sizeDownloaded) || args.PropertyName == nameof(GlobalDownloadCounter.completeDownloadSize))
+      {
+        var counter = (GlobalDownloadCounter)sender!;
+
+        if (counter.completeDownloadSize != 0)
+          this.OnInstallProgressed?.Invoke((appId.ToString(), (counter.sizeDownloaded / (float)counter.completeDownloadSize) * 100.0f));
+
+        depotConfigStore.SetCurrentSize(appId, counter.sizeDownloaded);
+        depotConfigStore.SetTotalSize(appId, counter.completeDownloadSize);
+        depotConfigStore.Save(appId);
+      }
+    };
 
     // First, fetch all the manifests for each depot (including previous manifests) and perform the initial setup
     foreach (var depot in depots)
@@ -688,7 +739,7 @@ class ContentDownloader
 
     foreach (var depotFileData in depotsToDownload)
     {
-      await DownloadSteam3AsyncDepotFiles(appId, installDirectory, cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+      await DownloadSteam3AsyncDepotFiles(appId, cts, downloadCounter, depotFileData, allFileNamesAllDepots);
     }
 
     //Ansi.Progress(Ansi.ProgressState.Hidden);
@@ -980,7 +1031,7 @@ class ContentDownloader
     return true;
   }
 
-  private async Task DownloadSteam3AsyncDepotFiles(uint appId, string installDirectory, CancellationTokenSource cts,
+  private async Task DownloadSteam3AsyncDepotFiles(uint appId, CancellationTokenSource cts,
       GlobalDownloadCounter downloadCounter, DepotFilesData depotFilesData, HashSet<string> allFileNamesAllDepots)
   {
     var depot = depotFilesData.depotDownloadInfo;
@@ -1033,7 +1084,7 @@ class ContentDownloader
       }
     }
 
-    depotConfigStore.SetManifestID(installDirectory, appId, depot.DepotId, depot.ManifestId);
+    depotConfigStore.SetManifestID(appId, depot.DepotId, depot.ManifestId);
     depotConfigStore.Save(appId);
 
     Console.WriteLine("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);
@@ -1205,7 +1256,6 @@ class ContentDownloader
         lock (downloadCounter)
         {
           downloadCounter.sizeDownloaded += file.TotalSize;
-          this.OnInstallProgressed?.Invoke((appId.ToString(), (downloadCounter.sizeDownloaded / (float)downloadCounter.completeDownloadSize) * 100.0f));
         }
 
         return;
@@ -1393,8 +1443,6 @@ class ContentDownloader
       downloadCounter.sizeDownloaded += (ulong)written;
       downloadCounter.totalBytesCompressed += chunk.CompressedLength;
       downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
-
-      this.OnInstallProgressed?.Invoke((appId.ToString(), (downloadCounter.sizeDownloaded / (float)downloadCounter.completeDownloadSize) * 100.0f));
       //Ansi.Progress(downloadCounter.totalBytesUncompressed, downloadCounter.completeDownloadSize);
     }
 
