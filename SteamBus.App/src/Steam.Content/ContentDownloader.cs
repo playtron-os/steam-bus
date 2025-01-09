@@ -17,6 +17,7 @@ using System.Threading;
 using System;
 using Playtron.Plugin;
 using System.ComponentModel;
+using Tmds.DBus;
 
 
 namespace Steam.Content;
@@ -431,10 +432,18 @@ class ContentDownloader
 
       cdnPool = null;
     }
+    catch (DBusException exception)
+    {
+      Console.WriteLine($"Finished download task for app: {appId} with DBUS exception: {exception}");
+      cdnPool = null;
+      onInstallFailed?.Invoke((appId.ToString(), exception.ErrorName));
+      throw;
+    }
     catch (Exception exception)
     {
       Console.WriteLine($"Finished download task for app: {appId} with exception: {exception}");
       cdnPool = null;
+      onInstallFailed?.Invoke((appId.ToString(), DbusErrors.DownloadFailed));
       throw;
     }
   }
