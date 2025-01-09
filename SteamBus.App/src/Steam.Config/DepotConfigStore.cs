@@ -87,6 +87,30 @@ public class DepotConfigStore
     }
 
     /// <summary>
+    /// Gets the size in bytes downloaded by an app id
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public uint? GetSizeDownloaded(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
+
+        return manifest["downloaded"]?.AsUnsignedInteger();
+    }
+
+    /// <summary>
+    /// Gets the download stage by an app id
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public DownloadStage? GetDownloadStage(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
+
+        return manifest["downloadstage"]?.AsEnum<DownloadStage>();
+    }
+
+    /// <summary>
     /// Removes a manifest ID installed for an app id and depot id
     /// </summary>
     /// <param name="appId"></param>
@@ -133,6 +157,25 @@ public class DepotConfigStore
     {
         if (!manifestMap.ContainsKey(appId)) return;
         manifestMap[appId]["downloaded"] = new KeyValue("downloaded", size.ToString());
+    }
+
+    /// <summary>
+    /// Sets the download stage
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="stage"></param>
+    public void SetDownloadStage(uint appId, DownloadStage? stage)
+    {
+        if (!manifestMap.ContainsKey(appId)) return;
+
+        if (stage == null)
+        {
+            var child = manifestMap[appId].Children.Find((child) => child.Name == "downloadstage");
+            if (child != null)
+                manifestMap[appId].Children.Remove(child);
+        }
+        else
+            manifestMap[appId]["downloadstage"] = new KeyValue("downloadstage", stage.ToString());
     }
 
     /// <summary>

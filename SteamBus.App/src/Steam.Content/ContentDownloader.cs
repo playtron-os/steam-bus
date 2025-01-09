@@ -86,8 +86,8 @@ class ContentDownloader
   private class GlobalDownloadCounter : INotifyPropertyChanged
   {
     private ulong _sizeDownloaded;
-    private ulong _completeDownloadSize;
 
+    public ulong completeDownloadSize;
     public ulong totalBytesCompressed;
     public ulong totalBytesUncompressed;
 
@@ -100,19 +100,6 @@ class ContentDownloader
         {
           _sizeDownloaded = value;
           OnPropertyChanged(nameof(sizeDownloaded));
-        }
-      }
-    }
-
-    public ulong completeDownloadSize
-    {
-      get => _completeDownloadSize;
-      set
-      {
-        if (_completeDownloadSize != value)
-        {
-          _completeDownloadSize = value;
-          OnPropertyChanged(nameof(completeDownloadSize));
         }
       }
     }
@@ -436,6 +423,9 @@ class ContentDownloader
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
         await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
+
+        depotConfigStore.SetDownloadStage(appId, null);
+        depotConfigStore.Save(appId);
       }
       catch (OperationCanceledException)
       {
@@ -587,8 +577,6 @@ class ContentDownloader
 
     var uVersion = GetSteam3AppBuildNumber(appId, branch);
 
-    Console.WriteLine($"##### baseInstallPath: {baseInstallPath}, {uVersion}, {depotId}");
-
     if (!CreateDirectories(depotId, uVersion, out var installDir, baseInstallPath))
     {
       Console.WriteLine("Error: Unable to create install directories!");
@@ -729,13 +717,21 @@ class ContentDownloader
     var depotsToDownload = new List<DepotFilesData>(depots.Count);
     var allFileNamesAllDepots = new HashSet<string>();
 
+    var previousDownloadStage = depotConfigStore.GetDownloadStage(appId);
+    var previousSizeDownloaded = previousDownloadStage == null ? 0 : depotConfigStore.GetSizeDownloaded(appId) ?? 0;
+
+    Console.WriteLine($"Starting download from previous stage {previousDownloadStage} and previous bytes downloaded {previousSizeDownloaded}");
+
     downloadCounter.PropertyChanged += (sender, args) =>
     {
+      if (cts.IsCancellationRequested)
+        return;
+
       if (args.PropertyName == nameof(GlobalDownloadCounter.sizeDownloaded) || args.PropertyName == nameof(GlobalDownloadCounter.completeDownloadSize))
       {
         var counter = (GlobalDownloadCounter)sender!;
 
-        if (counter.completeDownloadSize != 0)
+        if (counter.completeDownloadSize != 0 && previousSizeDownloaded < counter.sizeDownloaded)
         {
           var progress = (counter.sizeDownloaded / (float)counter.completeDownloadSize) * 100.0f;
 
@@ -748,11 +744,12 @@ class ContentDownloader
             TotalDownloadSize = counter.completeDownloadSize,
             Progress = progress,
           });
-        }
 
-        depotConfigStore.SetCurrentSize(appId, counter.sizeDownloaded);
-        depotConfigStore.SetTotalSize(appId, counter.completeDownloadSize);
-        depotConfigStore.Save(appId);
+          depotConfigStore.SetDownloadStage(appId, DownloadStage.Downloading);
+          depotConfigStore.SetCurrentSize(appId, counter.sizeDownloaded);
+          depotConfigStore.SetTotalSize(appId, counter.completeDownloadSize);
+          depotConfigStore.Save(appId);
+        }
       }
     };
 
@@ -788,6 +785,19 @@ class ContentDownloader
     installStartedData.TotalDownloadSize = downloadCounter.completeDownloadSize;
     OnInstallStarted?.Invoke(installStartedData);
 
+    if (previousSizeDownloaded != 0)
+    {
+      var progress = (previousSizeDownloaded / (float)downloadCounter.completeDownloadSize) * 100.0f;
+      this.OnInstallProgressed?.Invoke(new InstallProgressedDescription
+      {
+        AppId = appId.ToString(),
+        Stage = (uint)DownloadStage.Downloading,
+        DownloadedBytes = previousSizeDownloaded,
+        TotalDownloadSize = downloadCounter.completeDownloadSize,
+        Progress = progress,
+      });
+    }
+
     foreach (var depotFileData in depotsToDownload)
     {
       await DownloadSteam3AsyncDepotFiles(appId, cts, downloadCounter, depotFileData, allFileNamesAllDepots);
@@ -811,10 +821,6 @@ class ContentDownloader
     var configDir = Path.Combine(depot.InstallDir, CONFIG_DIR);
 
     var lastManifestId = depotConfigStore.GetManifestID(appId, depot.DepotId) ?? INVALID_MANIFEST_ID;
-
-    //// In case we have an early exit, this will force equiv of verifyall next run.
-    depotConfigStore.RemoveManifestID(appId, depot.DepotId);
-    depotConfigStore.Save(appId);
 
     if (lastManifestId != INVALID_MANIFEST_ID)
     {
