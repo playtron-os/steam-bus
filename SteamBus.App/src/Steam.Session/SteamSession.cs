@@ -42,6 +42,7 @@ class SteamSession
   public SteamUser? SteamUser;
   public SteamContent? SteamContentRef;
   readonly SteamApps? steamApps;
+  readonly SteamFriends? steamFriends;
   public Steam.Cloud.SteamCloud steamCloud;
   readonly SteamKit2.SteamCloud? steamCloudKit;
   //readonly PublishedFile steamPublishedFile;
@@ -83,6 +84,7 @@ class SteamSession
 
     this.SteamUser = this.SteamClient.GetHandler<SteamUser>();
     this.steamApps = this.SteamClient.GetHandler<SteamApps>();
+    this.steamFriends = this.SteamClient.GetHandler<SteamFriends>();
     this.steamCloudKit = this.SteamClient.GetHandler<SteamKit2.SteamCloud>();
     var steamUnifiedMessages = this.SteamClient.GetHandler<SteamUnifiedMessages>();
     if (steamUnifiedMessages == null)
@@ -101,6 +103,7 @@ class SteamSession
     this.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLogIn);
     this.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
     this.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
+    this.Callbacks.Subscribe<SteamFriends.PersonaStateCallback>(OnPersonaState);
   }
 
 
@@ -797,6 +800,18 @@ class SteamSession
   {
     Console.WriteLine($"Account persona name: {callback.PersonaName}");
     this.PersonaName = callback.PersonaName;
+    // We need to explicitly make a request for our user to obtain avatar
+    // I didn't find any other way
+    steamFriends.RequestFriendInfo([SteamUser.SteamID]);
+  }
+
+  private void OnPersonaState(SteamFriends.PersonaStateCallback callback)
+  {
+    if (callback.FriendID == SteamUser.SteamID && callback.AvatarHash is not null)
+    {
+      var avatarStr = BitConverter.ToString(callback.AvatarHash).Replace("-", "").ToLowerInvariant();
+      AvatarUrl = $"https://avatars.akamai.steamstatic.com/{avatarStr}_full.jpg";
+    }
   }
 
   public static ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
