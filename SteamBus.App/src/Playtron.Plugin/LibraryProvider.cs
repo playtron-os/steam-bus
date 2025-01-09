@@ -19,6 +19,14 @@ public struct InstalledAppDescription
   public ulong TotalDownloadSize { get; set; }
 }
 
+public enum DownloadStage
+{
+  Preallocating,
+  Downloading,
+  Verifying,
+  Installing,
+}
+
 public enum InstallOptionType
 {
   [Description("Version of the game to install")]
@@ -141,12 +149,7 @@ public interface IPluginLibraryProvider : IDBusObject
 
   // Signals
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);
-  // WatchInstallCompleted(appId)
-  // WatchInstallFailed(appId, code, reason)
-  // WatchUpdateProgressed(appId, percent)
-  // WatchUpdateCompleted(appId)
-  // WatchUpdateFailed(appId, code, reason)
-  Task<IDisposable> WatchInstallProgressedAsync(Action<(string appId, double progress)> reply);
+  Task<IDisposable> WatchInstallProgressedAsync(Action<(string appId, double progress, DownloadStage stage)> reply);
   Task<IDisposable> WatchInstallCompletedAsync(Action<string> reply);
   Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
 }

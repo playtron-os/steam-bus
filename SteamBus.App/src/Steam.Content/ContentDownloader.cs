@@ -39,7 +39,7 @@ class ContentDownloader
   private static CDNClientPool? cdnPool;
   private AppDownloadOptions? options;
 
-  private event Action<(string appId, double progress)>? OnInstallProgressed;
+  private event Action<(string appId, double progress, DownloadStage stage)>? OnInstallProgressed;
   private event Action<string>? OnInstallCompleted;
   private event Action<(string appId, string error)>? OnInstallFailed;
 
@@ -251,14 +251,14 @@ class ContentDownloader
   }
 
 
-  public async Task DownloadAppAsync(uint appId, Action<(string, double)>? onInstallProgressed, Action<string>? onInstallCompleted, Action<(string appId, string error)>? onInstallFailed)
+  public async Task DownloadAppAsync(uint appId, Action<(string, double, DownloadStage)>? onInstallProgressed, Action<string>? onInstallCompleted, Action<(string appId, string error)>? onInstallFailed)
   {
     var options = await AppDownloadOptions.CreateAsync(await GetAppInstallDir(appId));
     await DownloadAppAsync(appId, options, onInstallProgressed, onInstallCompleted, onInstallFailed);
   }
 
 
-  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<(string appId, double progress)>? onInstallProgressed = null,
+  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<(string appId, double progress, DownloadStage stage)>? onInstallProgressed = null,
     Action<string>? onInstallCompleted = null, Action<(string appId, string error)>? onInstallFailed = null)
   {
     if (cdnPool != null)
@@ -705,7 +705,13 @@ class ContentDownloader
         var counter = (GlobalDownloadCounter)sender!;
 
         if (counter.completeDownloadSize != 0)
-          this.OnInstallProgressed?.Invoke((appId.ToString(), (counter.sizeDownloaded / (float)counter.completeDownloadSize) * 100.0f));
+        {
+          var progress = (counter.sizeDownloaded / (float)counter.completeDownloadSize) * 100.0f;
+
+          // TODO: Handle download stages?
+          // TODO: Handle install post download
+          this.OnInstallProgressed?.Invoke((appId.ToString(), progress, DownloadStage.Downloading));
+        }
 
         depotConfigStore.SetCurrentSize(appId, counter.sizeDownloaded);
         depotConfigStore.SetTotalSize(appId, counter.completeDownloadSize);
