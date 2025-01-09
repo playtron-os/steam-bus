@@ -40,7 +40,8 @@ class ContentDownloader
   private static CDNClientPool? cdnPool;
   private AppDownloadOptions? options;
 
-  private event Action<(string appId, double progress, DownloadStage stage)>? OnInstallProgressed;
+  private event Action<InstallStartedDescription>? OnInstallStarted;
+  private event Action<InstallProgressedDescription>? OnInstallProgressed;
   private event Action<string>? OnInstallCompleted;
   private event Action<(string appId, string error)>? OnInstallFailed;
 
@@ -252,15 +253,16 @@ class ContentDownloader
   }
 
 
-  public async Task DownloadAppAsync(uint appId, Action<(string, double, DownloadStage)>? onInstallProgressed, Action<string>? onInstallCompleted, Action<(string appId, string error)>? onInstallFailed)
+  public async Task DownloadAppAsync(uint appId, Action<InstallStartedDescription>? onInstallStarted, Action<InstallProgressedDescription>? onInstallProgressed,
+    Action<string>? onInstallCompleted, Action<(string appId, string error)>? onInstallFailed)
   {
     var options = await AppDownloadOptions.CreateAsync(await GetAppInstallDir(appId));
-    await DownloadAppAsync(appId, options, onInstallProgressed, onInstallCompleted, onInstallFailed);
+    await DownloadAppAsync(appId, options, onInstallStarted, onInstallProgressed, onInstallCompleted, onInstallFailed);
   }
 
 
-  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<(string appId, double progress, DownloadStage stage)>? onInstallProgressed = null,
-    Action<string>? onInstallCompleted = null, Action<(string appId, string error)>? onInstallFailed = null)
+  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<InstallStartedDescription>? onInstallStarted = null,
+    Action<InstallProgressedDescription>? onInstallProgressed = null, Action<string>? onInstallCompleted = null, Action<(string appId, string error)>? onInstallFailed = null)
   {
     if (cdnPool != null)
     {
@@ -277,6 +279,7 @@ class ContentDownloader
       cdnPool!.ExhaustedToken = cts;
 
       // Keep track of signal handlers
+      this.OnInstallStarted = onInstallStarted;
       this.OnInstallProgressed = onInstallProgressed;
       this.OnInstallCompleted = onInstallCompleted;
       this.OnInstallFailed = onInstallFailed;
@@ -312,17 +315,24 @@ class ContentDownloader
       var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
       var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
 
+      if (depots == null)
+        DbusExceptionHelper.ThrowContentNotFound();
+
+      var version = GetSteam3AppBuildNumber(appId, branch);
+
+      Console.WriteLine($"Downloading version {version}");
+
+      var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+      var requiresInternetConnection = common?["steam_deck_compatibility"]?["configuration"]?["requires_internet_for_singleplayer"]?.AsBoolean() ?? false;
+
       // Handle user generated content
       if (isUgc)
       {
-        if (depots != null)
+        var workshopDepot = depots!["workshopdepot"].AsUnsignedInteger();
+        if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
         {
-          var workshopDepot = depots["workshopdepot"].AsUnsignedInteger();
-          if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
-          {
-            depotIdsExpected.Add(workshopDepot);
-            depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
-          }
+          depotIdsExpected.Add(workshopDepot);
+          depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
         }
 
         depotIdsFound.AddRange(depotIdsExpected);
@@ -331,64 +341,61 @@ class ContentDownloader
       {
         Console.WriteLine("Using app branch: '{0}'.", branch);
 
-        if (depots != null)
+        foreach (var depotSection in depots!.Children)
         {
-          foreach (var depotSection in depots.Children)
+          var id = INVALID_DEPOT_ID;
+          if (depotSection.Children.Count == 0)
+            continue;
+
+          if (!uint.TryParse(depotSection.Name, out id))
+            continue;
+
+          if (hasSpecificDepots && !depotIdsExpected.Contains(id))
+            continue;
+
+          if (!hasSpecificDepots)
           {
-            var id = INVALID_DEPOT_ID;
-            if (depotSection.Children.Count == 0)
-              continue;
-
-            if (!uint.TryParse(depotSection.Name, out id))
-              continue;
-
-            if (hasSpecificDepots && !depotIdsExpected.Contains(id))
-              continue;
-
-            if (!hasSpecificDepots)
+            var depotConfig = depotSection["config"];
+            if (depotConfig != KeyValue.Invalid)
             {
-              var depotConfig = depotSection["config"];
-              if (depotConfig != KeyValue.Invalid)
+              if (!options.DownloadAllPlatforms &&
+                  depotConfig["oslist"] != KeyValue.Invalid &&
+                  !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
               {
-                if (!options.DownloadAllPlatforms &&
-                    depotConfig["oslist"] != KeyValue.Invalid &&
-                    !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
-                {
-                  var oslist = depotConfig["oslist"].Value?.Split(',') ?? [];
-                  if (Array.IndexOf(oslist, os ?? GetSteamOS()) == -1)
-                    continue;
-                }
-
-                if (!options.DownloadAllArchs &&
-                    depotConfig["osarch"] != KeyValue.Invalid &&
-                    !string.IsNullOrWhiteSpace(depotConfig["osarch"].Value))
-                {
-                  var depotArch = depotConfig["osarch"].Value;
-                  if (depotArch != (arch ?? GetSteamArch()))
-                    continue;
-                }
-
-                if (!options.DownloadAllLanguages &&
-                    depotConfig["language"] != KeyValue.Invalid &&
-                    !string.IsNullOrWhiteSpace(depotConfig["language"].Value))
-                {
-                  var depotLang = depotConfig["language"].Value;
-                  if (depotLang != (language ?? "english"))
-                    continue;
-                }
-
-                if (!lv &&
-                    depotConfig["lowviolence"] != KeyValue.Invalid &&
-                    depotConfig["lowviolence"].AsBoolean())
+                var oslist = depotConfig["oslist"].Value?.Split(',') ?? [];
+                if (Array.IndexOf(oslist, os ?? GetSteamOS()) == -1)
                   continue;
               }
+
+              if (!options.DownloadAllArchs &&
+                  depotConfig["osarch"] != KeyValue.Invalid &&
+                  !string.IsNullOrWhiteSpace(depotConfig["osarch"].Value))
+              {
+                var depotArch = depotConfig["osarch"].Value;
+                if (depotArch != (arch ?? GetSteamArch()))
+                  continue;
+              }
+
+              if (!options.DownloadAllLanguages &&
+                  depotConfig["language"] != KeyValue.Invalid &&
+                  !string.IsNullOrWhiteSpace(depotConfig["language"].Value))
+              {
+                var depotLang = depotConfig["language"].Value;
+                if (depotLang != (language ?? "english"))
+                  continue;
+              }
+
+              if (!lv &&
+                  depotConfig["lowviolence"] != KeyValue.Invalid &&
+                  depotConfig["lowviolence"].AsBoolean())
+                continue;
             }
-
-            depotIdsFound.Add(id);
-
-            if (!hasSpecificDepots)
-              depotManifestIds.Add((id, INVALID_MANIFEST_ID));
           }
+
+          depotIdsFound.Add(id);
+
+          if (!hasSpecificDepots)
+            depotManifestIds.Add((id, INVALID_MANIFEST_ID));
         }
 
         if (depotManifestIds.Count == 0 && !hasSpecificDepots)
@@ -418,8 +425,16 @@ class ContentDownloader
 
       try
       {
+        var installStartedData = new InstallStartedDescription
+        {
+          AppId = appId.ToString(),
+          Version = version.ToString(),
+          InstallDirectory = options.InstallDirectory,
+          RequiresInternetConnection = requiresInternetConnection,
+        };
+
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
-        await DownloadSteam3Async(appId, infos, cts).ConfigureAwait(false);
+        await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
       }
       catch (OperationCanceledException)
@@ -437,6 +452,11 @@ class ContentDownloader
       Console.WriteLine($"Finished download task for app: {appId} with DBUS exception: {exception}");
       cdnPool = null;
       onInstallFailed?.Invoke((appId.ToString(), exception.ErrorName));
+      throw;
+    }
+    catch (OperationCanceledException)
+    {
+      cdnPool = null;
       throw;
     }
     catch (Exception exception)
@@ -567,6 +587,8 @@ class ContentDownloader
 
     var uVersion = GetSteam3AppBuildNumber(appId, branch);
 
+    Console.WriteLine($"##### baseInstallPath: {baseInstallPath}, {uVersion}, {depotId}");
+
     if (!CreateDirectories(depotId, uVersion, out var installDir, baseInstallPath))
     {
       Console.WriteLine("Error: Unable to create install directories!");
@@ -695,7 +717,7 @@ class ContentDownloader
   }
 
 
-  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots, CancellationTokenSource cts)
+  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots, CancellationTokenSource cts, InstallStartedDescription installStartedData)
   {
     if (this.options is null || cdnPool is null)
     {
@@ -718,7 +740,14 @@ class ContentDownloader
           var progress = (counter.sizeDownloaded / (float)counter.completeDownloadSize) * 100.0f;
 
           // TODO: Handle download stages?
-          this.OnInstallProgressed?.Invoke((appId.ToString(), progress, DownloadStage.Downloading));
+          this.OnInstallProgressed?.Invoke(new InstallProgressedDescription
+          {
+            AppId = appId.ToString(),
+            Stage = (uint)DownloadStage.Downloading,
+            DownloadedBytes = counter.sizeDownloaded,
+            TotalDownloadSize = counter.completeDownloadSize,
+            Progress = progress,
+          });
         }
 
         depotConfigStore.SetCurrentSize(appId, counter.sizeDownloaded);
@@ -756,8 +785,8 @@ class ContentDownloader
       }
     }
 
-    Console.WriteLine("Downloading: {0} bytes ({1} bytes uncompressed) from {2} depots, {3} / {4}",
-        downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count, downloadCounter.sizeDownloaded, downloadCounter.completeDownloadSize);
+    installStartedData.TotalDownloadSize = downloadCounter.completeDownloadSize;
+    OnInstallStarted?.Invoke(installStartedData);
 
     foreach (var depotFileData in depotsToDownload)
     {
@@ -766,8 +795,8 @@ class ContentDownloader
 
     //Ansi.Progress(Ansi.ProgressState.Hidden);
 
-    Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots, {3} / {4}",
-        downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count, downloadCounter.sizeDownloaded, downloadCounter.completeDownloadSize);
+    Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots",
+        downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count);
   }
 
 
@@ -1037,6 +1066,11 @@ class ContentDownloader
       }
       else
       {
+        // Delete if it is a file/symlink
+        var info = new FileInfo(baseInstallPath);
+        if (info != null && (info.Attributes & FileAttributes.ReparsePoint) != 0)
+          File.Delete(baseInstallPath);
+
         Directory.CreateDirectory(baseInstallPath);
 
         installDir = baseInstallPath;

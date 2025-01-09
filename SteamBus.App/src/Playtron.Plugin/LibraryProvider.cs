@@ -19,6 +19,26 @@ public struct InstalledAppDescription
   public ulong TotalDownloadSize { get; set; }
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct InstallProgressedDescription
+{
+  public string AppId { get; set; }
+  public uint Stage { get; set; }
+  public ulong DownloadedBytes { get; set; }
+  public ulong TotalDownloadSize { get; set; }
+  public double Progress { get; set; }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct InstallStartedDescription
+{
+  public string AppId { get; set; }
+  public string Version { get; set; }
+  public string InstallDirectory { get; set; }
+  public ulong TotalDownloadSize { get; set; }
+  public bool RequiresInternetConnection { get; set; }
+}
+
 public enum DownloadStage
 {
   Preallocating,
@@ -148,7 +168,8 @@ public interface IPluginLibraryProvider : IDBusObject
 
   // Signals
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);
-  Task<IDisposable> WatchInstallProgressedAsync(Action<(string appId, double progress, DownloadStage stage)> reply);
+  Task<IDisposable> WatchInstallStartedAsync(Action<InstallStartedDescription> reply);
+  Task<IDisposable> WatchInstallProgressedAsync(Action<InstallProgressedDescription> reply);
   Task<IDisposable> WatchInstallCompletedAsync(Action<string> reply);
   Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
 }

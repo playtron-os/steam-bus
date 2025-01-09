@@ -82,7 +82,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Signal events
   public event Action<string>? OnPing;
   public event Action<ObjectPath>? OnClientConnected;
-  public event Action<(string appId, double progress, DownloadStage stage)>? OnInstallProgressed;
+  public event Action<InstallStartedDescription>? OnInstallStarted;
+  public event Action<InstallProgressedDescription>? OnInstallProgressed;
   public event Action<string>? OnInstallCompleted;
   public event Action<(string appId, string error)>? OnInstallFailed;
   public event Action<PropertyChanges>? OnUserPropsChanged;
@@ -296,7 +297,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     try
     {
       // Run this in the background
-      _ = Task.Run(() => downloader.DownloadAppAsync(appId, downloadOptions, OnInstallProgressed, OnInstallCompleted, OnInstallFailed));
+      _ = Task.Run(() => downloader.DownloadAppAsync(appId, downloadOptions, OnInstallStarted, OnInstallProgressed, OnInstallCompleted, OnInstallFailed));
     }
     catch (Exception exception)
     {
@@ -313,8 +314,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     await ContentDownloader.PauseInstall();
   }
 
+  // InstallStart Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallStartedAsync(Action<InstallStartedDescription> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnInstallStarted), reply);
+  }
+
   // InstallProgressed Signal
-  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<(string appId, double progress, DownloadStage stage)> reply)
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<InstallProgressedDescription> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnInstallProgressed), reply);
   }
