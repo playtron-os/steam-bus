@@ -86,6 +86,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
   public event Action<string>? OnConfirmationRequired;
   public event Action<string>? OnQrCodeUpdated;
+  public event Action<ProviderItem[]>? OnLibraryUpdated;
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
@@ -219,45 +220,6 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
-  ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
-  {
-    var app_type = AppType.Game;
-    switch (appKeyValues["common"]["type"].Value?.ToLower())
-    {
-      case "game":
-        app_type = AppType.Game;
-        break;
-      case "dlc":
-        app_type = AppType.Dlc;
-        break;
-      case "tool":
-        app_type = AppType.Tool;
-        break;
-      case "application":
-        app_type = AppType.Application;
-        break;
-      case "music":
-        app_type = AppType.Music;
-        break;
-      case "config":
-        app_type = AppType.Config;
-        break;
-      case "demo":
-        app_type = AppType.Demo;
-        break;
-      case "beta":
-        app_type = AppType.Beta;
-        break;
-    }
-    return new ProviderItem
-    {
-      id = appId,
-      name = appKeyValues["common"]["name"].Value?.ToString() ?? "",
-      provider = "Steam",
-      app_type = (uint)app_type,
-    };
-  }
-
   async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appId)
   {
     uint appid = ParseAppId(appId) ?? throw new DBusException("steambus.Error.Argument", "Invalid appid");
@@ -266,7 +228,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       throw new DBusException("steambus.Error.Argument", "Invalid appid");
     }
-    return GetProviderItem(appId, appinfo.KeyValues);
+    return SteamSession.GetProviderItem(appId, appinfo.KeyValues);
   }
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
@@ -276,7 +238,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     List<ProviderItem> providerItems = new(session.AppInfo.Count);
     foreach (var app in this.session.AppInfo)
     {
-      providerItems.Add(GetProviderItem(app.Key.ToString(), app.Value.KeyValues));
+      providerItems.Add(SteamSession.GetProviderItem(app.Key.ToString(), app.Value.KeyValues));
     }
     return providerItems.ToArray();
   }
@@ -335,12 +297,17 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnInstallProgressed), reply);
   }
 
+  Task<IDisposable> IPluginLibraryProvider.WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnLibraryUpdated), reply);
+  }
 
   SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)
   {
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
     var session = new SteamSession(login, steamGuardData, this);
+    session.OnLibraryUpdated = OnLibraryUpdated;
 
     // Subscribe to client callbacks
     session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);

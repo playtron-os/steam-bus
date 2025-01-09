@@ -124,6 +124,7 @@ public interface IPluginLibraryProvider : IDBusObject
   // Signals
   //Task<IDisposable> WatchInstallProgressedAsync(string appId, double percent);
   Task<IDisposable> WatchInstallProgressedAsync(Action<(string, double)> reply);
+  Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);
   // WatchInstallCompleted(appId)
   // WatchInstallFailed(appId, code, reason)
   // WatchUpdateProgressed(appId, percent)

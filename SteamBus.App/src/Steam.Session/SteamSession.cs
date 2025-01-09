@@ -15,6 +15,7 @@ using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
 using SteamKit2.Internal;
+using Playtron.Plugin;
 
 namespace Steam.Session;
 
@@ -58,6 +59,7 @@ class SteamSession
   AuthSession? authSession;
   QrAuthSession? qrAuthSession;
   public Action<string>? OnNewQrCode;
+  public Action<ProviderItem[]>? OnLibraryUpdated;
   readonly CancellationTokenSource abortedToken = new();
 
   // input
@@ -710,6 +712,7 @@ class SteamSession
   // Invoked on login to list the game/app licenses associated with the user.
   private async void OnLicenseList(SteamApps.LicenseListCallback licenseList)
   {
+    bool firstCallback = AppInfo.Count == 0;
     if (licenseList.Result != EResult.OK)
     {
       Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
@@ -717,7 +720,6 @@ class SteamSession
 
       return;
     }
-
     isLoadingLibrary = true;
     Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
     this.Licenses = licenseList.LicenseList;
@@ -779,6 +781,15 @@ class SteamSession
     }
     Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
     isLoadingLibrary = false;
+    if (!firstCallback)
+    {
+      List<ProviderItem> updatedItems = new(appids.Count);
+      foreach (var id in appids)
+      {
+        updatedItems.Add(GetProviderItem(id.ToString(), AppInfo[id].KeyValues));
+      }
+      OnLibraryUpdated?.Invoke(updatedItems.ToArray());
+    }
   }
 
   // Invoked shortly after login to provide account information
@@ -786,5 +797,44 @@ class SteamSession
   {
     Console.WriteLine($"Account persona name: {callback.PersonaName}");
     this.PersonaName = callback.PersonaName;
+  }
+
+  public static ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
+  {
+    var app_type = AppType.Game;
+    switch (appKeyValues["common"]["type"].Value?.ToLower())
+    {
+      case "game":
+        app_type = AppType.Game;
+        break;
+      case "dlc":
+        app_type = AppType.Dlc;
+        break;
+      case "tool":
+        app_type = AppType.Tool;
+        break;
+      case "application":
+        app_type = AppType.Application;
+        break;
+      case "music":
+        app_type = AppType.Music;
+        break;
+      case "config":
+        app_type = AppType.Config;
+        break;
+      case "demo":
+        app_type = AppType.Demo;
+        break;
+      case "beta":
+        app_type = AppType.Beta;
+        break;
+    }
+    return new ProviderItem
+    {
+      id = appId,
+      name = appKeyValues["common"]["name"].Value?.ToString() ?? "",
+      provider = "Steam",
+      app_type = (uint)app_type,
+    };
   }
 }
