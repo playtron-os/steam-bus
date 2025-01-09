@@ -24,7 +24,6 @@ public enum DownloadStage
   Preallocating,
   Downloading,
   Verifying,
-  Installing,
 }
 
 public enum InstallOptionType

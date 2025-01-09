@@ -718,7 +718,6 @@ class ContentDownloader
           var progress = (counter.sizeDownloaded / (float)counter.completeDownloadSize) * 100.0f;
 
           // TODO: Handle download stages?
-          // TODO: Handle install post download
           this.OnInstallProgressed?.Invoke((appId.ToString(), progress, DownloadStage.Downloading));
         }
 
