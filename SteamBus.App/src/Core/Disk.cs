@@ -46,7 +46,7 @@ static class Disk
         // Get mount point
         var mountPoint = await GetMountPointFromProc(device);
         if (string.IsNullOrEmpty(mountPoint))
-            DbusExceptionHelper.ThrowDiskNotFound();
+            throw DbusExceptionHelper.ThrowDiskNotFound();
 
         return await GetInstallRoot(mountPoint, folderName);
     }
@@ -56,7 +56,7 @@ static class Disk
         // Get mount point
         var mountPoint = await GetMountPointFromProc();
         if (string.IsNullOrEmpty(mountPoint))
-            DbusExceptionHelper.ThrowDiskNotFound();
+            throw DbusExceptionHelper.ThrowDiskNotFound();
 
         return await GetInstallRoot(mountPoint, folderName);
     }

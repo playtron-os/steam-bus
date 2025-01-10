@@ -233,15 +233,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
-  async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appId)
+
+  async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appIdString)
   {
-    uint appid = ParseAppId(appId) ?? throw new DBusException("steambus.Error.Argument", "Invalid appid");
-    await this.session.WaitForLibrary();
-    if (!this.session.AppInfo.TryGetValue(appid, out var appinfo))
-    {
-      throw new DBusException("steambus.Error.Argument", "Invalid appid");
-    }
-    return SteamSession.GetProviderItem(appId, appinfo.KeyValues);
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    await this.session!.WaitForLibrary();
+    if (!this.session.AppInfo.TryGetValue(appId, out var appinfo)) throw DbusExceptionHelper.ThrowInvalidAppId();
+    return SteamSession.GetProviderItem(appIdString, appinfo.KeyValues);
   }
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
@@ -264,8 +263,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
-    if (!EnsureConnected()) return [];
-    if (ParseAppId(appIdString) is not uint appId) return [];
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
     var downloader = new ContentDownloader(session!, depotConfigStore);
     var options = await downloader.GetInstallOptions(appId);
@@ -273,6 +272,49 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     InstallOptionDescription[] res = options.Select((option) => option.AsTuple()).ToArray();
 
     return res;
+  }
+
+  private Dictionary<string, string> MapPostInstallRegistryValueToDict(PostInstallRegistryValue val)
+  {
+    var dict = new Dictionary<string, string>();
+    if (val.Language != null) dict.Add("language", val.Language);
+    dict.Add("group", val.Group);
+    dict.Add("key", val.Key);
+    dict.Add("value", val.Value);
+    return dict;
+  }
+
+  private Dictionary<string, string> MapPostInstallRunProcessValueToDict(PostInstallRunProcess val)
+  {
+    var dict = new Dictionary<string, string>();
+    if (val.HasRunKey != null) dict.Add("has_run_key", val.HasRunKey);
+    if (val.Command != null) dict.Add("command", val.Command);
+    if (val.MinimumHasRunValue != null) dict.Add("minimum_has_run_value", val.MinimumHasRunValue);
+    if (val.RequirementOs.Is64BitWindows != null) dict.Add("is_64_bit_windows", val.RequirementOs.Is64BitWindows == true ? "true" : "false");
+    if (val.RequirementOs.OsType != null) dict.Add("os_type", val.RequirementOs.OsType);
+    dict.Add("name", val.Name);
+    dict.Add("process", val.Process);
+    dict.Add("no_clean_up", val.NoCleanUp ? "true" : "false");
+    return dict;
+  }
+
+  async Task<string> IPluginLibraryProvider.GetPostInstallStepsAsync(string appIdString)
+  {
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    var installDirectory = depotConfigStore.GetInstallDirectory(appId);
+
+    if (installDirectory == null || !depotConfigStore.IsAppDownloaded(appId))
+      throw DbusExceptionHelper.ThrowAppNotInstalled();
+
+    var installScript = await InstallScript.CreateAsync(appId, installDirectory!);
+
+    var options = new JsonSerializerOptions
+    {
+      PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    return JsonSerializer.Serialize(installScript.scripts, options);
   }
 
   Task<InstalledAppDescription[]> IPluginLibraryProvider.GetInstalledAppsAsync()
@@ -283,8 +325,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<int> IPluginLibraryProvider.InstallAsync(string appIdString, string disk, InstallOptions options)
   {
     Console.WriteLine($"Installing app: {appIdString}");
-    if (!EnsureConnected()) return 1;
-    if (ParseAppId(appIdString) is not uint appId) return 1;
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
     // Create a content downloader for the given app
     var downloader = new ContentDownloader(session!, depotConfigStore);
@@ -826,7 +868,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   Task<CloudPathObject[]> IPluginLibraryProvider.GetSavePathPatternsAsync(string appid, string platform)
   {
-    if (!EnsureConnected()) return Task.FromResult(Array.Empty<CloudPathObject>());
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
 
     uint appidParsed = uint.Parse(appid);
     Console.WriteLine("Getting paths for {0}", appid);
@@ -966,7 +1008,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appid, CloudPathObject[] paths)
   {
-    if (!EnsureConnected()) return;
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
 
     if (this.session?.steamCloud == null)
     {
@@ -1063,7 +1105,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   }
   async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, CloudPathObject[] paths)
   {
-    if (!EnsureConnected()) return;
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
 
     if (this.session?.steamCloud == null)
     {

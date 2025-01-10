@@ -303,7 +303,7 @@ class ContentDownloader
       var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
 
       if (depots == null)
-        DbusExceptionHelper.ThrowContentNotFound();
+        throw DbusExceptionHelper.ThrowContentNotFound();
 
       var version = GetSteam3AppBuildNumber(appId, branch);
 

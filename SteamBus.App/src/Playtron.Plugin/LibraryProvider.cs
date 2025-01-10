@@ -159,6 +159,8 @@ public interface IPluginLibraryProvider : IDBusObject
 
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
 
+  Task<string> GetPostInstallStepsAsync(string appId);
+
   Task<ProviderItem> GetProviderItemAsync(string appId);
   Task<ProviderItem[]> GetProviderItemsAsync();
   Task RefreshAsync();

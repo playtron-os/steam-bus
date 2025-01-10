@@ -74,6 +74,18 @@ public class DepotConfigStore
     }
 
     /// <summary>
+    /// Returns the install directory for an app id
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public string? GetInstallDirectory(uint appId)
+    {
+        if (!manifestPathMap.TryGetValue(appId, out var manifestPath)) return null;
+
+        return Directory.GetParent(manifestPath)?.FullName;
+    }
+
+    /// <summary>
     /// Returns the manifest ID installed related to the app id and depot id
     /// </summary>
     /// <param name="appId"></param>
@@ -108,6 +120,22 @@ public class DepotConfigStore
         if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
 
         return manifest["downloadstage"]?.AsEnum<DownloadStage>();
+    }
+
+    /// <summary>
+    /// Is app downloaded
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public bool IsAppDownloaded(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return false;
+
+        var stage = manifest["downloadstage"];
+        var sizeDownloaded = manifest["downloaded"]?.AsUnsignedInteger();
+        var totalSize = manifest["totaldownload"]?.AsUnsignedInteger();
+
+        return stage == KeyValue.Invalid && sizeDownloaded == totalSize;
     }
 
     /// <summary>
