@@ -44,6 +44,20 @@ class SteamBus
         "/one/playtron/plugins/Manager"
       );
       await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
+
+      await pluginManager.WatchOnDriveAddedAsync(async (driveInfo) =>
+      {
+        Console.WriteLine($"Drive:{driveInfo.Name} added");
+        await depotConfigStore.Reload();
+        client.EmitInstalledAppsUpdated();
+      });
+
+      await pluginManager.WatchOnDriveRemovedAsync(async (driveName) =>
+      {
+        Console.WriteLine($"Drive:{driveName} removed");
+        await depotConfigStore.Reload();
+        client.EmitInstalledAppsUpdated();
+      });
     }
     catch (Exception ex)
     {

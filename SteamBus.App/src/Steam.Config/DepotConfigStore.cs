@@ -28,8 +28,14 @@ public class DepotConfigStore
         var libraryFoldersConfig = await LibraryFoldersConfig.CreateAsync();
         var directories = libraryFoldersConfig.GetInstallDirectories();
 
+        manifestMap.Clear();
+        manifestPathMap.Clear();
+
         foreach (var dir in directories)
         {
+            if (!Directory.Exists(dir))
+                continue;
+
             var appPaths = Directory.EnumerateDirectories(dir);
 
             foreach (var appPath in appPaths ?? [])
@@ -52,6 +58,8 @@ public class DepotConfigStore
                 }
             }
         }
+
+        Console.WriteLine($"Depot config store loaded {manifestPathMap.Count} installed apps");
     }
 
     /// <summary>

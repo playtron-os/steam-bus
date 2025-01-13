@@ -191,6 +191,5 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
   Task<IDisposable> WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply);
   Task<IDisposable> WatchMoveItemProgressedAsync(Action<(string appId, double progress)> reply);
+  Task<IDisposable> WatchInstalledAppsUpdatedAsync(Action reply);
 }
-
-
