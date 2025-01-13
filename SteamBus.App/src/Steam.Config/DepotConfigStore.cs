@@ -324,4 +324,89 @@ public class DepotConfigStore
 
         return map;
     }
+
+    /// <summary>
+    /// Removes the information related to the installed app id
+    /// </summary>
+    /// <param name="appId"></param>
+    public void RemoveInstalledApp(uint appId)
+    {
+        manifestPathMap.TryGetValue(appId, out var path);
+
+        if (path != null)
+        {
+            Directory.Delete(Directory.GetParent(path)!.FullName, true);
+            manifestPathMap.Remove(appId);
+            manifestMap.Remove(appId);
+        }
+    }
+
+    /// <summary>
+    /// Moves the installed app to a new directory
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="newInstallDirectory"></param>
+    public async Task<string> MoveInstalledApp(uint appId, string newInstallDirectory, Action<(string appId, double progress)>? OnMoveItemProgressed)
+    {
+        manifestPathMap.TryGetValue(appId, out var path);
+        if (path == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
+
+        var currentInstallDirectory = Directory.GetParent(path)!.FullName;
+        if (!Directory.Exists(currentInstallDirectory)) throw DbusExceptionHelper.ThrowMissingDirectory();
+
+        // Ensure the destination directory exists
+        Directory.CreateDirectory(newInstallDirectory);
+
+        // Get all files and subdirectories
+        var files = Directory.GetFiles(currentInstallDirectory, "*", SearchOption.AllDirectories);
+        var directories = Directory.GetDirectories(currentInstallDirectory, "*", SearchOption.AllDirectories);
+        var totalItems = files.Length + directories.Length;
+        int processedItems = 0;
+
+        // Move all files
+        foreach (var file in files)
+        {
+            // Calculate relative path
+            string relativePath = Path.GetRelativePath(currentInstallDirectory, file);
+            string destinationFile = Path.Combine(newInstallDirectory, relativePath);
+
+            // Ensure the destination directory exists
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
+
+            // Move the file
+            await Task.Run(() => File.Move(file, destinationFile));
+
+            // Update progress
+            processedItems++;
+            int progress = (int)((double)processedItems / totalItems * 100);
+            OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
+        }
+
+        // Move all directories
+        foreach (var directory in directories)
+        {
+            // Calculate relative path
+            string relativePath = Path.GetRelativePath(currentInstallDirectory, directory);
+            string destinationDir = Path.Combine(newInstallDirectory, relativePath);
+
+            // Create the directory in the destination
+            Directory.CreateDirectory(destinationDir);
+
+            // Update progress
+            processedItems++;
+            int progress = (int)((double)processedItems / totalItems * 100);
+            OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
+        }
+
+        // Delete the source directory after moving
+        Directory.Delete(currentInstallDirectory, true);
+
+        // Update state
+        manifestPathMap[appId] = newInstallDirectory;
+
+        // Final progress update to 100%
+        OnMoveItemProgressed?.Invoke((appId.ToString(), 100));
+
+        return newInstallDirectory;
+    }
 }

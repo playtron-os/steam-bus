@@ -161,15 +161,14 @@ public interface IPluginLibraryProvider : IDBusObject
   // Available install options can be queried using the `GetInstallOptionsAsync`
   // method.
   Task<int> InstallAsync(string appId, string disk, InstallOptions options);
+  Task UninstallAsync(string appId);
+  Task<string> MoveItemAsync(string appId, string disk);
 
   // Gets information about installed apps
   Task<InstalledAppDescription[]> GetInstalledAppsAsync();
 
   // Pauses the current install that is in progress
   Task PauseInstallAsync();
-
-  //Task Update(appId);
-  //Task Uninstall(appId);
 
   Task<ItemMetadata> GetAppMetadataAsync(string appId);
 
@@ -191,6 +190,7 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<IDisposable> WatchInstallCompletedAsync(Action<string> reply);
   Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
   Task<IDisposable> WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply);
+  Task<IDisposable> WatchMoveItemProgressedAsync(Action<(string appId, double progress)> reply);
 }
 
 

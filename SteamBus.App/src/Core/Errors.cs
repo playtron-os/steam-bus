@@ -9,6 +9,7 @@ public static class DbusErrors
     public const string AppNotInstalled = "one.playtron.Error.AppNotInstalled";
     public const string InvalidAppId = "one.playtron.Error.InvalidAppId";
     public const string NotLoggedIn = "one.playtron.Error.NotLoggedIn";
+    public const string MissingDirectory = "one.playtron.Error.MissingDirectory";
 }
 
 public static class DbusExceptionHelper
@@ -36,5 +37,10 @@ public static class DbusExceptionHelper
     public static DBusException ThrowNotLoggedIn(string message = "Not logged in to steam")
     {
         return new DBusException(DbusErrors.NotLoggedIn, message);
+    }
+
+    public static DBusException ThrowMissingDirectory(string message = "Directory not found")
+    {
+        return new DBusException(DbusErrors.MissingDirectory, message);
     }
 }
