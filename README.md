@@ -9,7 +9,7 @@ Login
 ```bash
 busctl --user call one.playtron.SteamBus \
   /one/playtron/SteamBus/SteamClient0 \
-  one.playtron.SteamBus.SteamClient \
+  one.playtron.auth.PasswordFlow \
   Login "ss" "myuser" 'mypassword'
 ```
 

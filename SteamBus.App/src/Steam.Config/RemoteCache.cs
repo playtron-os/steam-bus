@@ -99,6 +99,7 @@ public class RemoteCache
 
 		var data = KeyValue.LoadFromString(content);
 		this.data = data ?? new KeyValue(appid.ToString());
+		stream.Close();
 	}
 
 	public ulong? GetChangeNumber()

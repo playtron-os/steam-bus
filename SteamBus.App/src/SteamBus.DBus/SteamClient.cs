@@ -57,6 +57,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
+  // Depot Config Store used to retrieve installed apps informations
+  private DepotConfigStore depotConfigStore;
   // Unique login ID used to allow multiple active login sessions from the same account
   private uint? loginId;
   // Two factor code task used to login to Steam
@@ -80,7 +82,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Signal events
   public event Action<string>? OnPing;
   public event Action<ObjectPath>? OnClientConnected;
-  public event Action<(string, double)>? OnInstallProgressed;
+  public event Action<InstallStartedDescription>? OnInstallStarted;
+  public event Action<InstallProgressedDescription>? OnInstallProgressed;
+  public event Action<string>? OnInstallCompleted;
+  public event Action<(string appId, string error)>? OnInstallFailed;
+  public event Action<(string appId, string version)>? OnAppNewVersionFound;
   public event Action<PropertyChanges>? OnUserPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
@@ -90,10 +96,13 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
-  public DBusSteamClient(ObjectPath path)
+  public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore)
   {
     // DBus path to this Steam Client instance
     this.Path = path;
+
+    // Depot configure store
+    this.depotConfigStore = depotConfigStore;
 
     // Create a steam client config
     var config = SteamConfiguration.Create(builder =>
@@ -189,21 +198,26 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
-  Task<bool> EnsureConnected()
+  bool EnsureConnected()
   {
     // Ensure that a Steam session exists
     if (this.session is null)
     {
       Console.WriteLine("No active Steam session found");
-      return Task.FromResult(false);
+      return false;
     }
     if (!this.session.IsLoggedOn)
     {
       Console.WriteLine("Not logged in to Steam");
-      return Task.FromResult(false);
+      return false;
+    }
+    if (this.session.SteamUser?.SteamID == null)
+    {
+      Console.WriteLine("Steam ID not found in steam connection");
+      return false;
     }
 
-    return Task.FromResult(true);
+    return true;
   }
 
   uint? ParseAppId(string appIdString)
@@ -220,15 +234,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
-  async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appId)
+
+  async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appIdString)
   {
-    uint appid = ParseAppId(appId) ?? throw new DBusException("steambus.Error.Argument", "Invalid appid");
-    await this.session.WaitForLibrary();
-    if (!this.session.AppInfo.TryGetValue(appid, out var appinfo))
-    {
-      throw new DBusException("steambus.Error.Argument", "Invalid appid");
-    }
-    return SteamSession.GetProviderItem(appId, appinfo.KeyValues);
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    await this.session!.WaitForLibrary();
+    if (!this.session.AppInfo.TryGetValue(appId, out var appinfo)) throw DbusExceptionHelper.ThrowInvalidAppId();
+    return SteamSession.GetProviderItem(appIdString, appinfo.KeyValues);
   }
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
@@ -249,12 +262,50 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Task.FromResult(0);
   }
 
+  async Task<ItemMetadata> IPluginLibraryProvider.GetAppMetadataAsync(string appIdString)
+  {
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    await session!.RequestAppInfo(appId, true);
+
+    var info = depotConfigStore.GetInstalledAppInfo(appId);
+    var name = session!.GetSteam3AppName(appId);
+    var requiresInternetConnection = session!.GetSteam3AppRequiresInternetConnection(appId);
+
+    if (info == null)
+    {
+      return new ItemMetadata
+      {
+        Name = name,
+        InstallSize = 0,
+        RequiresInternetConnection = requiresInternetConnection,
+        CloudSaveFolders = [],
+        InstalledVersion = "",
+        LatestVersion = "",
+      };
+    }
+
+    var latestVersion = session!.GetSteam3AppBuildNumber(appId, info!.Value.Branch);
+
+    return new ItemMetadata
+    {
+      Name = name,
+      InstallSize = info.Value.Info.DownloadedBytes,
+      RequiresInternetConnection = requiresInternetConnection,
+      // TODO: Implement cloud save folders?
+      CloudSaveFolders = [],
+      InstalledVersion = info.Value.Info.Version,
+      LatestVersion = latestVersion.ToString(),
+    };
+  }
+
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
-    if (!await EnsureConnected()) return [];
-    if (ParseAppId(appIdString) is not uint appId) return [];
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
-    var downloader = new ContentDownloader(session!);
+    var downloader = new ContentDownloader(session!, depotConfigStore);
     var options = await downloader.GetInstallOptions(appId);
 
     InstallOptionDescription[] res = options.Select((option) => option.AsTuple()).ToArray();
@@ -262,25 +313,72 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return res;
   }
 
+  private Dictionary<string, string> MapPostInstallRegistryValueToDict(PostInstallRegistryValue val)
+  {
+    var dict = new Dictionary<string, string>();
+    if (val.Language != null) dict.Add("language", val.Language);
+    dict.Add("group", val.Group);
+    dict.Add("key", val.Key);
+    dict.Add("value", val.Value);
+    return dict;
+  }
+
+  private Dictionary<string, string> MapPostInstallRunProcessValueToDict(PostInstallRunProcess val)
+  {
+    var dict = new Dictionary<string, string>();
+    if (val.HasRunKey != null) dict.Add("has_run_key", val.HasRunKey);
+    if (val.Command != null) dict.Add("command", val.Command);
+    if (val.MinimumHasRunValue != null) dict.Add("minimum_has_run_value", val.MinimumHasRunValue);
+    if (val.RequirementOs.Is64BitWindows != null) dict.Add("is_64_bit_windows", val.RequirementOs.Is64BitWindows == true ? "true" : "false");
+    if (val.RequirementOs.OsType != null) dict.Add("os_type", val.RequirementOs.OsType);
+    dict.Add("name", val.Name);
+    dict.Add("process", val.Process);
+    dict.Add("no_clean_up", val.NoCleanUp ? "true" : "false");
+    return dict;
+  }
+
+  async Task<string> IPluginLibraryProvider.GetPostInstallStepsAsync(string appIdString)
+  {
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    var installDirectory = depotConfigStore.GetInstallDirectory(appId);
+
+    if (installDirectory == null || !depotConfigStore.IsAppDownloaded(appId))
+      throw DbusExceptionHelper.ThrowAppNotInstalled();
+
+    var installScript = await InstallScript.CreateAsync(appId, installDirectory!);
+
+    var options = new JsonSerializerOptions
+    {
+      PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    return JsonSerializer.Serialize(installScript.scripts, options);
+  }
+
+  Task<InstalledAppDescription[]> IPluginLibraryProvider.GetInstalledAppsAsync()
+  {
+    return Task.FromResult(depotConfigStore.GetInstalledAppInfo());
+  }
+
   async Task<int> IPluginLibraryProvider.InstallAsync(string appIdString, string disk, InstallOptions options)
   {
     Console.WriteLine($"Installing app: {appIdString}");
-    if (!await EnsureConnected()) return 1;
-    if (ParseAppId(appIdString) is not uint appId) return 1;
-
-    // Configure the download options
-    var downloadOptions = new AppDownloadOptions(options);
-
-    // TODO: Determine the install path to use based on the block device passed
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
     // Create a content downloader for the given app
-    var downloader = new ContentDownloader(session!);
+    var downloader = new ContentDownloader(session!, depotConfigStore);
+
+    // Configure the download options
+    var installdir = await downloader.GetAppInstallDir(appId);
+    var downloadOptions = new AppDownloadOptions(options, await Disk.GetInstallRootFromDevice(disk, installdir));
 
     // Start downloading the app
     try
     {
       // Run this in the background
-      _ = Task.Run(() => downloader.DownloadAppAsync(appId, downloadOptions, OnInstallProgressed));
+      _ = Task.Run(() => downloader.DownloadAppAsync(appId, downloadOptions, OnInstallStarted, OnInstallProgressed, OnInstallCompleted, OnInstallFailed));
     }
     catch (Exception exception)
     {
@@ -291,8 +389,20 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return 0;
   }
 
+  async Task IPluginLibraryProvider.PauseInstallAsync()
+  {
+    Console.WriteLine("Pausing current install");
+    await ContentDownloader.PauseInstall();
+  }
+
+  // InstallStart Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallStartedAsync(Action<InstallStartedDescription> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnInstallStarted), reply);
+  }
+
   // InstallProgressed Signal
-  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<(string, double)> reply)
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallProgressedAsync(Action<InstallProgressedDescription> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnInstallProgressed), reply);
   }
@@ -302,11 +412,29 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnLibraryUpdated), reply);
   }
 
+  // InstallCompleted Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallCompletedAsync(Action<string> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnInstallCompleted), reply);
+  }
+
+  // InstallFailed Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstallFailedAsync(Action<(string appId, string error)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnInstallFailed), reply);
+  }
+
+  // AppNewVersionFound Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnAppNewVersionFound), reply);
+  }
+
   SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)
   {
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
-    var session = new SteamSession(login, steamGuardData, this);
+    var session = new SteamSession(login, depotConfigStore, OnAppNewVersionFound!, steamGuardData, this);
     session.OnLibraryUpdated = OnLibraryUpdated;
 
     // Subscribe to client callbacks
@@ -785,13 +913,15 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   Task<CloudPathObject[]> IPluginLibraryProvider.GetSavePathPatternsAsync(string appid, string platform)
   {
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+
     uint appidParsed = uint.Parse(appid);
     Console.WriteLine("Getting paths for {0}", appid);
     var appInfo = this.apps[appidParsed];
     if (appInfo == null)
     {
       Console.WriteLine("Unable to load appInfo");
-      return Task.FromResult<CloudPathObject[]>([]);
+      return Task.FromResult(Array.Empty<CloudPathObject>());
     }
     List<CloudPathObject> results = [];
     List<KeyValue> overrides = [];
@@ -800,7 +930,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (ufs.Children.Count == 0)
     {
       Console.WriteLine("Steam Cloud is not configured for this game.");
-      return Task.FromResult<CloudPathObject[]>([]);
+      return Task.FromResult(Array.Empty<CloudPathObject>());
     }
 
     // Get overrides that match this platform
@@ -813,7 +943,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     var savefiles = ufs["savefiles"].Children;
     // Unsure if usage of remote directory is bound to the number of savefiles or even its existance.
-    var defaultPath = RemoteCache.GetRemoteSavePath(this.session.SteamUser.SteamID.AccountID, appidParsed);
+    var defaultPath = RemoteCache.GetRemoteSavePath(this.session!.SteamUser!.SteamID!.AccountID, appidParsed);
+
     results.Add(new CloudPathObject { alias = "", path = defaultPath, recursive = true });
 
 
@@ -922,6 +1053,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appid, CloudPathObject[] paths)
   {
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+
     if (this.session?.steamCloud == null)
     {
       Console.WriteLine("Steam Cloud not initialized");
@@ -932,7 +1065,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
 
     Console.WriteLine("CloudDownload for {0}", appidParsed);
-    var remoteCacheFile = new RemoteCache(this.session.SteamUser.SteamID.AccountID, appidParsed);
+    var remoteCacheFile = new RemoteCache(this.session.SteamUser!.SteamID!.AccountID, appidParsed);
     var changeNumber = remoteCacheFile.GetChangeNumber();
     Console.WriteLine("Cached change number {0}", changeNumber);
     // Request changelist
@@ -1017,6 +1150,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   }
   async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, CloudPathObject[] paths)
   {
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+
     if (this.session?.steamCloud == null)
     {
       Console.WriteLine("Steam Cloud not initialized");
@@ -1025,7 +1160,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     uint appidParsed = uint.Parse(appid);
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
     Console.WriteLine("CloudUpload for {0}", appidParsed);
-    var remoteCacheFile = new RemoteCache(this.session.SteamUser.SteamID.AccountID, appidParsed);
+    var remoteCacheFile = new RemoteCache(this.session.SteamUser!.SteamID!.AccountID, appidParsed);
     var changeNumber = remoteCacheFile.GetChangeNumber();
     var changelist = await this.session.steamCloud.GetFilesChangelistAsync(appidParsed, changeNumber);
     if (changelist == null)

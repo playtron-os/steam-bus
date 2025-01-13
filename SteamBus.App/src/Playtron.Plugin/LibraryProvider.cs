@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using Tmds.DBus;
 
 namespace Playtron.Plugin;
@@ -8,6 +9,45 @@ namespace Playtron.Plugin;
 /// DBus does not actually support structs, so they are instead represented as
 /// typed tuples.
 using InstallOptionDescription = (string, string, string[]);
+
+[StructLayout(LayoutKind.Sequential)]
+public struct InstalledAppDescription
+{
+  public string AppId { get; set; }
+  public string InstalledPath { get; set; }
+  public ulong DownloadedBytes { get; set; }
+  public ulong TotalDownloadSize { get; set; }
+  public string Version { get; set; }
+  public string LatestVersion { get; set; }
+  public bool UpdatePending { get; set; }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct InstallProgressedDescription
+{
+  public string AppId { get; set; }
+  public uint Stage { get; set; }
+  public ulong DownloadedBytes { get; set; }
+  public ulong TotalDownloadSize { get; set; }
+  public double Progress { get; set; }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct InstallStartedDescription
+{
+  public string AppId { get; set; }
+  public string Version { get; set; }
+  public string InstallDirectory { get; set; }
+  public ulong TotalDownloadSize { get; set; }
+  public bool RequiresInternetConnection { get; set; }
+}
+
+public enum DownloadStage
+{
+  Preallocating,
+  Downloading,
+  Verifying,
+}
 
 public enum InstallOptionType
 {
@@ -97,6 +137,17 @@ public struct ProviderItem
   public uint app_type;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct ItemMetadata
+{
+  public string Name { get; set; }
+  public ulong InstallSize { get; set; }
+  public bool RequiresInternetConnection { get; set; }
+  public string[] CloudSaveFolders { get; set; }
+  public string InstalledVersion { get; set; }
+  public string LatestVersion { get; set; }
+}
+
 /// Interface definition for a library provider
 [DBusInterface("one.playtron.plugin.LibraryProvider")]
 public interface IPluginLibraryProvider : IDBusObject
@@ -110,10 +161,22 @@ public interface IPluginLibraryProvider : IDBusObject
   // Available install options can be queried using the `GetInstallOptionsAsync`
   // method.
   Task<int> InstallAsync(string appId, string disk, InstallOptions options);
+
+  // Gets information about installed apps
+  Task<InstalledAppDescription[]> GetInstalledAppsAsync();
+
+  // Pauses the current install that is in progress
+  Task PauseInstallAsync();
+
   //Task Update(appId);
   //Task Uninstall(appId);
+
+  Task<ItemMetadata> GetAppMetadataAsync(string appId);
+
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
-  
+
+  Task<string> GetPostInstallStepsAsync(string appId);
+
   Task<ProviderItem> GetProviderItemAsync(string appId);
   Task<ProviderItem[]> GetProviderItemsAsync();
   Task RefreshAsync();
@@ -122,14 +185,12 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
 
   // Signals
-  //Task<IDisposable> WatchInstallProgressedAsync(string appId, double percent);
-  Task<IDisposable> WatchInstallProgressedAsync(Action<(string, double)> reply);
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);
-  // WatchInstallCompleted(appId)
-  // WatchInstallFailed(appId, code, reason)
-  // WatchUpdateProgressed(appId, percent)
-  // WatchUpdateCompleted(appId)
-  // WatchUpdateFailed(appId, code, reason)
+  Task<IDisposable> WatchInstallStartedAsync(Action<InstallStartedDescription> reply);
+  Task<IDisposable> WatchInstallProgressedAsync(Action<InstallProgressedDescription> reply);
+  Task<IDisposable> WatchInstallCompletedAsync(Action<string> reply);
+  Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
+  Task<IDisposable> WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply);
 }
 
 
