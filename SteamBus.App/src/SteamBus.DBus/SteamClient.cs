@@ -86,6 +86,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<InstallProgressedDescription>? OnInstallProgressed;
   public event Action<string>? OnInstallCompleted;
   public event Action<(string appId, string error)>? OnInstallFailed;
+  public event Action<(string appId, string version)>? OnAppNewVersionFound;
   public event Action<PropertyChanges>? OnUserPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
@@ -261,6 +262,44 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Task.FromResult(0);
   }
 
+  async Task<ItemMetadata> IPluginLibraryProvider.GetAppMetadataAsync(string appIdString)
+  {
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    await session!.RequestAppInfo(appId, true);
+
+    var info = depotConfigStore.GetInstalledAppInfo(appId);
+    var name = session!.GetSteam3AppName(appId);
+    var requiresInternetConnection = session!.GetSteam3AppRequiresInternetConnection(appId);
+
+    if (info == null)
+    {
+      return new ItemMetadata
+      {
+        Name = name,
+        InstallSize = 0,
+        RequiresInternetConnection = requiresInternetConnection,
+        CloudSaveFolders = [],
+        InstalledVersion = "",
+        LatestVersion = "",
+      };
+    }
+
+    var latestVersion = session!.GetSteam3AppBuildNumber(appId, info!.Value.Branch);
+
+    return new ItemMetadata
+    {
+      Name = name,
+      InstallSize = info.Value.Info.DownloadedBytes,
+      RequiresInternetConnection = requiresInternetConnection,
+      // TODO: Implement cloud save folders?
+      CloudSaveFolders = [],
+      InstalledVersion = info.Value.Info.Version,
+      LatestVersion = latestVersion.ToString(),
+    };
+  }
+
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
@@ -385,11 +424,17 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnInstallFailed), reply);
   }
 
+  // AppNewVersionFound Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnAppNewVersionFound), reply);
+  }
+
   SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)
   {
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
-    var session = new SteamSession(login, steamGuardData, this);
+    var session = new SteamSession(login, depotConfigStore, OnAppNewVersionFound!, steamGuardData, this);
     session.OnLibraryUpdated = OnLibraryUpdated;
 
     // Subscribe to client callbacks

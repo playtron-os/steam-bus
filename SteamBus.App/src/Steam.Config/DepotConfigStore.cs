@@ -207,6 +207,37 @@ public class DepotConfigStore
     }
 
     /// <summary>
+    /// Sets the version/branch and removes the updatepending
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="version"></param>
+    /// <param name="branch"></param>
+    public void SetNewVersion(uint appId, uint version, string branch)
+    {
+        if (!manifestMap.ContainsKey(appId)) return;
+
+        manifestMap[appId]["version"] = new KeyValue("version", version.ToString());
+        manifestMap[appId]["branch"] = new KeyValue("branch", branch);
+
+        var child = manifestMap[appId].Children.Find((child) => child.Name == "updatepending");
+        if (child != null)
+            manifestMap[appId].Children.Remove(child);
+    }
+
+    /// <summary>
+    /// Sets the updatepending
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="latestVersion"></param>
+    public void SetUpdatePending(uint appId, string latestVersion)
+    {
+        if (!manifestMap.ContainsKey(appId)) return;
+
+        manifestMap[appId]["updatepending"] = new KeyValue("updatepending", "1");
+        manifestMap[appId]["latestversion"] = new KeyValue("latestversion", latestVersion);
+    }
+
+    /// <summary>
     /// Ensures the necessary entry exists in the manifest map
     /// </summary>
     /// <param name="installDirectory"></param>
@@ -245,7 +276,52 @@ public class DepotConfigStore
                 InstalledPath = Directory.GetParent(manifestPathMap[entry.Key])!.FullName,
                 DownloadedBytes = entry.Value["downloaded"].AsUnsignedLong(),
                 TotalDownloadSize = entry.Value["totaldownload"].AsUnsignedLong(),
+                Version = entry.Value["version"].AsString() ?? "",
+                LatestVersion = entry.Value["latestversion"].AsString() ?? "",
+                UpdatePending = entry.Value["updatepending"].AsString() == "1",
             })
             .ToArray();
+    }
+
+    /// <summary>
+    /// Installed apps with its install information
+    /// </summary>
+    /// <returns></returns>
+    public (InstalledAppDescription Info, string Branch)? GetInstalledAppInfo(uint appId)
+    {
+        manifestMap.TryGetValue(appId, out var manifest);
+        manifestPathMap.TryGetValue(appId, out var manifestPath);
+        if (manifest == null || manifestPath == null) return null;
+
+        return (new InstalledAppDescription
+        {
+            AppId = manifest["appid"].AsString()!,
+            InstalledPath = Directory.GetParent(manifestPath)!.FullName,
+            DownloadedBytes = manifest["downloaded"].AsUnsignedLong(),
+            TotalDownloadSize = manifest["totaldownload"].AsUnsignedLong(),
+            Version = manifest["version"].AsString() ?? "",
+            LatestVersion = manifest["latestversion"].AsString() ?? "",
+            UpdatePending = manifest["updatepending"].AsString() == "1",
+        }, manifest["branch"].AsString() ?? "");
+    }
+
+    /// <summary>
+    /// Get map of app id to version/branch
+    /// </summary>
+    /// <returns></returns>
+    public Dictionary<string, (string version, string branch)> GetAppIdToVersionBranchMap(bool ignoreUpdatePending = false)
+    {
+        var map = new Dictionary<string, (string version, string branch)>();
+
+        foreach (var entry in manifestMap)
+        {
+            var version = entry.Value["version"]?.AsString();
+            var branch = entry.Value["branch"]?.AsString();
+
+            if (version != null && branch != null && (!ignoreUpdatePending || entry.Value["updatepending"] == KeyValue.Invalid))
+                map.Add(entry.Key.ToString(), (version, branch));
+        }
+
+        return map;
     }
 }

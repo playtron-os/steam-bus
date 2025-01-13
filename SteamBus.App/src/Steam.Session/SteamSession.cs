@@ -21,6 +21,7 @@ namespace Steam.Session;
 
 class SteamSession
 {
+  public const uint INVALID_APP_ID = uint.MaxValue;
   public bool IsLoggedOn { get; private set; }
   public string PersonaName { get; private set; } = "";
   public string AvatarUrl { get; private set; } = "";
@@ -69,12 +70,18 @@ class SteamSession
   string? SteamGuardData;
   public bool RememberPassword = true;
 
+  private DepotConfigStore depotConfigStore;
+  private Action<(string appId, string version)> OnAppNewVersionFound;
 
-  public SteamSession(SteamUser.LogOnDetails details, string? steamGuardData = null, IAuthenticator? authenticator = null)
+
+  public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, Action<(string appId, string version)> OnAppNewVersionFound,
+    string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
     this.logonDetails = details;
     this.authenticator = authenticator;
     this.SteamGuardData = steamGuardData;
+    this.depotConfigStore = depotConfigStore;
+    this.OnAppNewVersionFound = OnAppNewVersionFound;
 
     var clientConfiguration = SteamConfiguration.Create(config =>
         config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
@@ -724,6 +731,8 @@ class SteamSession
       return;
     }
     isLoadingLibrary = true;
+    var installedAppIdsToVersion = depotConfigStore.GetAppIdToVersionBranchMap(true);
+
     Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
     this.Licenses = licenseList.LicenseList;
     List<uint> packageIds = [];
@@ -770,11 +779,28 @@ class SteamSession
         Console.WriteLine("No results retrieved");
         return;
       }
+
       foreach (var productInfo in result.Results)
       {
         foreach (var entry in productInfo.Apps)
         {
           AppInfo[entry.Key] = entry.Value;
+
+          if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
+          {
+            var (version, branch) = item;
+            var newVersion = GetSteam3AppBuildNumber(entry.Key, branch);
+
+            if (version != newVersion.ToString())
+            {
+              Console.WriteLine($"Found new version for appid:{entry.Key}, version:{newVersion}, installedVersion:{version}");
+
+              depotConfigStore.SetUpdatePending(entry.Key, newVersion.ToString());
+              depotConfigStore.Save(entry.Key);
+
+              OnAppNewVersionFound((entry.Key.ToString(), newVersion.ToString()));
+            }
+          }
         }
       }
     }
@@ -851,5 +877,65 @@ class SteamSession
       provider = "Steam",
       app_type = (uint)app_type,
     };
+  }
+
+  public uint GetSteam3AppBuildNumber(uint appId, string branch)
+  {
+    if (appId == INVALID_APP_ID)
+      return 0;
+
+    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    if (depots == null)
+      return 0;
+
+    var branches = depots["branches"];
+    var node = branches[branch];
+
+    if (node == KeyValue.Invalid)
+      return 0;
+
+    var buildid = node["buildid"];
+
+    if (buildid == KeyValue.Invalid)
+      return 0;
+
+    return uint.Parse(buildid.Value!);
+  }
+
+  public bool GetSteam3AppRequiresInternetConnection(uint appId)
+  {
+    var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    return common?["steam_deck_compatibility"]?["configuration"]?["requires_internet_for_singleplayer"]?.AsBoolean() ?? false;
+  }
+
+  public string GetSteam3AppName(uint appId)
+  {
+    var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    return common?["name"].Value?.ToString() ?? "";
+  }
+
+  public KeyValue? GetSteam3AppSection(uint appId, EAppInfoSection section)
+  {
+    if (AppInfo == null)
+    {
+      return null;
+    }
+
+    if (!AppInfo.TryGetValue(appId, out var app) || app == null)
+    {
+      return null;
+    }
+
+    var appinfo = app.KeyValues;
+    var section_key = section switch
+    {
+      EAppInfoSection.Common => "common",
+      EAppInfoSection.Extended => "extended",
+      EAppInfoSection.Config => "config",
+      EAppInfoSection.Depots => "depots",
+      _ => throw new NotImplementedException(),
+    };
+    var section_kv = appinfo.Children.Where(c => c.Name == section_key).FirstOrDefault();
+    return section_kv;
   }
 }

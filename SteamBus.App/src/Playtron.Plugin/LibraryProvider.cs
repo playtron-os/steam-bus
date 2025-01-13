@@ -17,6 +17,9 @@ public struct InstalledAppDescription
   public string InstalledPath { get; set; }
   public ulong DownloadedBytes { get; set; }
   public ulong TotalDownloadSize { get; set; }
+  public string Version { get; set; }
+  public string LatestVersion { get; set; }
+  public bool UpdatePending { get; set; }
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -134,6 +137,17 @@ public struct ProviderItem
   public uint app_type;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct ItemMetadata
+{
+  public string Name { get; set; }
+  public ulong InstallSize { get; set; }
+  public bool RequiresInternetConnection { get; set; }
+  public string[] CloudSaveFolders { get; set; }
+  public string InstalledVersion { get; set; }
+  public string LatestVersion { get; set; }
+}
+
 /// Interface definition for a library provider
 [DBusInterface("one.playtron.plugin.LibraryProvider")]
 public interface IPluginLibraryProvider : IDBusObject
@@ -157,6 +171,8 @@ public interface IPluginLibraryProvider : IDBusObject
   //Task Update(appId);
   //Task Uninstall(appId);
 
+  Task<ItemMetadata> GetAppMetadataAsync(string appId);
+
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
 
   Task<string> GetPostInstallStepsAsync(string appId);
@@ -174,6 +190,7 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<IDisposable> WatchInstallProgressedAsync(Action<InstallProgressedDescription> reply);
   Task<IDisposable> WatchInstallCompletedAsync(Action<string> reply);
   Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
+  Task<IDisposable> WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply);
 }
 
 

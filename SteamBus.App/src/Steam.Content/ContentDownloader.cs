@@ -28,7 +28,6 @@ class ContentDownloaderException(string value) : Exception(value)
 
 class ContentDownloader
 {
-  public const uint INVALID_APP_ID = uint.MaxValue;
   public const uint INVALID_DEPOT_ID = uint.MaxValue;
   public const ulong INVALID_MANIFEST_ID = ulong.MaxValue;
   private const string DEFAULT_DOWNLOAD_DIR = "depots";
@@ -141,9 +140,9 @@ class ContentDownloader
   {
     await session.RequestAppInfo(appId);
 
-    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
     if (depots == null) return [];
-    var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    var common = session.GetSteam3AppSection(appId, EAppInfoSection.Common);
     if (common == null) return [];
 
     // TODO: Handle user generated content
@@ -300,17 +299,16 @@ class ContentDownloader
       var hasSpecificDepots = depotManifestIds.Count > 0;
       var depotIdsFound = new List<uint>();
       var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
-      var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+      var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
 
       if (depots == null)
         throw DbusExceptionHelper.ThrowContentNotFound();
 
-      var version = GetSteam3AppBuildNumber(appId, branch);
+      var version = session.GetSteam3AppBuildNumber(appId, branch);
 
       Console.WriteLine($"Downloading version {version}");
 
-      var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
-      var requiresInternetConnection = common?["steam_deck_compatibility"]?["configuration"]?["requires_internet_for_singleplayer"]?.AsBoolean() ?? false;
+      var requiresInternetConnection = session.GetSteam3AppRequiresInternetConnection(appId);
 
       // Handle user generated content
       if (isUgc)
@@ -421,6 +419,8 @@ class ContentDownloader
         };
 
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
+        depotConfigStore.SetNewVersion(appId, version, branch);
+
         await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
 
@@ -429,7 +429,7 @@ class ContentDownloader
       }
       catch (OperationCanceledException)
       {
-        Console.WriteLine("App {0} was not completely downloaded.", appId);
+        Console.WriteLine("App {0} download has been cancelled.", appId);
         throw;
       }
 
@@ -461,7 +461,7 @@ class ContentDownloader
 
   string GetAppName(uint appId)
   {
-    var info = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    var info = session.GetSteam3AppSection(appId, EAppInfoSection.Common);
     if (info == null)
       return string.Empty;
 
@@ -471,33 +471,8 @@ class ContentDownloader
   public async Task<string> GetAppInstallDir(uint appId)
   {
     await session!.RequestAppInfo(appId);
-    var config = GetSteam3AppSection(appId, EAppInfoSection.Config);
+    var config = session.GetSteam3AppSection(appId, EAppInfoSection.Config);
     return config?["installdir"]?.AsString() ?? appId.ToString();
-  }
-
-  internal KeyValue? GetSteam3AppSection(uint appId, EAppInfoSection section)
-  {
-    if (this.session.AppInfo == null)
-    {
-      return null;
-    }
-
-    if (!this.session.AppInfo.TryGetValue(appId, out var app) || app == null)
-    {
-      return null;
-    }
-
-    var appinfo = app.KeyValues;
-    var section_key = section switch
-    {
-      EAppInfoSection.Common => "common",
-      EAppInfoSection.Extended => "extended",
-      EAppInfoSection.Config => "config",
-      EAppInfoSection.Depots => "depots",
-      _ => throw new NotImplementedException(),
-    };
-    var section_kv = appinfo.Children.Where(c => c.Name == section_key).FirstOrDefault();
-    return section_kv;
   }
 
 
@@ -539,7 +514,7 @@ class ContentDownloader
 
   async Task<DepotDownloadInfo?> GetDepotInfo(uint depotId, uint appId, ulong manifestId, string branch, string baseInstallPath)
   {
-    if (appId != INVALID_APP_ID)
+    if (appId != SteamSession.INVALID_APP_ID)
     {
       await this.session.RequestAppInfo(appId);
     }
@@ -575,7 +550,7 @@ class ContentDownloader
       return null;
     }
 
-    var uVersion = GetSteam3AppBuildNumber(appId, branch);
+    var uVersion = session.GetSteam3AppBuildNumber(appId, branch);
 
     if (!CreateDirectories(depotId, uVersion, out var installDir, baseInstallPath))
     {
@@ -589,7 +564,7 @@ class ContentDownloader
 
   async Task<ulong> GetSteam3DepotManifest(uint depotId, uint appId, string branch)
   {
-    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
     if (depots == null)
       return INVALID_MANIFEST_ID;
 
@@ -678,30 +653,6 @@ class ContentDownloader
       return INVALID_MANIFEST_ID;
 
     return ulong.Parse(node.Value);
-  }
-
-
-  uint GetSteam3AppBuildNumber(uint appId, string branch)
-  {
-    if (appId == INVALID_APP_ID)
-      return 0;
-
-    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
-    if (depots == null)
-      return 0;
-
-    var branches = depots["branches"];
-    var node = branches[branch];
-
-    if (node == KeyValue.Invalid)
-      return 0;
-
-    var buildid = node["buildid"];
-
-    if (buildid == KeyValue.Invalid)
-      return 0;
-
-    return uint.Parse(buildid.Value!);
   }
 
 
