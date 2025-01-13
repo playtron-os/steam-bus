@@ -15,6 +15,7 @@ using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
 using SteamKit2.Internal;
+using Playtron.Plugin;
 
 namespace Steam.Session;
 
@@ -22,6 +23,7 @@ class SteamSession
 {
   public bool IsLoggedOn { get; private set; }
   public string PersonaName { get; private set; } = "";
+  public string AvatarUrl { get; private set; } = "";
 
   public ReadOnlyCollection<SteamApps.LicenseListCallback.License> Licenses
   {
@@ -40,6 +42,7 @@ class SteamSession
   public SteamUser? SteamUser;
   public SteamContent? SteamContentRef;
   readonly SteamApps? steamApps;
+  readonly SteamFriends? steamFriends;
   public Steam.Cloud.SteamCloud steamCloud;
   readonly SteamKit2.SteamCloud? steamCloudKit;
   //readonly PublishedFile steamPublishedFile;
@@ -53,9 +56,11 @@ class SteamSession
   bool bIsConnectionRecovery;
   int connectionBackoff;
   int seq; // more hack fixes
+  bool isLoadingLibrary = true;
   AuthSession? authSession;
   QrAuthSession? qrAuthSession;
   public Action<string>? OnNewQrCode;
+  public Action<ProviderItem[]>? OnLibraryUpdated;
   readonly CancellationTokenSource abortedToken = new();
 
   // input
@@ -79,6 +84,7 @@ class SteamSession
 
     this.SteamUser = this.SteamClient.GetHandler<SteamUser>();
     this.steamApps = this.SteamClient.GetHandler<SteamApps>();
+    this.steamFriends = this.SteamClient.GetHandler<SteamFriends>();
     this.steamCloudKit = this.SteamClient.GetHandler<SteamKit2.SteamCloud>();
     var steamUnifiedMessages = this.SteamClient.GetHandler<SteamUnifiedMessages>();
     if (steamUnifiedMessages == null)
@@ -97,6 +103,7 @@ class SteamSession
     this.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLogIn);
     this.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
     this.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
+    this.Callbacks.Subscribe<SteamFriends.PersonaStateCallback>(OnPersonaState);
   }
 
 
@@ -143,6 +150,18 @@ class SteamSession
     await WaitUntilCallback(() => { }, () => IsLoggedOn);
 
     return IsLoggedOn;
+  }
+
+  public async Task WaitForLibrary()
+  {
+    if (!isLoadingLibrary || Licenses.Count == 0)
+      return;
+
+    while (!bAborted)
+    {
+      if (!isLoadingLibrary) break;
+      await Task.Delay(1);
+    }
   }
 
 
@@ -694,8 +713,9 @@ class SteamSession
 
 
   // Invoked on login to list the game/app licenses associated with the user.
-  private void OnLicenseList(SteamApps.LicenseListCallback licenseList)
+  private async void OnLicenseList(SteamApps.LicenseListCallback licenseList)
   {
+    bool firstCallback = AppInfo.Count == 0;
     if (licenseList.Result != EResult.OK)
     {
       Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
@@ -703,16 +723,75 @@ class SteamSession
 
       return;
     }
-
+    isLoadingLibrary = true;
     Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
     this.Licenses = licenseList.LicenseList;
-
+    List<uint> packageIds = [];
+    // Parse licenses and associate their access tokens
     foreach (var license in licenseList.LicenseList)
     {
+      packageIds.Add(license.PackageID);
       if (license.AccessToken > 0)
       {
         PackageTokens.TryAdd(license.PackageID, license.AccessToken);
       }
+    }
+    Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
+    await RequestPackageInfo(packageIds);
+    Console.WriteLine("Got packages");
+
+    var requests = new List<SteamApps.PICSRequest>();
+    var appids = new List<uint>();
+    foreach (var package in PackageInfo.Values)
+    {
+      ulong token = PackageTokens.GetValueOrDefault(package.ID);
+      foreach (var appid in package.KeyValues["appids"].Children)
+      {
+        var appidI = appid.AsUnsignedInteger();
+        if (appids.Contains(appidI)) continue;
+        var req = new SteamApps.PICSRequest(appidI, token);
+        requests.Add(req);
+        appids.Add(appidI);
+      }
+    }
+    Console.WriteLine("Making requests for {0} apps", requests.Count);
+    var result = await steamApps!.PICSGetProductInfo(requests, []);
+    if (result == null)
+    {
+      // TODO: Handle error
+      Console.WriteLine("Failed to get apps");
+      return;
+    }
+
+    if (result.Complete)
+    {
+      if (result.Results == null || result.Results.Count == 0)
+      {
+        Console.WriteLine("No results retrieved");
+        return;
+      }
+      foreach (var productInfo in result.Results)
+      {
+        foreach (var entry in productInfo.Apps)
+        {
+          AppInfo[entry.Key] = entry.Value;
+        }
+      }
+    }
+    else if (result.Failed)
+    {
+      Console.WriteLine("Some requests failed");
+    }
+    Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
+    isLoadingLibrary = false;
+    if (!firstCallback)
+    {
+      List<ProviderItem> updatedItems = new(appids.Count);
+      foreach (var id in appids)
+      {
+        updatedItems.Add(GetProviderItem(id.ToString(), AppInfo[id].KeyValues));
+      }
+      OnLibraryUpdated?.Invoke(updatedItems.ToArray());
     }
   }
 
@@ -721,5 +800,56 @@ class SteamSession
   {
     Console.WriteLine($"Account persona name: {callback.PersonaName}");
     this.PersonaName = callback.PersonaName;
+    // We need to explicitly make a request for our user to obtain avatar
+    // I didn't find any other way
+    steamFriends.RequestFriendInfo([SteamUser.SteamID]);
+  }
+
+  private void OnPersonaState(SteamFriends.PersonaStateCallback callback)
+  {
+    if (callback.FriendID == SteamUser.SteamID && callback.AvatarHash is not null)
+    {
+      var avatarStr = BitConverter.ToString(callback.AvatarHash).Replace("-", "").ToLowerInvariant();
+      AvatarUrl = $"https://avatars.akamai.steamstatic.com/{avatarStr}_full.jpg";
+    }
+  }
+
+  public static ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
+  {
+    var app_type = AppType.Game;
+    switch (appKeyValues["common"]["type"].Value?.ToLower())
+    {
+      case "game":
+        app_type = AppType.Game;
+        break;
+      case "dlc":
+        app_type = AppType.Dlc;
+        break;
+      case "tool":
+        app_type = AppType.Tool;
+        break;
+      case "application":
+        app_type = AppType.Application;
+        break;
+      case "music":
+        app_type = AppType.Music;
+        break;
+      case "config":
+        app_type = AppType.Config;
+        break;
+      case "demo":
+        app_type = AppType.Demo;
+        break;
+      case "beta":
+        app_type = AppType.Beta;
+        break;
+    }
+    return new ProviderItem
+    {
+      id = appId,
+      name = appKeyValues["common"]["name"].Value?.ToString() ?? "",
+      provider = "Steam",
+      app_type = (uint)app_type,
+    };
   }
 }

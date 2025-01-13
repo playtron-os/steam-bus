@@ -86,6 +86,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
   public event Action<string>? OnConfirmationRequired;
   public event Action<string>? OnQrCodeUpdated;
+  public event Action<ProviderItem[]>? OnLibraryUpdated;
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
@@ -219,6 +220,35 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
+  async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appId)
+  {
+    uint appid = ParseAppId(appId) ?? throw new DBusException("steambus.Error.Argument", "Invalid appid");
+    await this.session.WaitForLibrary();
+    if (!this.session.AppInfo.TryGetValue(appid, out var appinfo))
+    {
+      throw new DBusException("steambus.Error.Argument", "Invalid appid");
+    }
+    return SteamSession.GetProviderItem(appId, appinfo.KeyValues);
+  }
+
+  async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
+  {
+    if (this.session is null) return [];
+    await this.session.WaitForLibrary();
+    List<ProviderItem> providerItems = new(session.AppInfo.Count);
+    foreach (var app in this.session.AppInfo)
+    {
+      providerItems.Add(SteamSession.GetProviderItem(app.Key.ToString(), app.Value.KeyValues));
+    }
+    return providerItems.ToArray();
+  }
+
+  Task IPluginLibraryProvider.RefreshAsync()
+  {
+    Console.WriteLine("Refresh called, this is ignored...");
+    return Task.FromResult(0);
+  }
+
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
     if (!await EnsureConnected()) return [];
@@ -267,19 +297,24 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnInstallProgressed), reply);
   }
 
+  Task<IDisposable> IPluginLibraryProvider.WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnLibraryUpdated), reply);
+  }
 
   SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)
   {
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
     var session = new SteamSession(login, steamGuardData, this);
+    session.OnLibraryUpdated = OnLibraryUpdated;
 
     // Subscribe to client callbacks
     session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
     session.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
     session.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
     session.Callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
-    //this.session.callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+    // session.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
 
     return session;
   }
@@ -368,7 +403,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (this.session != null)
     {
       var currentDetails = this.session.GetLogonDetails();
-      if (currentDetails.Username?.ToLower() == user_id.ToLower())
+      if (this.session.IsLoggedOn && currentDetails.Username?.ToLower() == user_id.ToLower())
       {
         return true;
       }
@@ -444,6 +479,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (this.session != null)
     {
       var username = this.session.GetLogonDetails().Username;
+      properties.Avatar = this.session.AvatarUrl;
       properties.Username = this.session.PersonaName;
       properties.Identifier = username is null ? "" : username;
       properties.Status = GetCurrentAuthStatus();
@@ -459,7 +495,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       case "Username":
         return Task.FromResult((object)(this.session?.PersonaName ?? ""));
       case "Avatar":
-        return Task.FromResult((object)""); // TODO: Fetch avatar hash
+        return Task.FromResult((object)(this.session?.AvatarUrl ?? ""));
       case "Identifier":
         var username = this.session?.GetLogonDetails().Username;
         object user = username is null ? "" : username!;

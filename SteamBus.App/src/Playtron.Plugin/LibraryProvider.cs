@@ -63,11 +63,38 @@ public class InstallOptions
   public string architecture = "";
 }
 
+public enum AppType
+{
+  Game = 0,
+
+  Application = 1,
+
+  Tool = 2,
+
+  Dlc = 3,
+
+  Music = 4,
+
+  Config = 5,
+
+  Demo = 6,
+
+  Beta = 7,
+}
+
 [Dictionary]
 public class LibraryProviderProperties
 {
   public string Name = "Steam";
   public string Provider = "Steam";
+}
+
+public struct ProviderItem
+{
+  public string id;
+  public string name;
+  public string provider;
+  public uint app_type;
 }
 
 /// Interface definition for a library provider
@@ -86,9 +113,10 @@ public interface IPluginLibraryProvider : IDBusObject
   //Task Update(appId);
   //Task Uninstall(appId);
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
-  //Task GetProviderItem(appId);
-  //Task GetProviderItems();
-  //Task Refresh();
+  
+  Task<ProviderItem> GetProviderItemAsync(string appId);
+  Task<ProviderItem[]> GetProviderItemsAsync();
+  Task RefreshAsync();
   //Task DiskAdded(diskPath); // We could just listen to udisks2 directly
   //Task DiskRemoved(diskPath);
   Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
@@ -96,6 +124,7 @@ public interface IPluginLibraryProvider : IDBusObject
   // Signals
   //Task<IDisposable> WatchInstallProgressedAsync(string appId, double percent);
   Task<IDisposable> WatchInstallProgressedAsync(Action<(string, double)> reply);
+  Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);
   // WatchInstallCompleted(appId)
   // WatchInstallFailed(appId, code, reason)
   // WatchUpdateProgressed(appId, percent)
