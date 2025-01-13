@@ -87,6 +87,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<string>? OnInstallCompleted;
   public event Action<(string appId, string error)>? OnInstallFailed;
   public event Action<(string appId, string version)>? OnAppNewVersionFound;
+  public event Action<(string appId, double progress)>? OnMoveItemProgressed;
   public event Action<PropertyChanges>? OnUserPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
@@ -389,6 +390,26 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return 0;
   }
 
+  Task IPluginLibraryProvider.UninstallAsync(string appIdString)
+  {
+    Console.WriteLine($"Uninstalling app: {appIdString}");
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    depotConfigStore.RemoveInstalledApp(appId);
+    return Task.CompletedTask;
+  }
+
+  async Task<string> IPluginLibraryProvider.MoveItemAsync(string appIdString, string disk)
+  {
+    Console.WriteLine($"Uninstalling app: {appIdString}");
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    var downloader = new ContentDownloader(session!, depotConfigStore);
+    var installdir = await downloader.GetAppInstallDir(appId);
+    var newInstallDirectory = await Disk.GetInstallRootFromDevice(disk, installdir);
+
+    return await depotConfigStore.MoveInstalledApp(appId, newInstallDirectory, OnMoveItemProgressed);
+  }
+
   async Task IPluginLibraryProvider.PauseInstallAsync()
   {
     Console.WriteLine("Pausing current install");
@@ -428,6 +449,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task<IDisposable> IPluginLibraryProvider.WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnAppNewVersionFound), reply);
+  }
+
+  // AppNewVersionFound Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchMoveItemProgressedAsync(Action<(string appId, double progress)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnMoveItemProgressed), reply);
   }
 
   SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)

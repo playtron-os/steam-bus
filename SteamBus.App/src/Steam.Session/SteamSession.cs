@@ -161,7 +161,7 @@ class SteamSession
 
   public async Task WaitForLibrary()
   {
-    if (!isLoadingLibrary || Licenses.Count == 0)
+    if (!isLoadingLibrary && Licenses?.Count == 0)
       return;
 
     while (!bAborted)
