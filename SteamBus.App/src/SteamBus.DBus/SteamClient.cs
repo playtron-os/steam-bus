@@ -90,6 +90,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(string appId, double progress)>? OnMoveItemProgressed;
   public event Action? InstalledAppsUpdated;
   public event Action<PropertyChanges>? OnUserPropsChanged;
+  public event Action<string>? OnAuthError;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
   public event Action<string>? OnConfirmationRequired;
@@ -473,8 +474,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
-    var session = new SteamSession(login, depotConfigStore, OnAppNewVersionFound!, steamGuardData, this);
+    var session = new SteamSession(login, depotConfigStore, steamGuardData, this);
     session.OnLibraryUpdated = OnLibraryUpdated;
+    session.OnAppNewVersionFound = OnAppNewVersionFound;
+    session.OnAuthError = OnAuthError;
 
     // Subscribe to client callbacks
     session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
@@ -684,6 +687,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task<IDisposable> IUser.WatchPropertiesAsync(Action<PropertyChanges> handler)
   {
     return SignalWatcher.AddAsync(this, nameof(OnUserPropsChanged), handler);
+  }
+
+  // Sets up sending signals when auth errors have happened
+  Task<IDisposable> IUser.WatchAuthErrorAsync(Action<string> handler)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnAuthError), handler);
   }
 
 
@@ -906,20 +915,17 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   Task IAuthTwoFactorFlow.SendCodeAsync(string code)
   {
-    Task task = Task.Run(() =>
+    if (tfaCodeTask != null)
     {
-      if (tfaCodeTask != null)
-      {
-        Console.WriteLine($"Got 2FA code: {code}");
-        tfaCodeTask.TrySetResult(code);
-      }
-      else
-      {
-        Console.WriteLine("No login session in progress");
-      }
-    });
+      Console.WriteLine($"Got 2FA code: {code}");
+      tfaCodeTask.TrySetResult(code);
+    }
+    else
+    {
+      Console.WriteLine("No login session in progress");
+    }
 
-    return task;
+    return Task.CompletedTask;
   }
 
 

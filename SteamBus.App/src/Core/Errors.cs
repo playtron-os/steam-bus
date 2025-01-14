@@ -10,6 +10,10 @@ public static class DbusErrors
     public const string InvalidAppId = "one.playtron.Error.InvalidAppId";
     public const string NotLoggedIn = "one.playtron.Error.NotLoggedIn";
     public const string MissingDirectory = "one.playtron.Error.MissingDirectory";
+    public const string InvalidPassword = "one.playtron.Error.InvalidPassword";
+    public const string AuthenticationError = "one.playtron.Error.AuthenticationError";
+    public const string TfaTimedOut = "one.playtron.Error.TfaTimedOut";
+    public const string RateLimitExceeded = "one.playtron.Error.RateLimitExceeded";
 }
 
 public static class DbusExceptionHelper

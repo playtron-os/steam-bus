@@ -3,7 +3,7 @@ using Tmds.DBus;
 namespace Playtron.Plugin;
 
 [Dictionary]
-public class UserProperties: IEnumerable<KeyValuePair<string, object>>
+public class UserProperties : IEnumerable<KeyValuePair<string, object>>
 {
   public string Username = "";
   public string Avatar = "";
@@ -26,7 +26,8 @@ public class UserProperties: IEnumerable<KeyValuePair<string, object>>
 
 
 [DBusInterface("one.playtron.auth.User")]
-public interface IUser : IDBusObject {
+public interface IUser : IDBusObject
+{
   Task<bool> ChangeUserAsync(string user_id);
   Task LogoutAsync(string user_id);
 
@@ -37,4 +38,5 @@ public interface IUser : IDBusObject {
 
   Task<UserProperties> GetAllAsync();
   Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler);
+  Task<IDisposable> WatchAuthErrorAsync(Action<string> handler);
 }
