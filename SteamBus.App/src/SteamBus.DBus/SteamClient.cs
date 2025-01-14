@@ -88,6 +88,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(string appId, string error)>? OnInstallFailed;
   public event Action<(string appId, string version)>? OnAppNewVersionFound;
   public event Action<(string appId, double progress)>? OnMoveItemProgressed;
+  public event Action? InstalledAppsUpdated;
   public event Action<PropertyChanges>? OnUserPropsChanged;
   public event Action<(bool previousCodeWasIncorrect, string message)>? OnTwoFactorRequired;
   public event Action<(string email, bool previousCodeWasIncorrect, string message)>? OnEmailTwoFactorRequired;
@@ -451,10 +452,21 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnAppNewVersionFound), reply);
   }
 
-  // AppNewVersionFound Signal
+  // MoveItemProgressed Signal
   Task<IDisposable> IPluginLibraryProvider.WatchMoveItemProgressedAsync(Action<(string appId, double progress)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnMoveItemProgressed), reply);
+  }
+
+  // InstalledAppsUpdated Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchInstalledAppsUpdatedAsync(Action reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(InstalledAppsUpdated), reply);
+  }
+
+  public void EmitInstalledAppsUpdated()
+  {
+    InstalledAppsUpdated?.Invoke();
   }
 
   SteamSession InitSession(SteamUser.LogOnDetails login, string? steamGuardData)
