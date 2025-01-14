@@ -314,11 +314,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       if (installedInfo is not null)
       {
-        if (entry["config"]["betakey"].Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value)
+        if (entry["config"]?["betakey"]?.Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value)
         {
           continue;
         }
-        if (entry["config"]["oslist"].Value != null && entry["config"]["oslist"].Value?.IndexOf(installedInfo.Value.Info.Os) == -1)
+        if (entry["config"]?["oslist"]?.Value != null && entry["config"]["oslist"].Value?.IndexOf(installedInfo.Value.Info.Os) == -1)
         {
           continue;
         }
@@ -326,13 +326,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
       LaunchOption option = new()
       {
-        Description = entry["description"].Value ?? "",
+        Description = entry["description"]?.Value ?? "",
         // TODO: consider using description_loc to use localized values of description.
-        Executable = entry["executable"].Value ?? "",
-        Arguments = entry["arguments"].Value ?? "",
+        Executable = entry["executable"]?.Value ?? "",
+        Arguments = entry["arguments"]?.Value ?? "",
         Environment = [("SteamAppId", appIdString), ("STEAM_COMPAT_APP_ID", appIdString), ("SteamGameId", appIdString)],
         WorkingDirectory = "",
-        LaunchType = (uint)LaunchType.Unknown
+        LaunchType = (uint)LaunchType.Unknown,
+        SteamDeck = entry["config"]?["steamdeck"]?.Value == "1"
       };
       if (installedInfo != null)
       {

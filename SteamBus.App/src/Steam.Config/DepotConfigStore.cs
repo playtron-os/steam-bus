@@ -303,7 +303,7 @@ public class DepotConfigStore
             Version = manifest["version"].AsString() ?? "",
             LatestVersion = manifest["latestversion"].AsString() ?? "",
             UpdatePending = manifest["updatepending"].AsString() == "1",
-            Os = manifest["oslist"].AsString()!
+            Os = manifest["os"].AsString()!
         }, manifest["branch"].AsString() ?? "");
     }
 

@@ -168,6 +168,7 @@ public struct LaunchOption
   public string WorkingDirectory { get; set; }
   public (string, string)[] Environment { get; set; }
   public uint LaunchType { get; set; }
+  public bool SteamDeck { get; set; }
 }
 
 /// Interface definition for a library provider
