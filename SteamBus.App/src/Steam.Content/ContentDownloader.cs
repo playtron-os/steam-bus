@@ -272,7 +272,7 @@ class ContentDownloader
 
       var depotManifestIds = options.DepotManifestIds;
       var branch = options.Branch;
-      var os = options.Os;
+      var os = options.Os ?? GetSteamOS();
       var arch = options.Arch;
       var language = options.Language;
       var lv = options.LowViolence;
@@ -348,7 +348,7 @@ class ContentDownloader
                   !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
               {
                 var oslist = depotConfig["oslist"].Value?.Split(',') ?? [];
-                if (Array.IndexOf(oslist, os ?? GetSteamOS()) == -1)
+                if (Array.IndexOf(oslist, os) == -1)
                   continue;
               }
 
@@ -419,7 +419,7 @@ class ContentDownloader
         };
 
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
-        depotConfigStore.SetNewVersion(appId, version, branch);
+        depotConfigStore.SetNewVersion(appId, version, branch, os);
 
         await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());

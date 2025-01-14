@@ -301,6 +301,49 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     };
   }
 
+  async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString)
+  {
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    await session!.RequestAppInfo(appId, false);
+
+    var info = session!.GetSteam3AppSection(appId, EAppInfoSection.Config) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
+    var installedInfo = depotConfigStore.GetInstalledAppInfo(appId);
+    List<LaunchOption> options = [];
+
+    foreach (var entry in info["launch"].Children)
+    {
+      if (installedInfo is not null)
+      {
+        if (entry["config"]["betakey"].Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value)
+        {
+          continue;
+        }
+        if (entry["config"]["oslist"].Value != null && entry["config"]["oslist"].Value?.IndexOf(installedInfo.Value.Info.Os) == -1)
+        {
+          continue;
+        }
+      }
+
+      LaunchOption option = new()
+      {
+        Description = entry["description"].Value ?? "",
+        // TODO: consider using description_loc to use localized values of description.
+        Executable = entry["executable"].Value ?? "",
+        Arguments = entry["arguments"].Value ?? "",
+        Environment = [("SteamAppId", appIdString), ("STEAM_COMPAT_APP_ID", appIdString), ("SteamGameId", appIdString)],
+        WorkingDirectory = "",
+        LaunchType = (uint)LaunchType.Unknown
+      };
+      if (installedInfo != null)
+      {
+        option.WorkingDirectory = installedInfo.Value.Info.InstalledPath;
+      }
+      options.Add(option);
+    }
+
+    return [.. options];
+  }
+
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();

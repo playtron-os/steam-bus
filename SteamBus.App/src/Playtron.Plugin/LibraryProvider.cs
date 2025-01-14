@@ -20,6 +20,7 @@ public struct InstalledAppDescription
   public string Version { get; set; }
   public string LatestVersion { get; set; }
   public bool UpdatePending { get; set; }
+  public string Os { get; set; }
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -148,6 +149,27 @@ public struct ItemMetadata
   public string LatestVersion { get; set; }
 }
 
+public enum LaunchType
+{
+  Unknown,
+  Launcher,
+  Game,
+  Tool,
+  Document,
+  Other,
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct LaunchOption
+{
+  public string Description { get; set; }
+  public string Executable { get; set; }
+  public string Arguments { get; set; }
+  public string WorkingDirectory { get; set; }
+  public (string, string)[] Environment { get; set; }
+  public uint LaunchType { get; set; }
+}
+
 /// Interface definition for a library provider
 [DBusInterface("one.playtron.plugin.LibraryProvider")]
 public interface IPluginLibraryProvider : IDBusObject
@@ -173,6 +195,8 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<ItemMetadata> GetAppMetadataAsync(string appId);
 
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
+
+  Task<LaunchOption[]> GetLaunchOptionsAsync(string appId);
 
   Task<string> GetPostInstallStepsAsync(string appId);
 
