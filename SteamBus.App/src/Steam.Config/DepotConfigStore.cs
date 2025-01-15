@@ -220,12 +220,13 @@ public class DepotConfigStore
     /// <param name="appId"></param>
     /// <param name="version"></param>
     /// <param name="branch"></param>
-    public void SetNewVersion(uint appId, uint version, string branch)
+    public void SetNewVersion(uint appId, uint version, string branch, string os)
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
         manifestMap[appId]["version"] = new KeyValue("version", version.ToString());
         manifestMap[appId]["branch"] = new KeyValue("branch", branch);
+        manifestMap[appId]["os"] = new KeyValue("os", os);
 
         var child = manifestMap[appId].Children.Find((child) => child.Name == "updatepending");
         if (child != null)
@@ -310,6 +311,7 @@ public class DepotConfigStore
             Version = manifest["version"].AsString() ?? "",
             LatestVersion = manifest["latestversion"].AsString() ?? "",
             UpdatePending = manifest["updatepending"].AsString() == "1",
+            Os = manifest["os"].AsString()!
         }, manifest["branch"].AsString() ?? "");
     }
 

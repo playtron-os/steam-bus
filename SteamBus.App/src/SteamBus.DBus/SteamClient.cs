@@ -302,6 +302,58 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     };
   }
 
+  async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString)
+  {
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    await session!.RequestAppInfo(appId, false);
+
+    var info = session!.GetSteam3AppSection(appId, EAppInfoSection.Config) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
+    var installedInfo = depotConfigStore.GetInstalledAppInfo(appId);
+    List<LaunchOption> options = [];
+
+    foreach (var entry in info["launch"].Children)
+    {
+      if (installedInfo is not null)
+      {
+        if (entry["config"]?["betakey"]?.Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value)
+        {
+          continue;
+        }
+        if (entry["config"]?["oslist"]?.Value != null && entry["config"]["oslist"].Value?.IndexOf(installedInfo.Value.Info.Os) == -1)
+        {
+          continue;
+        }
+      }
+
+      List<string> HardwareTags = [];
+      if (entry["config"]?["steamdeck"]?.Value == "1")
+      {
+        HardwareTags.Add("steamdeck");
+      }
+
+      LaunchOption option = new()
+      {
+        Description = entry["description"]?.Value ?? "",
+        // TODO: consider using description_loc to use localized values of description.
+        Executable = entry["executable"]?.Value ?? "",
+        Arguments = entry["arguments"]?.Value ?? "",
+        Environment = [("SteamAppId", appIdString), ("STEAM_COMPAT_APP_ID", appIdString), ("SteamGameId", appIdString)],
+        WorkingDirectory = entry["workingdir"]?.Value ?? "",
+        LaunchType = (uint)LaunchType.Unknown,
+        HardwareTags = HardwareTags.ToArray()
+      };
+      // Perform normalization
+      option.Executable = option.Executable.Replace('\\', System.IO.Path.DirectorySeparatorChar);
+      option.WorkingDirectory = option.WorkingDirectory.Replace('\\', System.IO.Path.DirectorySeparatorChar);
+      if (installedInfo != null)
+      {
+        option.WorkingDirectory = System.IO.Path.GetFullPath(System.IO.Path.Join(installedInfo.Value.Info.InstalledPath, option.WorkingDirectory));
+      }
+      options.Add(option);
+    }
+    return [.. options];
+  }
+
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
