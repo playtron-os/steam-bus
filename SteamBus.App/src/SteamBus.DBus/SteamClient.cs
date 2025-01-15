@@ -845,6 +845,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
   {
     Console.WriteLine("Logged off of Steam: {0}", callback.Result);
+    OnUserPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("Identifier", ""), new KeyValuePair<string, object>("Status", 0)], ["Avatar", "Username", "Identifier", "Status"]));
   }
 
 
