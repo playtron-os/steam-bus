@@ -25,7 +25,7 @@ class AppDownloadOptions
   public bool DownloadAllArchs { get; set; }
   public bool DownloadAllLanguages { get; set; }
   public bool DownloadManifestOnly = false;
-  public string? InstallDirectory { get; set; }
+  public string InstallDirectory { get; set; }
 
   public bool UsingFileList { get; set; }
   public HashSet<string>? FilesToDownload { get; set; }
@@ -40,15 +40,21 @@ class AppDownloadOptions
   // maximum number of chunks to download concurrently. (default: 8).
   public int MaxDownloads = 8;
 
-  public AppDownloadOptions()
+  public static async Task<AppDownloadOptions> CreateAsync(string installFolderName)
   {
-    this.DepotManifestIds = new List<(uint depotId, ulong manifestId)>();
+    return new AppDownloadOptions(await Disk.GetInstallRoot(installFolderName));
+  }
+
+  AppDownloadOptions(string installDirectory)
+  {
+    this.DepotManifestIds = [];
     this.Branch = DEFAULT_BRANCH;
     this.Os = GetSteamOS();
     this.Arch = GetSteamArch();
     this.Language = "english";
     this.LowViolence = false;
     this.IsUgc = false;
+    this.InstallDirectory = installDirectory;
 
     this.DownloadAllPlatforms = false;
     this.DownloadAllArchs = false;
@@ -56,15 +62,16 @@ class AppDownloadOptions
 
   }
 
-  public AppDownloadOptions(InstallOptions options)
+  public AppDownloadOptions(InstallOptions options, string installDirectory)
   {
-    this.DepotManifestIds = new List<(uint depotId, ulong manifestId)>();
-    this.Branch = String.IsNullOrEmpty(options.branch) ? DEFAULT_BRANCH : options.branch;
-    this.Os = String.IsNullOrEmpty(options.os) ? GetSteamOS() : options.os;
-    this.Arch = String.IsNullOrEmpty(options.architecture) ? GetSteamArch() : options.architecture;
-    this.Language = String.IsNullOrEmpty(options.language) ? "english" : options.language;
+    this.DepotManifestIds = [];
+    this.Branch = string.IsNullOrEmpty(options.branch) ? DEFAULT_BRANCH : options.branch;
+    this.Os = string.IsNullOrEmpty(options.os) ? GetSteamOS() : options.os;
+    this.Arch = string.IsNullOrEmpty(options.architecture) ? GetSteamArch() : options.architecture;
+    this.Language = string.IsNullOrEmpty(options.language) ? "english" : options.language;
     this.LowViolence = false;
     this.IsUgc = false;
+    this.InstallDirectory = installDirectory;
 
     this.DownloadAllPlatforms = false;
     this.DownloadAllArchs = false;

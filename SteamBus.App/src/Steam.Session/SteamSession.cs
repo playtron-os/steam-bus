@@ -10,16 +10,21 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Steam.Cloud;
 using SteamKit2;
 using SteamKit2.Authentication;
 using SteamKit2.CDN;
 using SteamKit2.Internal;
+using Playtron.Plugin;
 
 namespace Steam.Session;
 
 class SteamSession
 {
+  public const uint INVALID_APP_ID = uint.MaxValue;
   public bool IsLoggedOn { get; private set; }
+  public string PersonaName { get; private set; } = "";
+  public string AvatarUrl { get; private set; } = "";
 
   public ReadOnlyCollection<SteamApps.LicenseListCallback.License> Licenses
   {
@@ -38,12 +43,13 @@ class SteamSession
   public SteamUser? SteamUser;
   public SteamContent? SteamContentRef;
   readonly SteamApps? steamApps;
-  readonly SteamCloud? steamCloud;
+  readonly SteamFriends? steamFriends;
+  public Steam.Cloud.SteamCloud steamCloud;
+  readonly SteamKit2.SteamCloud? steamCloudKit;
   //readonly PublishedFile steamPublishedFile;
 
   public CallbackManager Callbacks;
 
-  readonly bool authenticatedUser;
   bool bConnecting;
   bool bAborted;
   bool bExpectingDisconnectRemote;
@@ -51,7 +57,11 @@ class SteamSession
   bool bIsConnectionRecovery;
   int connectionBackoff;
   int seq; // more hack fixes
+  bool isLoadingLibrary = true;
   AuthSession? authSession;
+  QrAuthSession? qrAuthSession;
+  public Action<string>? OnNewQrCode;
+  public Action<ProviderItem[]>? OnLibraryUpdated;
   readonly CancellationTokenSource abortedToken = new();
 
   // input
@@ -60,13 +70,17 @@ class SteamSession
   string? SteamGuardData;
   public bool RememberPassword = true;
 
+  private DepotConfigStore depotConfigStore;
+  public Action<(string appId, string version)>? OnAppNewVersionFound;
+  public Action<string>? OnAuthError;
 
-  public SteamSession(SteamUser.LogOnDetails details, string? steamGuardData = null, IAuthenticator? authenticator = null)
+
+  public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
     this.logonDetails = details;
     this.authenticator = authenticator;
-    this.authenticatedUser = details.Username != null;
     this.SteamGuardData = steamGuardData;
+    this.depotConfigStore = depotConfigStore;
 
     var clientConfiguration = SteamConfiguration.Create(config =>
         config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
@@ -76,8 +90,15 @@ class SteamSession
 
     this.SteamUser = this.SteamClient.GetHandler<SteamUser>();
     this.steamApps = this.SteamClient.GetHandler<SteamApps>();
-    this.steamCloud = this.SteamClient.GetHandler<SteamCloud>();
-    //var steamUnifiedMessages = this.steamClient.GetHandler<SteamUnifiedMessages>();
+    this.steamFriends = this.SteamClient.GetHandler<SteamFriends>();
+    this.steamCloudKit = this.SteamClient.GetHandler<SteamKit2.SteamCloud>();
+    var steamUnifiedMessages = this.SteamClient.GetHandler<SteamUnifiedMessages>();
+    if (steamUnifiedMessages == null)
+    {
+      Console.WriteLine("Failed to obtain unified messages handler");
+      throw new ArgumentNullException();
+    }
+    this.steamCloud = new Steam.Cloud.SteamCloud(steamUnifiedMessages);
     //this.steamPublishedFile = steamUnifiedMessages.CreateService<PublishedFile>();
     this.SteamContentRef = this.SteamClient.GetHandler<SteamContent>();
 
@@ -87,16 +108,21 @@ class SteamSession
     this.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
     this.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLogIn);
     this.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+    this.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
+    this.Callbacks.Subscribe<SteamFriends.PersonaStateCallback>(OnPersonaState);
   }
 
 
   public delegate bool WaitCondition();
 
-
   private readonly object steamLock = new();
 
+  private bool AuthenticatedUser()
+  {
+    return this.logonDetails.Username != null;
+  }
 
-  public bool WaitUntilCallback(Action submitter, WaitCondition waiter)
+  public async Task<bool> WaitUntilCallback(Action submitter, WaitCondition waiter)
   {
     while (!bAborted && !waiter())
     {
@@ -112,21 +138,36 @@ class SteamSession
         {
           Callbacks.RunWaitCallbacks(TimeSpan.FromSeconds(1));
         }
+        await Task.Delay(1);
       } while (!bAborted && this.seq == seq && !waiter());
+
+      await Task.Delay(1);
     }
 
     return bAborted;
   }
 
 
-  public bool WaitForCredentials()
+  public async Task<bool> WaitForCredentials()
   {
     if (IsLoggedOn || bAborted)
       return IsLoggedOn;
 
-    WaitUntilCallback(() => { }, () => IsLoggedOn);
+    await WaitUntilCallback(() => { }, () => IsLoggedOn);
 
     return IsLoggedOn;
+  }
+
+  public async Task WaitForLibrary()
+  {
+    if (!isLoadingLibrary && Licenses?.Count == 0)
+      return;
+
+    while (!bAborted)
+    {
+      if (!isLoadingLibrary) break;
+      await Task.Delay(1);
+    }
   }
 
 
@@ -313,9 +354,9 @@ class SteamSession
 
 
   /// Get details for the given user generated content
-  public async Task<SteamCloud.UGCDetailsCallback> GetUGCDetails(UGCHandle ugcHandle)
+  public async Task<SteamKit2.SteamCloud.UGCDetailsCallback> GetUGCDetails(UGCHandle ugcHandle)
   {
-    var callback = await steamCloud.RequestUGCDetails(ugcHandle);
+    var callback = await steamCloudKit.RequestUGCDetails(ugcHandle);
 
     if (callback.Result == EResult.OK)
     {
@@ -338,17 +379,17 @@ class SteamSession
   }
 
 
-  public void Login()
+  public async Task Login()
   {
-    Console.Write("Connecting to Steam...");
+    Console.WriteLine("Connecting to Steam...");
     this.Connect();
-
-    if (!this.WaitForCredentials())
+    if (!await this.WaitForCredentials())
     {
       Console.WriteLine("Unable to get Steam credentials");
       return;
     }
 
+    Console.WriteLine("Got credentials...");
     Task.Run(this.TickCallbacks);
   }
 
@@ -421,14 +462,32 @@ class SteamSession
     // e.g. if the authentication phase takes a while and therefore multiple connections.
     connectionBackoff = 0;
 
-    if (!authenticatedUser)
+    if (!AuthenticatedUser())
     {
-      Console.Write("Logging anonymously into Steam...");
-      SteamUser?.LogOnAnonymous();
-      return;
-    }
+      Console.Write("No credentials specified. Initializing QR flow");
+      qrAuthSession = await SteamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
+      {
+        DeviceFriendlyName = $"{Environment.MachineName} (SteamBus)",
+      });
 
-    if (logonDetails.Username != null)
+      qrAuthSession.ChallengeURLChanged = () =>
+      {
+        if (qrAuthSession != null)
+        {
+          OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+        }
+        else
+        {
+          Console.WriteLine("Challenge URL changed but session is null");
+        }
+      };
+
+      if (qrAuthSession != null)
+      {
+        OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+      }
+    }
+    else
     {
       Console.WriteLine("Logging '{0}' into Steam...", logonDetails.Username);
     }
@@ -440,7 +499,7 @@ class SteamSession
       {
         try
         {
-          authSession = await SteamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new SteamKit2.Authentication.AuthSessionDetails
+          authSession = await SteamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new AuthSessionDetails
           {
             Username = logonDetails.Username,
             Password = logonDetails.Password,
@@ -459,9 +518,30 @@ class SteamSession
         {
           return;
         }
+        catch (AuthenticationException ex)
+        {
+          if (ex.Message.Contains("InvalidPassword"))
+          {
+            Console.Error.WriteLine($"Failed to authenticate with Steam: InvalidPassword", ex);
+            OnAuthError?.Invoke(DbusErrors.InvalidPassword);
+          }
+          else if (ex.Message.Contains("AccountLoginDeniedThrottle"))
+          {
+            Console.Error.WriteLine($"Rate limit reached", ex);
+            OnAuthError?.Invoke(DbusErrors.RateLimitExceeded);
+          }
+          else
+          {
+            Console.Error.WriteLine($"Failed to authenticate with Steam, AuthenticationException: {ex.Message}", ex);
+            OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+          }
+
+          Abort(false);
+        }
         catch (Exception ex)
         {
-          Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
+          Console.Error.WriteLine($"Failed to authenticate with Steam when authSession is null: {ex.Message}", ex);
+          OnAuthError?.Invoke(DbusErrors.AuthenticationError);
           Abort(false);
           return;
         }
@@ -470,11 +550,52 @@ class SteamSession
 
     // If an auth session exists, wait for the result and update the access token
     // in the login details.
-    if (authSession != null)
+    if (qrAuthSession != null)
     {
       try
       {
-        var result = await authSession.PollingWaitForResultAsync();
+        Console.WriteLine("Polling for QR result");
+        var result = await qrAuthSession.PollingWaitForResultAsync(abortedToken.Token);
+        Console.WriteLine("Got QR result");
+        logonDetails.Username = result.AccountName;
+        logonDetails.AccessToken = result.RefreshToken;
+        if (result.NewGuardData != null)
+        {
+          this.SteamGuardData = result.NewGuardData;
+        }
+        else
+        {
+          this.SteamGuardData = null;
+        }
+      }
+      catch (TaskCanceledException)
+      {
+        Console.WriteLine("Login failure, task cancelled");
+        return;
+      }
+      catch (Exception ex)
+      {
+        Console.WriteLine($"##### TEST: {ex.StackTrace}, {ex.Data}, {ex.InnerException}");
+        Console.Error.WriteLine("Failed to authenticate with Steam when qrAuthSession is not null: " + ex.Message, ex);
+        OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+        return;
+      }
+      finally
+      {
+        Abort(false);
+
+        if (qrAuthSession != null)
+        {
+          qrAuthSession.ChallengeURLChanged = null;
+          qrAuthSession = null;
+        }
+      }
+    }
+    else if (authSession != null)
+    {
+      try
+      {
+        var result = await authSession.PollingWaitForResultAsync(abortedToken.Token);
 
         logonDetails.Username = result.AccountName;
         logonDetails.Password = null;
@@ -495,15 +616,37 @@ class SteamSession
       }
       catch (Exception ex)
       {
-        Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
+        if (ex.Message.Contains("Waiting for 2fa code timed out"))
+        {
+          Console.Error.WriteLine("Waitiing for 2fa code timed out");
+          OnAuthError?.Invoke(DbusErrors.TfaTimedOut);
+        }
+        else
+        {
+          Console.Error.WriteLine("Failed to authenticate with Steam when auth session is not null: " + ex.Message, ex);
+          OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+        }
+
         Abort(false);
         return;
       }
-
-      authSession = null;
+      finally
+      {
+        authSession = null;
+      }
     }
 
-    SteamUser?.LogOn(logonDetails);
+    try
+    {
+      SteamUser?.LogOn(logonDetails);
+    }
+    catch (Exception ex)
+    {
+      Console.Error.WriteLine("Failed to authenticate with Steam when logging in: " + ex.Message, ex);
+      OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+      Abort(false);
+      return;
+    }
   }
 
 
@@ -626,8 +769,9 @@ class SteamSession
 
 
   // Invoked on login to list the game/app licenses associated with the user.
-  private void OnLicenseList(SteamApps.LicenseListCallback licenseList)
+  private async void OnLicenseList(SteamApps.LicenseListCallback licenseList)
   {
+    bool firstCallback = AppInfo.Count == 0;
     if (licenseList.Result != EResult.OK)
     {
       Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
@@ -635,16 +779,212 @@ class SteamSession
 
       return;
     }
+    isLoadingLibrary = true;
+    var installedAppIdsToVersion = depotConfigStore.GetAppIdToVersionBranchMap(true);
 
     Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
     this.Licenses = licenseList.LicenseList;
-
+    List<uint> packageIds = [];
+    // Parse licenses and associate their access tokens
     foreach (var license in licenseList.LicenseList)
     {
+      packageIds.Add(license.PackageID);
       if (license.AccessToken > 0)
       {
         PackageTokens.TryAdd(license.PackageID, license.AccessToken);
       }
     }
+    Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
+    await RequestPackageInfo(packageIds);
+    Console.WriteLine("Got packages");
+
+    var requests = new List<SteamApps.PICSRequest>();
+    var appids = new List<uint>();
+    foreach (var package in PackageInfo.Values)
+    {
+      ulong token = PackageTokens.GetValueOrDefault(package.ID);
+      foreach (var appid in package.KeyValues["appids"].Children)
+      {
+        var appidI = appid.AsUnsignedInteger();
+        if (appids.Contains(appidI)) continue;
+        var req = new SteamApps.PICSRequest(appidI, token);
+        requests.Add(req);
+        appids.Add(appidI);
+      }
+    }
+    Console.WriteLine("Making requests for {0} apps", requests.Count);
+    var result = await steamApps!.PICSGetProductInfo(requests, []);
+    if (result == null)
+    {
+      // TODO: Handle error
+      Console.WriteLine("Failed to get apps");
+      return;
+    }
+
+    if (result.Complete)
+    {
+      if (result.Results == null || result.Results.Count == 0)
+      {
+        Console.WriteLine("No results retrieved");
+        return;
+      }
+
+      foreach (var productInfo in result.Results)
+      {
+        foreach (var entry in productInfo.Apps)
+        {
+          AppInfo[entry.Key] = entry.Value;
+
+          if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
+          {
+            var (version, branch) = item;
+            var newVersion = GetSteam3AppBuildNumber(entry.Key, branch);
+
+            if (version != newVersion.ToString())
+            {
+              Console.WriteLine($"Found new version for appid:{entry.Key}, version:{newVersion}, installedVersion:{version}");
+
+              depotConfigStore.SetUpdatePending(entry.Key, newVersion.ToString());
+              depotConfigStore.Save(entry.Key);
+
+              OnAppNewVersionFound?.Invoke((entry.Key.ToString(), newVersion.ToString()));
+            }
+          }
+        }
+      }
+    }
+    else if (result.Failed)
+    {
+      Console.WriteLine("Some requests failed");
+    }
+    Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
+    isLoadingLibrary = false;
+    if (!firstCallback)
+    {
+      List<ProviderItem> updatedItems = new(appids.Count);
+      foreach (var id in appids)
+      {
+        updatedItems.Add(GetProviderItem(id.ToString(), AppInfo[id].KeyValues));
+      }
+      OnLibraryUpdated?.Invoke(updatedItems.ToArray());
+    }
+  }
+
+  // Invoked shortly after login to provide account information
+  private void OnAccountInfo(SteamUser.AccountInfoCallback callback)
+  {
+    Console.WriteLine($"Account persona name: {callback.PersonaName}");
+    this.PersonaName = callback.PersonaName;
+    // We need to explicitly make a request for our user to obtain avatar
+    // I didn't find any other way
+    steamFriends.RequestFriendInfo([SteamUser.SteamID]);
+  }
+
+  private void OnPersonaState(SteamFriends.PersonaStateCallback callback)
+  {
+    if (callback.FriendID == SteamUser.SteamID && callback.AvatarHash is not null)
+    {
+      var avatarStr = BitConverter.ToString(callback.AvatarHash).Replace("-", "").ToLowerInvariant();
+      AvatarUrl = $"https://avatars.akamai.steamstatic.com/{avatarStr}_full.jpg";
+    }
+  }
+
+  public static ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
+  {
+    var app_type = AppType.Game;
+    switch (appKeyValues["common"]["type"].Value?.ToLower())
+    {
+      case "game":
+        app_type = AppType.Game;
+        break;
+      case "dlc":
+        app_type = AppType.Dlc;
+        break;
+      case "tool":
+        app_type = AppType.Tool;
+        break;
+      case "application":
+        app_type = AppType.Application;
+        break;
+      case "music":
+        app_type = AppType.Music;
+        break;
+      case "config":
+        app_type = AppType.Config;
+        break;
+      case "demo":
+        app_type = AppType.Demo;
+        break;
+      case "beta":
+        app_type = AppType.Beta;
+        break;
+    }
+    return new ProviderItem
+    {
+      id = appId,
+      name = appKeyValues["common"]["name"].Value?.ToString() ?? "",
+      provider = "Steam",
+      app_type = (uint)app_type,
+    };
+  }
+
+  public uint GetSteam3AppBuildNumber(uint appId, string branch)
+  {
+    if (appId == INVALID_APP_ID)
+      return 0;
+
+    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    if (depots == null)
+      return 0;
+
+    var branches = depots["branches"];
+    var node = branches[branch];
+
+    if (node == KeyValue.Invalid)
+      return 0;
+
+    var buildid = node["buildid"];
+
+    if (buildid == KeyValue.Invalid)
+      return 0;
+
+    return uint.Parse(buildid.Value!);
+  }
+
+  public bool GetSteam3AppRequiresInternetConnection(uint appId)
+  {
+    var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    return common?["steam_deck_compatibility"]?["configuration"]?["requires_internet_for_singleplayer"]?.AsBoolean() ?? false;
+  }
+
+  public string GetSteam3AppName(uint appId)
+  {
+    var common = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    return common?["name"].Value?.ToString() ?? "";
+  }
+
+  public KeyValue? GetSteam3AppSection(uint appId, EAppInfoSection section)
+  {
+    if (AppInfo == null)
+    {
+      return null;
+    }
+
+    if (!AppInfo.TryGetValue(appId, out var app) || app == null)
+    {
+      return null;
+    }
+
+    var appinfo = app.KeyValues;
+    var section_key = section switch
+    {
+      EAppInfoSection.Common => "common",
+      EAppInfoSection.Extended => "extended",
+      EAppInfoSection.Config => "config",
+      EAppInfoSection.Depots => "depots",
+      _ => throw new NotImplementedException(),
+    };
+    var section_kv = appinfo.Children.Where(c => c.Name == section_key).FirstOrDefault();
+    return section_kv;
   }
 }

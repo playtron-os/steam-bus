@@ -15,6 +15,9 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using System.Threading;
 using System;
+using Playtron.Plugin;
+using System.ComponentModel;
+using Tmds.DBus;
 
 
 namespace Steam.Content;
@@ -25,7 +28,6 @@ class ContentDownloaderException(string value) : Exception(value)
 
 class ContentDownloader
 {
-  public const uint INVALID_APP_ID = uint.MaxValue;
   public const uint INVALID_DEPOT_ID = uint.MaxValue;
   public const ulong INVALID_MANIFEST_ID = ulong.MaxValue;
   private const string DEFAULT_DOWNLOAD_DIR = "depots";
@@ -33,10 +35,14 @@ class ContentDownloader
   private static readonly string STAGING_DIR = Path.Combine(CONFIG_DIR, "staging");
 
   private SteamSession session;
-  private CDNClientPool? cdnPool;
+  private DepotConfigStore depotConfigStore;
+  private static CDNClientPool? cdnPool;
   private AppDownloadOptions? options;
 
-  private event Action<(string, float)>? OnInstallProgressed;
+  private event Action<InstallStartedDescription>? OnInstallStarted;
+  private event Action<InstallProgressedDescription>? OnInstallProgressed;
+  private event Action<string>? OnInstallCompleted;
+  private event Action<(string appId, string error)>? OnInstallFailed;
 
   private sealed class DepotDownloadInfo(
       uint depotid, uint appId, ulong manifestId, string branch,
@@ -59,28 +65,50 @@ class ContentDownloader
 
   private class DepotFilesData
   {
-    public DepotDownloadInfo depotDownloadInfo;
-    public DepotDownloadCounter depotCounter;
-    public string stagingDir;
-    public DepotManifest manifest;
-    public DepotManifest previousManifest;
-    public List<DepotManifest.FileData> filteredFiles;
-    public HashSet<string> allFileNames;
+    public required DepotDownloadInfo depotDownloadInfo;
+    public required DepotDownloadCounter depotCounter;
+    public required string stagingDir;
+    public required DepotManifest manifest;
+    public required DepotManifest? previousManifest;
+    public required List<DepotManifest.FileData> filteredFiles;
+    public required HashSet<string> allFileNames;
   }
 
   private class FileStreamData
   {
-    public FileStream fileStream;
-    public SemaphoreSlim fileLock;
+    public required FileStream? fileStream;
+    public required SemaphoreSlim fileLock;
     public int chunksToDownload;
   }
 
 
-  private class GlobalDownloadCounter
+  private class GlobalDownloadCounter : INotifyPropertyChanged
   {
+    private ulong _sizeDownloaded;
+
     public ulong completeDownloadSize;
     public ulong totalBytesCompressed;
     public ulong totalBytesUncompressed;
+
+    public ulong sizeDownloaded
+    {
+      get => _sizeDownloaded;
+      set
+      {
+        if (_sizeDownloaded != value)
+        {
+          _sizeDownloaded = value;
+          OnPropertyChanged(nameof(sizeDownloaded));
+        }
+      }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    protected virtual void OnPropertyChanged(string propertyName)
+    {
+      PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
   }
 
 
@@ -93,78 +121,212 @@ class ContentDownloader
   }
 
 
-  public ContentDownloader(SteamSession steamSession)
+  public ContentDownloader(SteamSession steamSession, DepotConfigStore depotConfigStore)
   {
     this.session = steamSession;
+    this.depotConfigStore = depotConfigStore;
   }
 
-
-  public async Task DownloadAppAsync(uint appId, Action<(string, float)> onInstallProgressed)
+  public static async Task PauseInstall()
   {
-    var options = new AppDownloadOptions();
-    await DownloadAppAsync(appId, options, onInstallProgressed);
-  }
-
-
-  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<(string, float)> onInstallProgressed)
-  {
-    // TODO: Handle download already in progress
-    this.options = options;
-    this.cdnPool = new CDNClientPool(this.session.SteamClient, appId);
-
-    // Keep track of signal handlers
-    this.OnInstallProgressed = onInstallProgressed;
-
-    var depotManifestIds = options.DepotManifestIds;
-    var branch = options.Branch;
-    var os = options.Os;
-    var arch = options.Arch;
-    var language = options.Language;
-    var lv = options.LowViolence;
-    var isUgc = options.IsUgc;
-
-    await this.session?.RequestAppInfo(appId);
-
-    if (!await AccountHasAccess(appId))
+    if (cdnPool != null)
     {
-      if (await this.session.RequestFreeAppLicense(appId))
-      {
-        Console.WriteLine("Obtained FreeOnDemand license for app {0}", appId);
+      if (cdnPool.ExhaustedToken != null)
+        await cdnPool.ExhaustedToken.CancelAsync();
+    }
+  }
 
-        // Fetch app info again in case we didn't get it fully without a license.
-        await this.session.RequestAppInfo(appId, true);
+  public async Task<InstallOption[]> GetInstallOptions(uint appId)
+  {
+    await session.RequestAppInfo(appId);
+
+    var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    if (depots == null) return [];
+    var common = session.GetSteam3AppSection(appId, EAppInfoSection.Common);
+    if (common == null) return [];
+
+    // TODO: Handle user generated content
+
+    List<string> branchOptions = [];
+    List<string> versionOptions = [];
+    List<string> languageOptions = [];
+    List<string> osOptions = [];
+    List<string> archOptions = [];
+
+    // Get languages
+    var supportedLanguages = common["supported_languages"];
+    if (supportedLanguages != null)
+    {
+      foreach (var languageSection in supportedLanguages.Children)
+      {
+        if (languageSection.Children.Count == 0)
+          continue;
+
+        var language = languageSection.Name;
+        if (language == null || language == "")
+          continue;
+
+        var supported = languageSection["supported"];
+        if (supported == null || supported.AsString() != "true")
+          continue;
+
+        languageOptions.Add(language);
+      }
+    }
+
+    // Get OS
+    var oslist = common["oslist"];
+    if (oslist != null)
+    {
+      foreach (var os in oslist.AsString()?.Split(",") ?? [])
+      {
+        if (os != "")
+          osOptions.Add(os);
+      }
+    }
+
+    // Get arch
+    var osarch = common["osarch"];
+    if (osarch != null)
+    {
+      foreach (var arch in osarch.AsString()?.Split(",") ?? [])
+      {
+        if (arch != "")
+          archOptions.Add(arch);
+      }
+    }
+
+    foreach (var depotSection in depots.Children)
+    {
+      if (depotSection.Children.Count == 0)
+        continue;
+
+      // Get branches and versions
+      if (depotSection.Name == "branches")
+      {
+        foreach (var branchSection in depotSection.Children)
+        {
+          if (branchSection.Children.Count == 0)
+            continue;
+
+          var branch = branchSection.Name;
+          if (branch == null || branch == "")
+            continue;
+
+          var version = branchSection["buildid"]?.AsString();
+          if (version == null || version == "")
+            continue;
+
+          var pwdRequired = branchSection["pwdrequired"]?.AsString();
+          if (pwdRequired == "1")
+            continue;
+
+          branchOptions.Add(branch);
+          versionOptions.Add(version);
+        }
+
+        continue;
+      }
+    }
+
+    return [
+      new InstallOption(InstallOptionType.Version.ToString().ToLowerInvariant(), InstallOptionType.Version.GetDescription(), versionOptions.ToArray()),
+      new InstallOption(InstallOptionType.Branch.ToString().ToLowerInvariant(), InstallOptionType.Branch.GetDescription(), branchOptions.ToArray()),
+      new InstallOption(InstallOptionType.Language.ToString().ToLowerInvariant(), InstallOptionType.Language.GetDescription(), languageOptions.ToArray()),
+      new InstallOption(InstallOptionType.OS.ToString().ToLowerInvariant(), InstallOptionType.OS.GetDescription(), osOptions.ToArray()),
+      new InstallOption(InstallOptionType.Architecture.ToString().ToLowerInvariant(), InstallOptionType.Architecture.GetDescription(), archOptions.ToArray()),
+    ];
+  }
+
+
+  public async Task DownloadAppAsync(uint appId, Action<InstallStartedDescription>? onInstallStarted, Action<InstallProgressedDescription>? onInstallProgressed,
+    Action<string>? onInstallCompleted, Action<(string appId, string error)>? onInstallFailed)
+  {
+    var options = await AppDownloadOptions.CreateAsync(await GetAppInstallDir(appId));
+    await DownloadAppAsync(appId, options, onInstallStarted, onInstallProgressed, onInstallCompleted, onInstallFailed);
+  }
+
+
+  public async Task DownloadAppAsync(uint appId, AppDownloadOptions options, Action<InstallStartedDescription>? onInstallStarted = null,
+    Action<InstallProgressedDescription>? onInstallProgressed = null, Action<string>? onInstallCompleted = null, Action<(string appId, string error)>? onInstallFailed = null)
+  {
+    if (cdnPool != null)
+    {
+      Console.WriteLine($"Failed download for app: {appId} because a download is already in progress");
+      onInstallFailed?.Invoke((appId.ToString(), DbusErrors.DownloadInProgress));
+      return;
+    }
+
+    try
+    {
+      this.options = options;
+      cdnPool = new CDNClientPool(this.session.SteamClient, appId);
+      var cts = new CancellationTokenSource();
+      cdnPool!.ExhaustedToken = cts;
+
+      // Keep track of signal handlers
+      this.OnInstallStarted = onInstallStarted;
+      this.OnInstallProgressed = onInstallProgressed;
+      this.OnInstallCompleted = onInstallCompleted;
+      this.OnInstallFailed = onInstallFailed;
+
+      var depotManifestIds = options.DepotManifestIds;
+      var branch = options.Branch;
+      var os = options.Os ?? GetSteamOS();
+      var arch = options.Arch;
+      var language = options.Language;
+      var lv = options.LowViolence;
+      var isUgc = options.IsUgc;
+
+      await this.session.RequestAppInfo(appId);
+
+      if (!await AccountHasAccess(appId))
+      {
+        if (await this.session.RequestFreeAppLicense(appId))
+        {
+          Console.WriteLine("Obtained FreeOnDemand license for app {0}", appId);
+
+          // Fetch app info again in case we didn't get it fully without a license.
+          await this.session.RequestAppInfo(appId, true);
+        }
+        else
+        {
+          var contentName = GetAppName(appId);
+          throw new ContentDownloaderException(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
+        }
+      }
+
+      var hasSpecificDepots = depotManifestIds.Count > 0;
+      var depotIdsFound = new List<uint>();
+      var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
+      var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
+
+      if (depots == null)
+        throw DbusExceptionHelper.ThrowContentNotFound();
+
+      var version = session.GetSteam3AppBuildNumber(appId, branch);
+
+      Console.WriteLine($"Downloading version {version}");
+
+      var requiresInternetConnection = session.GetSteam3AppRequiresInternetConnection(appId);
+
+      // Handle user generated content
+      if (isUgc)
+      {
+        var workshopDepot = depots!["workshopdepot"].AsUnsignedInteger();
+        if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
+        {
+          depotIdsExpected.Add(workshopDepot);
+          depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
+        }
+
+        depotIdsFound.AddRange(depotIdsExpected);
       }
       else
       {
-        var contentName = GetAppName(appId);
-        throw new ContentDownloaderException(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
-      }
-    }
+        Console.WriteLine("Using app branch: '{0}'.", branch);
 
-    var hasSpecificDepots = depotManifestIds.Count > 0;
-    var depotIdsFound = new List<uint>();
-    var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
-    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
-
-    // Handle user generated content
-    if (isUgc)
-    {
-      var workshopDepot = depots["workshopdepot"].AsUnsignedInteger();
-      if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
-      {
-        depotIdsExpected.Add(workshopDepot);
-        depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
-      }
-
-      depotIdsFound.AddRange(depotIdsExpected);
-    }
-    else
-    {
-      Console.WriteLine("Using app branch: '{0}'.", branch);
-
-      if (depots != null)
-      {
-        foreach (var depotSection in depots.Children)
+        foreach (var depotSection in depots!.Children)
         {
           var id = INVALID_DEPOT_ID;
           if (depotSection.Children.Count == 0)
@@ -185,8 +347,8 @@ class ContentDownloader
                   depotConfig["oslist"] != KeyValue.Invalid &&
                   !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
               {
-                var oslist = depotConfig["oslist"].Value.Split(',');
-                if (Array.IndexOf(oslist, os ?? GetSteamOS()) == -1)
+                var oslist = depotConfig["oslist"].Value?.Split(',') ?? [];
+                if (Array.IndexOf(oslist, os) == -1)
                   continue;
               }
 
@@ -220,40 +382,78 @@ class ContentDownloader
           if (!hasSpecificDepots)
             depotManifestIds.Add((id, INVALID_MANIFEST_ID));
         }
+
+        if (depotManifestIds.Count == 0 && !hasSpecificDepots)
+        {
+          Console.WriteLine(string.Format("Couldn't find any depots to download for app {0}", appId));
+          throw new ContentDownloaderException(string.Format("Couldn't find any depots to download for app {0}", appId));
+        }
+
+        if (depotIdsFound.Count < depotIdsExpected.Count)
+        {
+          var remainingDepotIds = depotIdsExpected.Except(depotIdsFound);
+          Console.WriteLine(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
+          throw new ContentDownloaderException(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
+        }
       }
 
-      if (depotManifestIds.Count == 0 && !hasSpecificDepots)
+      var infos = new List<DepotDownloadInfo>();
+
+      foreach (var (depotId, manifestId) in depotManifestIds)
       {
-        Console.WriteLine(string.Format("Couldn't find any depots to download for app {0}", appId));
-        throw new ContentDownloaderException(string.Format("Couldn't find any depots to download for app {0}", appId));
+        var info = await GetDepotInfo(depotId, appId, manifestId, branch, options.InstallDirectory);
+        if (info != null)
+        {
+          infos.Add(info);
+        }
       }
 
-      if (depotIdsFound.Count < depotIdsExpected.Count)
+      try
       {
-        var remainingDepotIds = depotIdsExpected.Except(depotIdsFound);
-        Console.WriteLine(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
-        throw new ContentDownloaderException(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
+        var installStartedData = new InstallStartedDescription
+        {
+          AppId = appId.ToString(),
+          Version = version.ToString(),
+          InstallDirectory = options.InstallDirectory,
+          RequiresInternetConnection = requiresInternetConnection,
+        };
+
+        depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
+        depotConfigStore.SetNewVersion(appId, version, branch, os);
+
+        await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
+        onInstallCompleted?.Invoke(appId.ToString());
+
+        depotConfigStore.SetDownloadStage(appId, null);
+        depotConfigStore.Save(appId);
       }
+      catch (OperationCanceledException)
+      {
+        Console.WriteLine("App {0} download has been cancelled.", appId);
+        throw;
+      }
+
+      Console.WriteLine($"Finished download task for app: {appId}");
+
+      cdnPool = null;
     }
-
-    var infos = new List<DepotDownloadInfo>();
-
-    foreach (var (depotId, manifestId) in depotManifestIds)
+    catch (DBusException exception)
     {
-      var info = await GetDepotInfo(depotId, appId, manifestId, branch);
-      if (info != null)
-      {
-        infos.Add(info);
-      }
-    }
-
-    try
-    {
-      await DownloadSteam3Async(infos).ConfigureAwait(false);
+      Console.WriteLine($"Finished download task for app: {appId} with DBUS exception: {exception}");
+      cdnPool = null;
+      onInstallFailed?.Invoke((appId.ToString(), exception.ErrorName));
+      throw;
     }
     catch (OperationCanceledException)
     {
-      Console.WriteLine("App {0} was not completely downloaded.", appId);
+      cdnPool = null;
+      throw;
+    }
+    catch (Exception exception)
+    {
+      Console.WriteLine($"Finished download task for app: {appId} with exception: {exception}");
+      cdnPool = null;
+      onInstallFailed?.Invoke((appId.ToString(), DbusErrors.DownloadFailed));
       throw;
     }
   }
@@ -261,37 +461,18 @@ class ContentDownloader
 
   string GetAppName(uint appId)
   {
-    var info = GetSteam3AppSection(appId, EAppInfoSection.Common);
+    var info = session.GetSteam3AppSection(appId, EAppInfoSection.Common);
     if (info == null)
       return string.Empty;
 
-    return info["name"].AsString();
+    return info["name"].AsString()!;
   }
 
-
-  internal KeyValue GetSteam3AppSection(uint appId, EAppInfoSection section)
+  public async Task<string> GetAppInstallDir(uint appId)
   {
-    if (this.session.AppInfo == null)
-    {
-      return null;
-    }
-
-    if (!this.session.AppInfo.TryGetValue(appId, out var app) || app == null)
-    {
-      return null;
-    }
-
-    var appinfo = app.KeyValues;
-    var section_key = section switch
-    {
-      EAppInfoSection.Common => "common",
-      EAppInfoSection.Extended => "extended",
-      EAppInfoSection.Config => "config",
-      EAppInfoSection.Depots => "depots",
-      _ => throw new NotImplementedException(),
-    };
-    var section_kv = appinfo.Children.Where(c => c.Name == section_key).FirstOrDefault();
-    return section_kv;
+    await session!.RequestAppInfo(appId);
+    var config = session.GetSteam3AppSection(appId, EAppInfoSection.Config);
+    return config?["installdir"]?.AsString() ?? appId.ToString();
   }
 
 
@@ -310,7 +491,7 @@ class ContentDownloader
     }
     else
     {
-      licenseQuery = this.session.Licenses.Select(x => x.PackageID).Distinct();
+      licenseQuery = this.session.Licenses?.Select(x => x.PackageID).Distinct() ?? [];
     }
 
     await this.session.RequestPackageInfo(licenseQuery);
@@ -331,9 +512,9 @@ class ContentDownloader
   }
 
 
-  async Task<DepotDownloadInfo?> GetDepotInfo(uint depotId, uint appId, ulong manifestId, string branch)
+  async Task<DepotDownloadInfo?> GetDepotInfo(uint depotId, uint appId, ulong manifestId, string branch, string baseInstallPath)
   {
-    if (appId != INVALID_APP_ID)
+    if (appId != SteamSession.INVALID_APP_ID)
     {
       await this.session.RequestAppInfo(appId);
     }
@@ -369,9 +550,9 @@ class ContentDownloader
       return null;
     }
 
-    var uVersion = GetSteam3AppBuildNumber(appId, branch);
+    var uVersion = session.GetSteam3AppBuildNumber(appId, branch);
 
-    if (!CreateDirectories(depotId, uVersion, out var installDir))
+    if (!CreateDirectories(depotId, uVersion, out var installDir, baseInstallPath))
     {
       Console.WriteLine("Error: Unable to create install directories!");
       return null;
@@ -383,7 +564,10 @@ class ContentDownloader
 
   async Task<ulong> GetSteam3DepotManifest(uint depotId, uint appId, string branch)
   {
-    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    if (depots == null)
+      return INVALID_MANIFEST_ID;
+
     var depotChild = depots[depotId.ToString()];
 
     if (depotChild == KeyValue.Invalid)
@@ -472,47 +656,58 @@ class ContentDownloader
   }
 
 
-  uint GetSteam3AppBuildNumber(uint appId, string branch)
+  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots, CancellationTokenSource cts, InstallStartedDescription installStartedData)
   {
-    if (appId == INVALID_APP_ID)
-      return 0;
-
-
-    var depots = GetSteam3AppSection(appId, EAppInfoSection.Depots);
-    var branches = depots["branches"];
-    var node = branches[branch];
-
-    if (node == KeyValue.Invalid)
-      return 0;
-
-    var buildid = node["buildid"];
-
-    if (buildid == KeyValue.Invalid)
-      return 0;
-
-    return uint.Parse(buildid.Value);
-  }
-
-
-  private async Task DownloadSteam3Async(List<DepotDownloadInfo> depots)
-  {
-    if (this.options is null)
+    if (this.options is null || cdnPool is null)
     {
       return;
     }
     //Ansi.Progress(Ansi.ProgressState.Indeterminate);
 
-    var cts = new CancellationTokenSource();
-    this.cdnPool.ExhaustedToken = cts;
-
     var downloadCounter = new GlobalDownloadCounter();
     var depotsToDownload = new List<DepotFilesData>(depots.Count);
     var allFileNamesAllDepots = new HashSet<string>();
 
+    var previousDownloadStage = depotConfigStore.GetDownloadStage(appId);
+    var previousSizeDownloaded = previousDownloadStage == null ? 0 : depotConfigStore.GetSizeDownloaded(appId) ?? 0;
+
+    Console.WriteLine($"Starting download from previous stage {previousDownloadStage} and previous bytes downloaded {previousSizeDownloaded}");
+
+    downloadCounter.PropertyChanged += (sender, args) =>
+    {
+      if (cts.IsCancellationRequested)
+        return;
+
+      if (args.PropertyName == nameof(GlobalDownloadCounter.sizeDownloaded) || args.PropertyName == nameof(GlobalDownloadCounter.completeDownloadSize))
+      {
+        var counter = (GlobalDownloadCounter)sender!;
+
+        if (counter.completeDownloadSize != 0 && previousSizeDownloaded < counter.sizeDownloaded)
+        {
+          var progress = (counter.sizeDownloaded / (float)counter.completeDownloadSize) * 100.0f;
+
+          // TODO: Handle download stages?
+          this.OnInstallProgressed?.Invoke(new InstallProgressedDescription
+          {
+            AppId = appId.ToString(),
+            Stage = (uint)DownloadStage.Downloading,
+            DownloadedBytes = counter.sizeDownloaded,
+            TotalDownloadSize = counter.completeDownloadSize,
+            Progress = progress,
+          });
+
+          depotConfigStore.SetDownloadStage(appId, DownloadStage.Downloading);
+          depotConfigStore.SetCurrentSize(appId, counter.sizeDownloaded);
+          depotConfigStore.SetTotalSize(appId, counter.completeDownloadSize);
+          depotConfigStore.Save(appId);
+        }
+      }
+    };
+
     // First, fetch all the manifests for each depot (including previous manifests) and perform the initial setup
     foreach (var depot in depots)
     {
-      var depotFileData = await ProcessDepotManifestAndFiles(cts, depot, downloadCounter);
+      var depotFileData = await ProcessDepotManifestAndFiles(appId, cts, depot, downloadCounter);
 
       if (depotFileData != null)
       {
@@ -538,9 +733,25 @@ class ContentDownloader
       }
     }
 
+    installStartedData.TotalDownloadSize = downloadCounter.completeDownloadSize;
+    OnInstallStarted?.Invoke(installStartedData);
+
+    if (previousSizeDownloaded != 0)
+    {
+      var progress = (previousSizeDownloaded / (float)downloadCounter.completeDownloadSize) * 100.0f;
+      this.OnInstallProgressed?.Invoke(new InstallProgressedDescription
+      {
+        AppId = appId.ToString(),
+        Stage = (uint)DownloadStage.Downloading,
+        DownloadedBytes = previousSizeDownloaded,
+        TotalDownloadSize = downloadCounter.completeDownloadSize,
+        Progress = progress,
+      });
+    }
+
     foreach (var depotFileData in depotsToDownload)
     {
-      await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+      await DownloadSteam3AsyncDepotFiles(appId, cts, downloadCounter, depotFileData, allFileNamesAllDepots);
     }
 
     //Ansi.Progress(Ansi.ProgressState.Hidden);
@@ -550,7 +761,7 @@ class ContentDownloader
   }
 
 
-  private async Task<DepotFilesData> ProcessDepotManifestAndFiles(CancellationTokenSource cts, DepotDownloadInfo depot, GlobalDownloadCounter downloadCounter)
+  private async Task<DepotFilesData?> ProcessDepotManifestAndFiles(uint appId, CancellationTokenSource cts, DepotDownloadInfo depot, GlobalDownloadCounter downloadCounter)
   {
     var depotCounter = new DepotDownloadCounter();
 
@@ -560,19 +771,12 @@ class ContentDownloader
     DepotManifest? newManifest = null;
     var configDir = Path.Combine(depot.InstallDir, CONFIG_DIR);
 
-    var lastManifestId = INVALID_MANIFEST_ID;
-
-    // TODO: This
-    //DepotConfigStore.Instance.InstalledManifestIDs.TryGetValue(depot.DepotId, out lastManifestId);
-
-    //// In case we have an early exit, this will force equiv of verifyall next run.
-    //DepotConfigStore.Instance.InstalledManifestIDs[depot.DepotId] = INVALID_MANIFEST_ID;
-    //DepotConfigStore.Save();
+    var lastManifestId = depotConfigStore.GetManifestID(appId, depot.DepotId) ?? INVALID_MANIFEST_ID;
 
     if (lastManifestId != INVALID_MANIFEST_ID)
     {
       // We only have to show this warning if the old manifest ID was different
-      var badHashWarning = (lastManifestId != depot.ManifestId);
+      var badHashWarning = lastManifestId != depot.ManifestId;
       oldManifest = LoadManifestFromFile(configDir, depot.DepotId, lastManifestId, badHashWarning);
     }
 
@@ -600,14 +804,14 @@ class ContentDownloader
         {
           cts.Token.ThrowIfCancellationRequested();
 
-          Server connection = null;
+          Server? connection = null;
 
           try
           {
-            connection = cdnPool.GetConnection(cts.Token);
+            connection = cdnPool!.GetConnection(cts.Token);
 
-            string cdnToken = null;
-            if (this.session.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host), out var authTokenCallbackPromise))
+            string? cdnToken = null;
+            if (this.session.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host ?? ""), out var authTokenCallbackPromise))
             {
               var result = await authTokenCallbackPromise.Task;
               cdnToken = result.Token;
@@ -658,16 +862,17 @@ class ContentDownloader
           catch (SteamKitWebRequestException e)
           {
             // If the CDN returned 403, attempt to get a cdn auth if we didn't yet
-            if (e.StatusCode == HttpStatusCode.Forbidden && !this.session.CDNAuthTokens.ContainsKey((depot.DepotId, connection.Host)))
+            if (e.StatusCode == HttpStatusCode.Forbidden && connection != null && !this.session.CDNAuthTokens.ContainsKey((depot.DepotId, connection!.Host ?? "")))
             {
-              await this.session.RequestCDNAuthToken(depot.AppId, depot.DepotId, connection);
+              await this.session.RequestCDNAuthToken(depot.AppId, depot.DepotId, connection!);
 
-              cdnPool.ReturnConnection(connection);
+              cdnPool!.ReturnConnection(connection);
 
               continue;
             }
 
-            cdnPool.ReturnBrokenConnection(connection);
+            if (connection != null)
+              cdnPool!.ReturnBrokenConnection(connection);
 
             if (e.StatusCode == HttpStatusCode.Unauthorized || e.StatusCode == HttpStatusCode.Forbidden)
             {
@@ -689,7 +894,8 @@ class ContentDownloader
           }
           catch (Exception e)
           {
-            cdnPool.ReturnBrokenConnection(connection);
+            if (connection != null)
+              cdnPool!.ReturnBrokenConnection(connection);
             Console.WriteLine("Encountered error downloading manifest for depot {0} {1}: {2}", depot.DepotId, depot.ManifestId, e.Message);
           }
         } while (newManifest == null);
@@ -703,22 +909,28 @@ class ContentDownloader
         // Throw the cancellation exception if requested so that this task is marked failed
         cts.Token.ThrowIfCancellationRequested();
 
-        SaveManifestToFile(configDir, newManifest);
+        if (newManifest != null)
+          SaveManifestToFile(configDir, newManifest);
+
         Console.WriteLine(" Done!");
       }
     }
 
-    Console.WriteLine("Manifest {0} ({1})", depot.ManifestId, newManifest.CreationTime);
+    Console.WriteLine("Manifest {0} ({1})", depot.ManifestId, newManifest?.CreationTime);
 
-    if (this.options.DownloadManifestOnly)
+    if (this.options?.DownloadManifestOnly == true)
     {
-      DumpManifestToTextFile(depot, newManifest);
+      if (newManifest != null)
+        DumpManifestToTextFile(depot, newManifest);
       return null;
     }
 
+    if (newManifest == null)
+      return null;
+
     var stagingDir = Path.Combine(depot.InstallDir, STAGING_DIR);
 
-    var filesAfterExclusions = newManifest.Files.AsParallel().Where(f => TestIsFileIncluded(f.FileName)).ToList();
+    var filesAfterExclusions = newManifest!.Files?.AsParallel().Where(f => TestIsFileIncluded(f.FileName)).ToList() ?? [];
     var allFileNames = new HashSet<string>(filesAfterExclusions.Count);
 
     // Pre-process
@@ -737,8 +949,8 @@ class ContentDownloader
       else
       {
         // Some manifests don't explicitly include all necessary directories
-        Directory.CreateDirectory(Path.GetDirectoryName(fileFinalPath));
-        Directory.CreateDirectory(Path.GetDirectoryName(fileStagingPath));
+        Directory.CreateDirectory(Path.GetDirectoryName(fileFinalPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(fileStagingPath)!);
 
         downloadCounter.completeDownloadSize += file.TotalSize;
         depotCounter.completeDownloadSize += file.TotalSize;
@@ -793,7 +1005,7 @@ class ContentDownloader
 
   static bool CreateDirectories(uint depotId, uint depotVersion, out string installDir, string baseInstallPath = "")
   {
-    installDir = null;
+    installDir = "";
     try
     {
       if (string.IsNullOrWhiteSpace(baseInstallPath))
@@ -811,6 +1023,11 @@ class ContentDownloader
       }
       else
       {
+        // Delete if it is a file/symlink
+        var info = new FileInfo(baseInstallPath);
+        if (info != null && (info.Attributes & FileAttributes.ReparsePoint) != 0)
+          File.Delete(baseInstallPath);
+
         Directory.CreateDirectory(baseInstallPath);
 
         installDir = baseInstallPath;
@@ -827,7 +1044,7 @@ class ContentDownloader
     return true;
   }
 
-  private async Task DownloadSteam3AsyncDepotFiles(CancellationTokenSource cts,
+  private async Task DownloadSteam3AsyncDepotFiles(uint appId, CancellationTokenSource cts,
       GlobalDownloadCounter downloadCounter, DepotFilesData depotFilesData, HashSet<string> allFileNamesAllDepots)
   {
     var depot = depotFilesData.depotDownloadInfo;
@@ -841,7 +1058,7 @@ class ContentDownloader
     await InvokeAsync(
         files.Select(file => new Func<Task>(async () =>
             await Task.Run(() => DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue)))),
-        maxDegreeOfParallelism: this.options.MaxDownloads
+        maxDegreeOfParallelism: this.options!.MaxDownloads
     );
 
     await InvokeAsync(
@@ -854,7 +1071,7 @@ class ContentDownloader
     // Check for deleted files if updating the depot.
     if (depotFilesData.previousManifest != null)
     {
-      var previousFilteredFiles = depotFilesData.previousManifest.Files.AsParallel().Where(f => TestIsFileIncluded(f.FileName)).Select(f => f.FileName).ToHashSet();
+      var previousFilteredFiles = depotFilesData.previousManifest.Files?.AsParallel().Where(f => TestIsFileIncluded(f.FileName)).Select(f => f.FileName).ToHashSet() ?? [];
 
       // Check if we are writing to a single output directory. If not, each depot folder is managed independently
       if (string.IsNullOrWhiteSpace(this.options.InstallDirectory))
@@ -880,9 +1097,8 @@ class ContentDownloader
       }
     }
 
-    // TODO: This
-    //DepotConfigStore.Instance.InstalledManifestIDs[depot.DepotId] = depot.ManifestId;
-    //DepotConfigStore.Save();
+    depotConfigStore.SetManifestID(appId, depot.DepotId, depot.ManifestId);
+    depotConfigStore.Save(appId);
 
     Console.WriteLine("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);
   }
@@ -900,10 +1116,10 @@ class ContentDownloader
     var stagingDir = depotFilesData.stagingDir;
     var depotDownloadCounter = depotFilesData.depotCounter;
     var oldProtoManifest = depotFilesData.previousManifest;
-    DepotManifest.FileData oldManifestFile = null;
+    DepotManifest.FileData? oldManifestFile = null;
     if (oldProtoManifest != null)
     {
-      oldManifestFile = oldProtoManifest.Files.SingleOrDefault(f => f.FileName == file.FileName);
+      oldManifestFile = oldProtoManifest.Files?.SingleOrDefault(f => f.FileName == file.FileName);
     }
 
     var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
@@ -943,7 +1159,7 @@ class ContentDownloader
         neededChunks = [];
 
         var hashMatches = oldManifestFile.FileHash.SequenceEqual(file.FileHash);
-        if (this.options.VerifyAll || !hashMatches)
+        if (this.options!.VerifyAll || !hashMatches)
         {
           // we have a version of this file, but it doesn't fully match what we want
           if (this.options.VerifyAll)
@@ -955,7 +1171,7 @@ class ContentDownloader
 
           foreach (var chunk in file.Chunks)
           {
-            var oldChunk = oldManifestFile.Chunks.FirstOrDefault(c => c.ChunkID.SequenceEqual(chunk.ChunkID));
+            var oldChunk = oldManifestFile.Chunks.FirstOrDefault(c => (c.ChunkID ?? []).SequenceEqual(chunk.ChunkID ?? []));
             if (oldChunk != null)
             {
               matchingChunks.Add(new ChunkMatch(oldChunk, chunk));
@@ -1037,7 +1253,7 @@ class ContentDownloader
           }
         }
 
-        Console.WriteLine("Validating {0}", fileFinalPath);
+        Console.WriteLine("Validating file not found in old manifest {0}", fileFinalPath);
         neededChunks = ValidateSteam3FileChecksums(fs, [.. file.Chunks.OrderBy(x => x.Offset)]);
       }
 
@@ -1046,14 +1262,12 @@ class ContentDownloader
         lock (depotDownloadCounter)
         {
           depotDownloadCounter.sizeDownloaded += file.TotalSize;
-          // TODO: emit progress signal
-          this.OnInstallProgressed?.Invoke(("0", (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f));
-          Console.WriteLine("{0,6:#00.00}% {1}", (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
+          Console.WriteLine("File: {0,6:#00.00}% {1}", (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
         }
 
         lock (downloadCounter)
         {
-          downloadCounter.completeDownloadSize -= file.TotalSize;
+          downloadCounter.sizeDownloaded += file.TotalSize;
         }
 
         return;
@@ -1067,7 +1281,7 @@ class ContentDownloader
 
       lock (downloadCounter)
       {
-        downloadCounter.completeDownloadSize -= sizeOnDisk;
+        downloadCounter.sizeDownloaded += sizeOnDisk;
       }
     }
 
@@ -1107,7 +1321,7 @@ class ContentDownloader
     var depot = depotFilesData.depotDownloadInfo;
     var depotDownloadCounter = depotFilesData.depotCounter;
 
-    var chunkID = Convert.ToHexString(chunk.ChunkID).ToLowerInvariant();
+    var chunkID = Convert.ToHexString(chunk.ChunkID ?? []).ToLowerInvariant();
 
     var written = 0;
     var chunkBuffer = ArrayPool<byte>.Shared.Rent((int)chunk.UncompressedLength);
@@ -1118,14 +1332,14 @@ class ContentDownloader
       {
         cts.Token.ThrowIfCancellationRequested();
 
-        Server connection = null;
+        Server? connection = null;
 
         try
         {
-          connection = cdnPool.GetConnection(cts.Token);
+          connection = cdnPool!.GetConnection(cts.Token);
 
-          string cdnToken = null;
-          if (this.session.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host), out var authTokenCallbackPromise))
+          string? cdnToken = null;
+          if (this.session.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host ?? ""), out var authTokenCallbackPromise))
           {
             var result = await authTokenCallbackPromise.Task;
             cdnToken = result.Token;
@@ -1153,17 +1367,19 @@ class ContentDownloader
         {
           // If the CDN returned 403, attempt to get a cdn auth if we didn't yet,
           // if auth task already exists, make sure it didn't complete yet, so that it gets awaited above
-          if (e.StatusCode == HttpStatusCode.Forbidden &&
-              (!this.session.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host), out var authTokenCallbackPromise) || !authTokenCallbackPromise.Task.IsCompleted))
+          if (e.StatusCode == HttpStatusCode.Forbidden && connection != null &&
+              (!this.session.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host ?? ""), out var authTokenCallbackPromise) || !authTokenCallbackPromise.Task.IsCompleted))
           {
             await this.session.RequestCDNAuthToken(depot.AppId, depot.DepotId, connection);
 
-            cdnPool.ReturnConnection(connection);
+            if (connection != null)
+              cdnPool!.ReturnConnection(connection);
 
             continue;
           }
 
-          cdnPool.ReturnBrokenConnection(connection);
+          if (connection != null)
+            cdnPool!.ReturnBrokenConnection(connection);
 
           if (e.StatusCode == HttpStatusCode.Unauthorized || e.StatusCode == HttpStatusCode.Forbidden)
           {
@@ -1179,7 +1395,8 @@ class ContentDownloader
         }
         catch (Exception e)
         {
-          cdnPool.ReturnBrokenConnection(connection);
+          if (connection != null)
+            cdnPool!.ReturnBrokenConnection(connection);
           Console.WriteLine("Encountered unexpected error downloading chunk {0}: {1}", chunkID, e.Message);
         }
       } while (written == 0);
@@ -1234,22 +1451,22 @@ class ContentDownloader
 
     lock (downloadCounter)
     {
+      downloadCounter.sizeDownloaded += (ulong)written;
       downloadCounter.totalBytesCompressed += chunk.CompressedLength;
       downloadCounter.totalBytesUncompressed += chunk.UncompressedLength;
-
       //Ansi.Progress(downloadCounter.totalBytesUncompressed, downloadCounter.completeDownloadSize);
     }
 
     if (remainingChunks == 0)
     {
       var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-      Console.WriteLine("{0,6:#00.00}% {1}", (sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
+      Console.WriteLine("Chunk: {0,6:#00.00}% {1}", (sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
     }
   }
 
   class ChunkIdComparer : IEqualityComparer<byte[]>
   {
-    public bool Equals(byte[] x, byte[] y)
+    public bool Equals(byte[]? x, byte[]? y)
     {
       if (ReferenceEquals(x, y)) return true;
       if (x == null || y == null) return false;
@@ -1276,15 +1493,16 @@ class ContentDownloader
 
     var uniqueChunks = new HashSet<byte[]>(new ChunkIdComparer());
 
-    foreach (var file in manifest.Files)
+    foreach (var file in manifest.Files ?? [])
     {
       foreach (var chunk in file.Chunks)
       {
-        uniqueChunks.Add(chunk.ChunkID);
+        if (chunk.ChunkID != null)
+          uniqueChunks.Add(chunk.ChunkID);
       }
     }
 
-    sw.WriteLine($"Total number of files  : {manifest.Files.Count} ");
+    sw.WriteLine($"Total number of files  : {manifest.Files?.Count} ");
     sw.WriteLine($"Total number of chunks : {uniqueChunks.Count} ");
     sw.WriteLine($"Total bytes on disk    : {manifest.TotalUncompressedSize} ");
     sw.WriteLine($"Total bytes compressed : {manifest.TotalCompressedSize} ");
@@ -1292,7 +1510,7 @@ class ContentDownloader
     sw.WriteLine();
     sw.WriteLine("          Size Chunks File SHA                                 Flags Name");
 
-    foreach (var file in manifest.Files)
+    foreach (var file in manifest.Files ?? [])
     {
       var sha1Hash = Convert.ToHexString(file.FileHash).ToLower();
       sw.WriteLine($"{file.TotalSize,14:d} {file.Chunks.Count,6:d} {sha1Hash} {(int)file.Flags,5:x} {file.FileName}");
@@ -1301,17 +1519,17 @@ class ContentDownloader
 
   bool TestIsFileIncluded(string filename)
   {
-    if (!this.options.UsingFileList)
+    if (!(this.options?.UsingFileList ?? false))
       return true;
 
     filename = filename.Replace('\\', '/');
 
-    if (this.options.FilesToDownload.Contains(filename))
+    if (this.options.FilesToDownload?.Contains(filename) == true)
     {
       return true;
     }
 
-    foreach (var rgx in this.options.FilesToDownloadRegex)
+    foreach (var rgx in this.options.FilesToDownloadRegex ?? [])
     {
       var m = rgx.Match(filename);
 
@@ -1322,14 +1540,14 @@ class ContentDownloader
     return false;
   }
 
-  public static DepotManifest LoadManifestFromFile(string directory, uint depotId, ulong manifestId, bool badHashWarning)
+  public static DepotManifest? LoadManifestFromFile(string directory, uint depotId, ulong manifestId, bool badHashWarning)
   {
     // Try loading Steam format manifest first.
     var filename = Path.Combine(directory, string.Format("{0}_{1}.manifest", depotId, manifestId));
 
     if (File.Exists(filename))
     {
-      byte[] expectedChecksum;
+      byte[]? expectedChecksum;
 
       try
       {
@@ -1357,7 +1575,7 @@ class ContentDownloader
 
     if (File.Exists(filename))
     {
-      byte[] expectedChecksum;
+      byte[]? expectedChecksum;
 
       try
       {
