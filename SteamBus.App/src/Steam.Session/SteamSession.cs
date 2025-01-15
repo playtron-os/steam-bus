@@ -71,17 +71,16 @@ class SteamSession
   public bool RememberPassword = true;
 
   private DepotConfigStore depotConfigStore;
-  private Action<(string appId, string version)> OnAppNewVersionFound;
+  public Action<(string appId, string version)>? OnAppNewVersionFound;
+  public Action<string>? OnAuthError;
 
 
-  public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, Action<(string appId, string version)> OnAppNewVersionFound,
-    string? steamGuardData = null, IAuthenticator? authenticator = null)
+  public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
     this.logonDetails = details;
     this.authenticator = authenticator;
     this.SteamGuardData = steamGuardData;
     this.depotConfigStore = depotConfigStore;
-    this.OnAppNewVersionFound = OnAppNewVersionFound;
 
     var clientConfiguration = SteamConfiguration.Create(config =>
         config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
@@ -473,9 +472,20 @@ class SteamSession
 
       qrAuthSession.ChallengeURLChanged = () =>
       {
-        OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+        if (qrAuthSession != null)
+        {
+          OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+        }
+        else
+        {
+          Console.WriteLine("Challenge URL changed but session is null");
+        }
       };
-      OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+
+      if (qrAuthSession != null)
+      {
+        OnNewQrCode?.Invoke(qrAuthSession.ChallengeURL);
+      }
     }
     else
     {
@@ -508,9 +518,30 @@ class SteamSession
         {
           return;
         }
+        catch (AuthenticationException ex)
+        {
+          if (ex.Message.Contains("InvalidPassword"))
+          {
+            Console.Error.WriteLine($"Failed to authenticate with Steam: InvalidPassword", ex);
+            OnAuthError?.Invoke(DbusErrors.InvalidPassword);
+          }
+          else if (ex.Message.Contains("AccountLoginDeniedThrottle"))
+          {
+            Console.Error.WriteLine($"Rate limit reached", ex);
+            OnAuthError?.Invoke(DbusErrors.RateLimitExceeded);
+          }
+          else
+          {
+            Console.Error.WriteLine($"Failed to authenticate with Steam, AuthenticationException: {ex.Message}", ex);
+            OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+          }
+
+          Abort(false);
+        }
         catch (Exception ex)
         {
-          Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
+          Console.Error.WriteLine($"Failed to authenticate with Steam when authSession is null: {ex.Message}", ex);
+          OnAuthError?.Invoke(DbusErrors.AuthenticationError);
           Abort(false);
           return;
         }
@@ -544,13 +575,20 @@ class SteamSession
       }
       catch (Exception ex)
       {
-        Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
-        Abort(false);
+        Console.WriteLine($"##### TEST: {ex.StackTrace}, {ex.Data}, {ex.InnerException}");
+        Console.Error.WriteLine("Failed to authenticate with Steam when qrAuthSession is not null: " + ex.Message, ex);
+        OnAuthError?.Invoke(DbusErrors.AuthenticationError);
         return;
       }
       finally
       {
-        qrAuthSession = null;
+        Abort(false);
+
+        if (qrAuthSession != null)
+        {
+          qrAuthSession.ChallengeURLChanged = null;
+          qrAuthSession = null;
+        }
       }
     }
     else if (authSession != null)
@@ -578,7 +616,17 @@ class SteamSession
       }
       catch (Exception ex)
       {
-        Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
+        if (ex.Message.Contains("Waiting for 2fa code timed out"))
+        {
+          Console.Error.WriteLine("Waitiing for 2fa code timed out");
+          OnAuthError?.Invoke(DbusErrors.TfaTimedOut);
+        }
+        else
+        {
+          Console.Error.WriteLine("Failed to authenticate with Steam when auth session is not null: " + ex.Message, ex);
+          OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+        }
+
         Abort(false);
         return;
       }
@@ -594,7 +642,8 @@ class SteamSession
     }
     catch (Exception ex)
     {
-      Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
+      Console.Error.WriteLine("Failed to authenticate with Steam when logging in: " + ex.Message, ex);
+      OnAuthError?.Invoke(DbusErrors.AuthenticationError);
       Abort(false);
       return;
     }
@@ -798,7 +847,7 @@ class SteamSession
               depotConfigStore.SetUpdatePending(entry.Key, newVersion.ToString());
               depotConfigStore.Save(entry.Key);
 
-              OnAppNewVersionFound((entry.Key.ToString(), newVersion.ToString()));
+              OnAppNewVersionFound?.Invoke((entry.Key.ToString(), newVersion.ToString()));
             }
           }
         }
