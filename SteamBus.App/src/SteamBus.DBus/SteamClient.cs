@@ -324,6 +324,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         }
       }
 
+      List<string> HardwareTags = [];
+      if (entry["config"]?["steamdeck"]?.Value == "1")
+      {
+        HardwareTags.Add("steamdeck");
+      }
+
       LaunchOption option = new()
       {
         Description = entry["description"]?.Value ?? "",
@@ -331,17 +337,19 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         Executable = entry["executable"]?.Value ?? "",
         Arguments = entry["arguments"]?.Value ?? "",
         Environment = [("SteamAppId", appIdString), ("STEAM_COMPAT_APP_ID", appIdString), ("SteamGameId", appIdString)],
-        WorkingDirectory = "",
+        WorkingDirectory = entry["workingdir"]?.Value ?? "",
         LaunchType = (uint)LaunchType.Unknown,
-        SteamDeck = entry["config"]?["steamdeck"]?.Value == "1"
+        HardwareTags = HardwareTags.ToArray()
       };
+      // Perform normalization
+      option.Executable = option.Executable.Replace('\\', System.IO.Path.DirectorySeparatorChar);
+      option.WorkingDirectory = option.WorkingDirectory.Replace('\\', System.IO.Path.DirectorySeparatorChar);
       if (installedInfo != null)
       {
-        option.WorkingDirectory = installedInfo.Value.Info.InstalledPath;
+        option.WorkingDirectory = System.IO.Path.GetFullPath(System.IO.Path.Join(installedInfo.Value.Info.InstalledPath, option.WorkingDirectory));
       }
       options.Add(option);
     }
-
     return [.. options];
   }
 
