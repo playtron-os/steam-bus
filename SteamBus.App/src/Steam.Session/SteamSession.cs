@@ -1027,4 +1027,17 @@ class SteamSession
     var section_kv = appinfo.Children.Where(c => c.Name == section_key).FirstOrDefault();
     return section_kv;
   }
+
+  public void UpdateConfigFiles(bool wantsOfflineMode)
+  {
+    if (logonDetails?.Username != null && logonDetails?.AccessToken != null)
+    {
+      var sub = Jwt.GetSub(logonDetails.AccessToken);
+
+      if (sub != null)
+        loginUsersConfig.UpdateConfigFiles(sub, logonDetails.AccountID.ToString(), wantsOfflineMode);
+      else
+        Console.Error.WriteLine("Error parsing Sub out of access token");
+    }
+  }
 }

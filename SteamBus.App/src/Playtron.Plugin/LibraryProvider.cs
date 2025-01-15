@@ -204,9 +204,11 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<ProviderItem> GetProviderItemAsync(string appId);
   Task<ProviderItem[]> GetProviderItemsAsync();
   Task RefreshAsync();
-  //Task DiskAdded(diskPath); // We could just listen to udisks2 directly
-  //Task DiskRemoved(diskPath);
+
   Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
+
+  Task PreLaunchHookAsync(string appId, bool usingOfflineMode);
+  Task PostLaunchHookAsync(string appId);
 
   // Signals
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);

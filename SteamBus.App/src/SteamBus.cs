@@ -1,6 +1,7 @@
 ﻿using Tmds.DBus;
 using SteamBus.DBus;
 using System.Reflection;
+using Xdg.Directories;
 
 namespace SteamBus;
 
@@ -11,6 +12,8 @@ class SteamBus
     Console.WriteLine("Starting SteamBus v{0}", Assembly.GetExecutingAssembly().GetName().Version);
 
     var depotConfigStore = await DepotConfigStore.CreateAsync();
+    var dependenciesStore = await DepotConfigStore.CreateAsync([$"{BaseDirectory.DataHome}/steambus/tools"]);
+    var displayManager = new DisplayManager();
 
     string? busAddress = Address.Session;
     if (busAddress is null)
@@ -28,12 +31,12 @@ class SteamBus
     Console.WriteLine("Registered address: one.playtron.SteamBus");
 
     // Register the Steam Manager object
-    await connection.RegisterObjectAsync(new Manager(connection, depotConfigStore));
+    await connection.RegisterObjectAsync(new Manager(connection, depotConfigStore, dependenciesStore, displayManager));
 
     // Create a default DBusSteamClient instance
     string path = "/one/playtron/SteamBus/SteamClient0";
 
-    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore);
+    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore, dependenciesStore, displayManager);
     await connection.RegisterObjectAsync(client);
 
     // Register with Playserve
