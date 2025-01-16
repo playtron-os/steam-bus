@@ -433,6 +433,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       option.WorkingDirectory = option.WorkingDirectory.Replace('\\', System.IO.Path.DirectorySeparatorChar);
       if (installedInfo != null)
       {
+        if (!option.Executable.StartsWith("\\"))
+          option.Executable = System.IO.Path.GetFullPath(System.IO.Path.Join(installedInfo.Value.Info.InstalledPath, option.Executable));
+
         option.WorkingDirectory = System.IO.Path.GetFullPath(System.IO.Path.Join(installedInfo.Value.Info.InstalledPath, option.WorkingDirectory));
       }
       options.Add(option);
