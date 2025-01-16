@@ -562,7 +562,7 @@ class SteamSession
       {
         Console.WriteLine("Polling for QR result");
         var result = await qrAuthSession.PollingWaitForResultAsync(abortedToken.Token);
-        Console.WriteLine("Got QR result");
+        Console.WriteLine($"Got QR result, AccountName:{result.AccountName}");
         logonDetails.Username = result.AccountName;
         logonDetails.AccessToken = result.RefreshToken;
         if (result.NewGuardData != null)
@@ -577,18 +577,18 @@ class SteamSession
       catch (TaskCanceledException)
       {
         Console.WriteLine("Login failure, task cancelled");
+        Abort(false);
         return;
       }
       catch (Exception ex)
       {
         Console.Error.WriteLine("Failed to authenticate with Steam when qrAuthSession is not null: " + ex.Message, ex);
         OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+        Abort(false);
         return;
       }
       finally
       {
-        Abort(false);
-
         if (qrAuthSession != null)
         {
           qrAuthSession.ChallengeURLChanged = null;
