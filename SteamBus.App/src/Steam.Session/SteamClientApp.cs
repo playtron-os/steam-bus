@@ -101,7 +101,7 @@ public class SteamClientApp
         using var cts = new CancellationTokenSource(STEAM_START_TIMEOUT);
         var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
 
-        var completedTask = await Task.WhenAny(startingTask.Task, processEndTask, timeoutTask);
+        var completedTask = await Task.WhenAny(startingTask.Task, updateStartedTask.Task, processEndTask, timeoutTask);
 
         if (completedTask == updateStartedTask?.Task)
         {
