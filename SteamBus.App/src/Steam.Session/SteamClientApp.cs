@@ -3,10 +3,11 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Playtron.Plugin;
 using Steam.Config;
+using Xdg.Directories;
 
 public class SteamClientApp
 {
-    public const string STEAM_CLIENT_APP_ID = "STEAM_CLIENT";
+    public const uint STEAM_CLIENT_APP_ID = 769;
 
     private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(15);
@@ -26,6 +27,7 @@ public class SteamClientApp
 
     private bool running;
     private bool updating;
+    private string updatingToVersion = "0";
     private Process? process;
 
     private TaskCompletionSource? updateStartedTask;
@@ -33,10 +35,17 @@ public class SteamClientApp
     private TaskCompletionSource? endingTask;
 
     private DisplayManager displayManager;
+    private DepotConfigStore depotConfigStore;
 
-    public SteamClientApp(DisplayManager displayManager)
+    public SteamClientApp(DisplayManager displayManager, DepotConfigStore depotConfigStore)
     {
         this.displayManager = displayManager;
+        this.depotConfigStore = depotConfigStore;
+    }
+
+    private static string GetManifestDirectory()
+    {
+        return $"{BaseDirectory.DataHome}/steambus/tools/steam";
     }
 
     public async Task Start(string username)
@@ -92,9 +101,9 @@ public class SteamClientApp
         using var cts = new CancellationTokenSource(STEAM_START_TIMEOUT);
         var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
 
-        var completedTask = await Task.WhenAny(startingTask.Task, updateStartedTask.Task, processEndTask, timeoutTask);
+        var completedTask = await Task.WhenAny(startingTask.Task, processEndTask, timeoutTask);
 
-        if (completedTask == updateStartedTask.Task)
+        if (completedTask == updateStartedTask?.Task)
         {
             Console.WriteLine("Steam client started during pre launch hook");
             throw DbusExceptionHelper.ThrowDependencyUpdateRequired();
@@ -103,6 +112,8 @@ public class SteamClientApp
         if (completedTask == timeoutTask)
         {
             Console.WriteLine("Steam client start has timed out");
+            var steamProcesses = Process.GetProcessesByName("steam");
+            await ProcessUtils.TerminateProcessesGracefullyAsync(steamProcesses, TimeSpan.FromSeconds(1));
             throw DbusExceptionHelper.ThrowTimeout();
         }
 
@@ -126,17 +137,19 @@ public class SteamClientApp
         if (string.IsNullOrEmpty(e.Data)) return;
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
 
-        string version = "0";
-
         // Mark steam client as started when it outputs this string
-        if (startingTask != null && e.Data.Contains("BuildCompleteAppOverviewChange"))
+        if (startingTask != null &&
+            (e.Data.Contains("BuildCompleteAppOverviewChange") || e.Data.Contains("steam-runtime-launcher-service is running")))
         {
             // If an update was happening, mark it as complete
             if (updating)
             {
+                depotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
+                depotConfigStore.Save(STEAM_CLIENT_APP_ID);
+
                 Console.WriteLine("Steam client update has completed");
                 updating = false;
-                OnDependencyInstallCompleted?.Invoke(STEAM_CLIENT_APP_ID);
+                OnDependencyInstallCompleted?.Invoke(STEAM_CLIENT_APP_ID.ToString());
             }
 
             Console.WriteLine("Steam client has started and is ready");
@@ -156,11 +169,13 @@ public class SteamClientApp
             var match = Regex.Match(e.Data, @"version\s(\d+),");
             if (match.Success)
             {
-                version = match.Groups[1].Value;
-                Console.WriteLine($"New steam client version: {version}");
+                updatingToVersion = match.Groups[1].Value;
+                Console.WriteLine($"New steam client version: {updatingToVersion}");
             }
             else
                 Console.Error.WriteLine("Failed to parse steam client version");
+
+            return;
         }
 
         // Process steam client update
@@ -182,25 +197,38 @@ public class SteamClientApp
             // If not updating yet, send update start event
             if (!updating)
             {
+                var manifestDir = GetManifestDirectory();
+                Directory.CreateDirectory(manifestDir);
+                depotConfigStore.EnsureEntryExists(manifestDir, STEAM_CLIENT_APP_ID);
+                depotConfigStore.SetNewVersion(STEAM_CLIENT_APP_ID, uint.Parse(updatingToVersion), "public", "linux");
+                depotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
+                depotConfigStore.Save(STEAM_CLIENT_APP_ID);
+
                 Console.WriteLine("Steam client update has started");
                 updating = true;
                 OnDependencyInstallStarted?.Invoke(new InstallStartedDescription
                 {
-                    AppId = STEAM_CLIENT_APP_ID,
-                    Version = version,
+                    AppId = STEAM_CLIENT_APP_ID.ToString(),
+                    Version = updatingToVersion,
                     InstallDirectory = SteamConfig.GetConfigDirectory(),
                     TotalDownloadSize = totalBytesValue,
                     RequiresInternetConnection = true,
+                    Platform = "linux",
                 });
             }
             else
             {
+                depotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, DownloadStage.Downloading);
+                depotConfigStore.SetCurrentSize(STEAM_CLIENT_APP_ID, currentBytesValue);
+                depotConfigStore.SetTotalSize(STEAM_CLIENT_APP_ID, totalBytesValue);
+                depotConfigStore.Save(STEAM_CLIENT_APP_ID);
+
                 Console.WriteLine($"Current steam download at {progress:F2}% ({currentBytesValue} / {totalBytesValue} bytes)");
 
                 // If already updating, send progress
                 OnDependencyInstallProgressed?.Invoke(new InstallProgressedDescription
                 {
-                    AppId = STEAM_CLIENT_APP_ID,
+                    AppId = STEAM_CLIENT_APP_ID.ToString(),
                     Stage = (uint)DownloadStage.Downloading,
                     DownloadedBytes = currentBytesValue,
                     TotalDownloadSize = totalBytesValue,
@@ -229,7 +257,7 @@ public class SteamClientApp
         {
             Console.WriteLine("Steam client update has failed");
             updating = false;
-            OnDependencyInstallFailed?.Invoke((STEAM_CLIENT_APP_ID, DbusErrors.DownloadFailed));
+            OnDependencyInstallFailed?.Invoke((STEAM_CLIENT_APP_ID.ToString(), DbusErrors.DownloadFailed));
         }
 
         running = false;

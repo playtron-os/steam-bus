@@ -105,7 +105,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Creates a new DBusSteamClient instance with the given DBus path
   public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore, DepotConfigStore dependenciesStore, DisplayManager displayManager)
   {
-    steamClientApp = new SteamClientApp(displayManager);
+    steamClientApp = new SteamClientApp(displayManager, dependenciesStore);
 
     // DBus path to this Steam Client instance
     this.Path = path;
@@ -193,6 +193,20 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task<InstalledAppDescription[]> IPluginDependencies.GetInstalledDependenciesAsync()
   {
     return Task.FromResult(dependenciesStore.GetInstalledAppInfo());
+  }
+
+  // Gets info about a single dependency item
+  Task<ProviderItem> IPluginDependencies.GetDependencyItemAsync(string appIdString)
+  {
+    if (ParseAppId(appIdString) is not uint appId || appId != SteamClientApp.STEAM_CLIENT_APP_ID) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    return Task.FromResult(new ProviderItem
+    {
+      id = SteamClientApp.STEAM_CLIENT_APP_ID.ToString(),
+      app_type = (uint)AppType.Tool,
+      name = "Steam",
+      provider = "Steam",
+    });
   }
 
   // Gets a list of the dependencies required to run this plugin which need to be installed
@@ -537,7 +551,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     catch (DBusException exception)
     {
       if (exception.ErrorName == DbusErrors.DependencyUpdateRequired)
-        return [SteamClientApp.STEAM_CLIENT_APP_ID];
+        return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
     }
 
     return [];

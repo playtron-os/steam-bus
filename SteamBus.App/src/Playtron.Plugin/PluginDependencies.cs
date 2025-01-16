@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Tmds.DBus;
 
 namespace Playtron.Plugin;
@@ -13,6 +12,8 @@ public interface IPluginDependencies : IDBusObject
     Task<InstalledAppDescription[]> GetInstalledDependenciesAsync();
     // Gets a list of the dependencies required to run this plugin which need to be installed
     Task<ProviderItem[]> GetRequiredDependenciesAsync();
+    // Gets info about a single dependency item
+    Task<ProviderItem> GetDependencyItemAsync(string appId);
     // Starts installation of all the required dependencies
     Task InstallAllRequiredDependenciesAsync();
 
