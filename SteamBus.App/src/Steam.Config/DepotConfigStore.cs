@@ -304,6 +304,7 @@ public class DepotConfigStore
                 Version = entry.Value["version"].AsString() ?? "",
                 LatestVersion = entry.Value["latestversion"].AsString() ?? "",
                 UpdatePending = entry.Value["updatepending"].AsString() == "1",
+                Os = entry.Value["os"].AsString() ?? ""
             })
             .ToArray();
     }
@@ -327,7 +328,7 @@ public class DepotConfigStore
             Version = manifest["version"].AsString() ?? "",
             LatestVersion = manifest["latestversion"].AsString() ?? "",
             UpdatePending = manifest["updatepending"].AsString() == "1",
-            Os = manifest["os"].AsString()!
+            Os = manifest["os"].AsString() ?? ""
         }, manifest["branch"].AsString() ?? "");
     }
 

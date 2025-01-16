@@ -581,7 +581,6 @@ class SteamSession
       }
       catch (Exception ex)
       {
-        Console.WriteLine($"##### TEST: {ex.StackTrace}, {ex.Data}, {ex.InnerException}");
         Console.Error.WriteLine("Failed to authenticate with Steam when qrAuthSession is not null: " + ex.Message, ex);
         OnAuthError?.Invoke(DbusErrors.AuthenticationError);
         return;
