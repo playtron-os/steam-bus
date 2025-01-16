@@ -60,6 +60,10 @@ public class DisplayManager
                 {
                     Console.WriteLine($"Error running display manager: {ex.Message}");
                     retryCount++;
+
+                    var processes = Process.GetProcessesByName(HeadlessCommand);
+                    await ProcessUtils.TerminateProcessesGracefullyAsync(processes, TimeSpan.FromMilliseconds(100));
+
                     await Task.Delay(RetryTime);
                 }
 

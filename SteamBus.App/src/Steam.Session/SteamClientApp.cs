@@ -19,11 +19,11 @@ public class SteamClientApp
         "-noreactlogin",
     ];
 
-    public event Action<InstallStartedDescription>? OnDependencyInstallStarted;
-    public event Action<InstallProgressedDescription>? OnDependencyInstallProgressed;
-    public event Action<string>? OnDependencyInstallCompleted;
-    public event Action<(string appId, string error)>? OnDependencyInstallFailed;
-    public event Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
+    public Action<InstallStartedDescription>? OnDependencyInstallStarted;
+    public Action<InstallProgressedDescription>? OnDependencyInstallProgressed;
+    public Action<string>? OnDependencyInstallCompleted;
+    public Action<(string appId, string error)>? OnDependencyInstallFailed;
+    public Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
 
     private bool running;
     private bool updating;

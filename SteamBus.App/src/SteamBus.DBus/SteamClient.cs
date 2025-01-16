@@ -98,6 +98,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<ProviderItem[]>? OnLibraryUpdated;
 
   private SteamClientApp steamClientApp;
+  public event Action<InstallStartedDescription>? OnDependencyInstallStarted;
+  public event Action<InstallProgressedDescription>? OnDependencyInstallProgressed;
+  public event Action<string>? OnDependencyInstallCompleted;
+  public event Action<(string appId, string error)>? OnDependencyInstallFailed;
+  public event Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
+
 
   private DepotConfigStore dependenciesStore;
 
@@ -226,27 +232,37 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   Task<IDisposable> IPluginDependencies.WatchInstallStartedAsync(Action<InstallStartedDescription> reply)
   {
-    return SignalWatcher.AddAsync(steamClientApp, nameof(steamClientApp.OnDependencyInstallStarted), reply);
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallStarted), reply);
+    steamClientApp.OnDependencyInstallStarted = OnDependencyInstallStarted;
+    return res;
   }
 
   Task<IDisposable> IPluginDependencies.WatchInstallProgressedAsync(Action<InstallProgressedDescription> reply)
   {
-    return SignalWatcher.AddAsync(steamClientApp, nameof(steamClientApp.OnDependencyInstallProgressed), reply);
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallProgressed), reply);
+    steamClientApp.OnDependencyInstallProgressed = OnDependencyInstallProgressed;
+    return res;
   }
 
   Task<IDisposable> IPluginDependencies.WatchInstallCompletedAsync(Action<string> reply)
   {
-    return SignalWatcher.AddAsync(steamClientApp, nameof(steamClientApp.OnDependencyInstallCompleted), reply);
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallCompleted), reply);
+    steamClientApp.OnDependencyInstallCompleted = OnDependencyInstallCompleted;
+    return res;
   }
 
   Task<IDisposable> IPluginDependencies.WatchInstallFailedAsync(Action<(string appId, string error)> reply)
   {
-    return SignalWatcher.AddAsync(steamClientApp, nameof(steamClientApp.OnDependencyInstallFailed), reply);
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallFailed), reply);
+    steamClientApp.OnDependencyInstallFailed = OnDependencyInstallFailed;
+    return res;
   }
 
   Task<IDisposable> IPluginDependencies.WatchDependencyNewVersionFoundAsync(Action<(string appId, string version)> reply)
   {
-    return SignalWatcher.AddAsync(steamClientApp, nameof(steamClientApp.OnDependencyAppNewVersionFound), reply);
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyAppNewVersionFound), reply);
+    steamClientApp.OnDependencyAppNewVersionFound = OnDependencyAppNewVersionFound;
+    return res;
   }
 
   // --- LibraryProvider Implementation
