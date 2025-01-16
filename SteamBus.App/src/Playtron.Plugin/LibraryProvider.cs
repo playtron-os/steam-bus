@@ -207,7 +207,7 @@ public interface IPluginLibraryProvider : IDBusObject
 
   Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
 
-  Task PreLaunchHookAsync(string appId, bool usingOfflineMode);
+  Task<string[]> PreLaunchHookAsync(string appId, bool usingOfflineMode);
   Task PostLaunchHookAsync(string appId);
 
   // Signals

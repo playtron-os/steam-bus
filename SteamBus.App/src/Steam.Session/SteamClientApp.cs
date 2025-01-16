@@ -1,10 +1,16 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Playtron.Plugin;
+using Steam.Config;
 
 public class SteamClientApp
 {
-    private const string BOOTSTRAP_LOG_START_TEXT = "Startup - updater built";
+    public const string STEAM_CLIENT_APP_ID = "STEAM_CLIENT";
+
+    private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(15);
+
     private const string COMMAND = "steam";
     private static string[] ARGUMENTS = [
         "-srt-logger-opened",
@@ -19,8 +25,10 @@ public class SteamClientApp
     public event Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
 
     private bool running;
+    private bool updating;
     private Process? process;
 
+    private TaskCompletionSource? updateStartedTask;
     private TaskCompletionSource? startingTask;
     private TaskCompletionSource? endingTask;
 
@@ -39,10 +47,11 @@ public class SteamClientApp
 
         running = true;
         startingTask = new();
+        updateStartedTask = new();
 
         // Kill current steam processes if any exist
         var processes = Process.GetProcessesByName("steam");
-        await ProcessUtils.TerminateProcessesGracefully(processes, TimeSpan.FromSeconds(5));
+        await ProcessUtils.TerminateProcessesGracefullyAsync(processes, STEAM_FORCEFULLY_QUIT_TIMEOUT);
 
         var arguments = new List<string>(ARGUMENTS)
         {
@@ -63,7 +72,9 @@ public class SteamClientApp
             UseShellExecute = false,
             CreateNoWindow = true
         };
-        process = new Process { StartInfo = startInfo };
+        startInfo.EnvironmentVariables["DISPLAY"] = display;
+        startInfo.EnvironmentVariables["LANG"] = "C";
+        process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 
         process.OutputDataReceived += OnOutputDataReceived;
         process.ErrorDataReceived += OnErrorDataReceived;
@@ -76,8 +87,32 @@ public class SteamClientApp
         AppDomain.CurrentDomain.ProcessExit += OnMainProcessExit;
         Console.CancelKeyPress += OnMainProcessExit;
 
-        startingTask?.TrySetResult();
-        startingTask = null;
+        var processEndTask = process.WaitForExitAsync();
+
+        using var cts = new CancellationTokenSource(STEAM_START_TIMEOUT);
+        var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
+
+        var completedTask = await Task.WhenAny(startingTask.Task, updateStartedTask.Task, processEndTask, timeoutTask);
+
+        if (completedTask == updateStartedTask.Task)
+        {
+            Console.WriteLine("Steam client started during pre launch hook");
+            throw DbusExceptionHelper.ThrowDependencyUpdateRequired();
+        }
+
+        if (completedTask == timeoutTask)
+        {
+            Console.WriteLine("Steam client start has timed out");
+            throw DbusExceptionHelper.ThrowTimeout();
+        }
+
+        if (completedTask == processEndTask)
+        {
+            Console.WriteLine("Steam client failed to start");
+            throw DbusExceptionHelper.ThrowDependencyError();
+        }
+
+        cts.Cancel();
     }
 
     private void OnOutputDataReceived(object sender, DataReceivedEventArgs e)
@@ -90,6 +125,97 @@ public class SteamClientApp
     {
         if (string.IsNullOrEmpty(e.Data)) return;
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
+
+        string version = "0";
+
+        // Mark steam client as started when it outputs this string
+        if (startingTask != null && e.Data.Contains("BuildCompleteAppOverviewChange"))
+        {
+            // If an update was happening, mark it as complete
+            if (updating)
+            {
+                Console.WriteLine("Steam client update has completed");
+                updating = false;
+                OnDependencyInstallCompleted?.Invoke(STEAM_CLIENT_APP_ID);
+            }
+
+            Console.WriteLine("Steam client has started and is ready");
+
+            startingTask.TrySetResult();
+            startingTask = null;
+
+            // Create new update task in case steam client starts updating in the background
+            updateStartedTask?.TrySetCanceled();
+            updateStartedTask = new();
+            return;
+        }
+
+        // Get version of new steam client update
+        if (e.Data.Contains("Downloaded new manifest"))
+        {
+            var match = Regex.Match(e.Data, @"version\s(\d+),");
+            if (match.Success)
+            {
+                version = match.Groups[1].Value;
+                Console.WriteLine($"New steam client version: {version}");
+            }
+            else
+                Console.Error.WriteLine("Failed to parse steam client version");
+        }
+
+        // Process steam client update
+        if (e.Data.Contains("Downloading update"))
+        {
+            var match = Regex.Match(e.Data, @"\(([\d,]+) of ([\d,]+) (\w+)\)");
+            string currentBytes = match.Success ? match.Groups[1].Value.Replace(",", "") : "0";
+            string totalBytes = match.Success ? match.Groups[2].Value.Replace(",", "") : "0";
+            string unit = match.Success ? match.Groups[3].Value : "KB";
+
+            ulong currentBytesValue = ulong.Parse(currentBytes);
+            ulong totalBytesValue = ulong.Parse(totalBytes);
+
+            currentBytesValue = ConversionUtils.ConvertToBytes(currentBytesValue, unit);
+            totalBytesValue = ConversionUtils.ConvertToBytes(totalBytesValue, unit);
+
+            var progress = totalBytesValue == 0 ? 100 : (double)currentBytesValue * 100 / totalBytesValue;
+
+            // If not updating yet, send update start event
+            if (!updating)
+            {
+                Console.WriteLine("Steam client update has started");
+                updating = true;
+                OnDependencyInstallStarted?.Invoke(new InstallStartedDescription
+                {
+                    AppId = STEAM_CLIENT_APP_ID,
+                    Version = version,
+                    InstallDirectory = SteamConfig.GetConfigDirectory(),
+                    TotalDownloadSize = totalBytesValue,
+                    RequiresInternetConnection = true,
+                });
+            }
+            else
+            {
+                Console.WriteLine($"Current steam download at {progress:F2}% ({currentBytesValue} / {totalBytesValue} bytes)");
+
+                // If already updating, send progress
+                OnDependencyInstallProgressed?.Invoke(new InstallProgressedDescription
+                {
+                    AppId = STEAM_CLIENT_APP_ID,
+                    Stage = (uint)DownloadStage.Downloading,
+                    DownloadedBytes = currentBytesValue,
+                    TotalDownloadSize = totalBytesValue,
+                    Progress = progress,
+                });
+            }
+
+            // Complete update start task
+            if (updateStartedTask != null)
+            {
+                updateStartedTask.TrySetResult();
+                updateStartedTask = null;
+            }
+
+        }
     }
 
     private void OnExited(object? sender, EventArgs e)
@@ -98,9 +224,21 @@ public class SteamClientApp
         AppDomain.CurrentDomain.ProcessExit -= OnMainProcessExit;
         Console.CancelKeyPress -= OnMainProcessExit;
         process = null;
+
+        if (updating)
+        {
+            Console.WriteLine("Steam client update has failed");
+            updating = false;
+            OnDependencyInstallFailed?.Invoke((STEAM_CLIENT_APP_ID, DbusErrors.DownloadFailed));
+        }
+
         running = false;
         endingTask?.TrySetResult();
         endingTask = null;
+        startingTask?.TrySetCanceled();
+        startingTask = null;
+        updateStartedTask?.TrySetCanceled();
+        updateStartedTask = null;
     }
 
     private void OnMainProcessExit(object? sender, EventArgs e)
@@ -112,40 +250,14 @@ public class SteamClientApp
 
     bool ShutdownSteamWithTimeout(TimeSpan timeout)
     {
-        if (!Process.GetProcessesByName("steam").Any()) return true;
-
-        Console.WriteLine("Shutting down steam client");
-
-        try
+        if (RunSteamShutdown() & !WaitForSteamProcessesToExit(timeout))
         {
-            // Start the steam -shutdown command
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "steam",
-                Arguments = "-shutdown",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            using (var shutdownProcess = Process.Start(startInfo))
-            {
-                if (shutdownProcess == null)
-                {
-                    Console.WriteLine("Failed to start the steam -shutdown command.");
-                    return false;
-                }
-            }
-
-            // Wait for Steam processes to terminate
-            return WaitForSteamProcessesToExit(timeout);
+            var processes = Process.GetProcessesByName("steam");
+            ProcessUtils.TerminateProcessesGracefully(processes, TimeSpan.FromSeconds(5));
+            return true;
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error while shutting down Steam: {ex.Message}");
-            return false;
-        }
+
+        return false;
     }
 
     bool WaitForSteamProcessesToExit(TimeSpan timeout)
@@ -165,45 +277,25 @@ public class SteamClientApp
             Thread.Sleep(300);
         }
 
+        Console.WriteLine("Timed out waiting for steam client to exit");
+
         return false; // Timeout reached
     }
 
     public async Task<bool> ShutdownSteamWithTimeoutAsync(TimeSpan timeout)
     {
-        if (!running || !Process.GetProcessesByName("steam").Any()) return true;
+        if (startingTask != null) await startingTask.Task;
+        if (endingTask != null) await endingTask.Task;
+        endingTask = new();
 
-        Console.WriteLine("Shutting down steam client");
-
-        try
+        if (RunSteamShutdown() && !await WaitForSteamProcessesToExitAsync(timeout))
         {
-            // Start the steam -shutdown command
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "steam",
-                Arguments = "-shutdown",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            using (var shutdownProcess = Process.Start(startInfo))
-            {
-                if (shutdownProcess == null)
-                {
-                    Console.WriteLine("Failed to start the steam -shutdown command.");
-                    return false;
-                }
-            }
-
-            // Wait for Steam processes to terminate
-            return await WaitForSteamProcessesToExitAsync(timeout);
+            var processes = Process.GetProcessesByName("steam");
+            await ProcessUtils.TerminateProcessesGracefullyAsync(processes, TimeSpan.FromSeconds(5));
+            return true;
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error while shutting down Steam: {ex.Message}");
-            return false;
-        }
+
+        return false;
     }
 
     async Task<bool> WaitForSteamProcessesToExitAsync(TimeSpan timeout)
@@ -223,6 +315,49 @@ public class SteamClientApp
             await Task.Delay(300);
         }
 
+        Console.WriteLine("Timed out waiting for steam client to exit");
+
         return false; // Timeout reached
+    }
+
+    public bool RunSteamShutdown()
+    {
+        if (!running || !Process.GetProcessesByName("steam").Any()) return false;
+
+        Console.WriteLine("Shutting down steam client");
+
+        try
+        {
+            var display = displayManager.GetHeadlessDisplayId();
+
+            // Start the steam -shutdown command
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "steam",
+                Arguments = "-shutdown",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.EnvironmentVariables["DISPLAY"] = display;
+            startInfo.EnvironmentVariables["LANG"] = "C";
+
+            using (var shutdownProcess = Process.Start(startInfo))
+            {
+                if (shutdownProcess == null)
+                {
+                    Console.WriteLine("Failed to start the steam -shutdown command.");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error while shutting down Steam: {ex.Message}");
+            return false;
+        }
     }
 }

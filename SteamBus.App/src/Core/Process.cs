@@ -38,7 +38,7 @@ public static class ProcessUtils
         }
     }
 
-    public static async Task TerminateProcessesGracefully(Process[] processes, TimeSpan timeout)
+    public static async Task TerminateProcessesGracefullyAsync(Process[] processes, TimeSpan timeout)
     {
         // Try to close gracefully
         Console.WriteLine($"Attempting to gracefully terminate {processes.Length} processes");
@@ -64,7 +64,31 @@ public static class ProcessUtils
                 }
             }
         }
+    }
 
+    public static void TerminateProcessesGracefully(Process[] processes, TimeSpan timeout)
+    {
+        // Try to close gracefully
+        Console.WriteLine($"Attempting to gracefully terminate {processes.Length} processes");
+
+        foreach (var process in processes)
+            ProcessCloseMainWindow(process);
+
+        // Wait for the process to exit within the timeout
+        foreach (var process in processes)
+        {
+            try
+            {
+                process.WaitForExit(timeout);
+                Console.WriteLine($"Process with ID {process.Id} terminated gracefully.");
+            }
+            catch (OperationCanceledException)
+            {
+                process.Kill();
+                process.WaitForExit();
+                Console.WriteLine($"Process with ID {process.Id} killed.");
+            }
+        }
     }
 
     public static void ProcessCloseMainWindow(Process process)

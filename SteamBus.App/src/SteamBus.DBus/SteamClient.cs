@@ -525,11 +525,22 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     await ContentDownloader.PauseInstall();
   }
 
-  async Task IPluginLibraryProvider.PreLaunchHookAsync(string appId, bool wantsOfflineMode)
+  async Task<string[]> IPluginLibraryProvider.PreLaunchHookAsync(string appId, bool wantsOfflineMode)
   {
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     session!.UpdateConfigFiles(wantsOfflineMode);
-    await steamClientApp.Start(session!.GetLogonDetails().Username!);
+
+    try
+    {
+      await steamClientApp.Start(session!.GetLogonDetails().Username!);
+    }
+    catch (DBusException exception)
+    {
+      if (exception.ErrorName == DbusErrors.DependencyUpdateRequired)
+        return [SteamClientApp.STEAM_CLIENT_APP_ID];
+    }
+
+    return [];
   }
 
   async Task IPluginLibraryProvider.PostLaunchHookAsync(string appId)
