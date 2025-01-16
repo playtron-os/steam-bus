@@ -10,7 +10,7 @@ public class SteamClientApp
     public const uint STEAM_CLIENT_APP_ID = 769;
 
     private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(60);
 
     private const string COMMAND = "steam";
     private static string[] ARGUMENTS = [
@@ -249,8 +249,6 @@ public class SteamClientApp
     private void OnExited(object? sender, EventArgs e)
     {
         Console.WriteLine($"Steam client exited with code {process?.ExitCode}");
-        AppDomain.CurrentDomain.ProcessExit -= OnMainProcessExit;
-        Console.CancelKeyPress -= OnMainProcessExit;
         process = null;
 
         if (updating)
@@ -267,6 +265,9 @@ public class SteamClientApp
         startingTask = null;
         updateStartedTask?.TrySetCanceled();
         updateStartedTask = null;
+
+        AppDomain.CurrentDomain.ProcessExit -= OnMainProcessExit;
+        Console.CancelKeyPress -= OnMainProcessExit;
     }
 
     private void OnMainProcessExit(object? sender, EventArgs e)
@@ -320,9 +321,13 @@ public class SteamClientApp
         {
             var processes = Process.GetProcessesByName("steam");
             await ProcessUtils.TerminateProcessesGracefullyAsync(processes, TimeSpan.FromSeconds(5));
+            endingTask?.TrySetResult();
+            endingTask = null;
             return true;
         }
 
+        endingTask?.TrySetResult();
+        endingTask = null;
         return false;
     }
 

@@ -568,6 +568,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       if (exception.ErrorName == DbusErrors.DependencyUpdateRequired)
         return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
+
+      throw;
     }
 
     return [];
