@@ -416,7 +416,7 @@ class ContentDownloader
           Version = version.ToString(),
           InstallDirectory = options.InstallDirectory,
           RequiresInternetConnection = requiresInternetConnection,
-          Platform = os,
+          Os = os,
         };
 
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);

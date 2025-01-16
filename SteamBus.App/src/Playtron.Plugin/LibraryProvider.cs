@@ -41,7 +41,7 @@ public struct InstallStartedDescription
   public string InstallDirectory { get; set; }
   public ulong TotalDownloadSize { get; set; }
   public bool RequiresInternetConnection { get; set; }
-  public string Platform { get; set; }
+  public string Os { get; set; }
 }
 
 public enum DownloadStage

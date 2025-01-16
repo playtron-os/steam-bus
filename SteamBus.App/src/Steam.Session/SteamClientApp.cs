@@ -213,7 +213,7 @@ public class SteamClientApp
                     InstallDirectory = SteamConfig.GetConfigDirectory(),
                     TotalDownloadSize = totalBytesValue,
                     RequiresInternetConnection = true,
-                    Platform = "linux",
+                    Os = "linux",
                 });
             }
             else
