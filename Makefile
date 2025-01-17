@@ -14,6 +14,8 @@
 IMAGE_NAME ?= playtron/steambus-builder
 IMAGE_TAG ?= latest
 
+PREFIX ?= $(HOME)/.local
+
 VERSION := $(shell grep -E '^Version:' SteamBus.App/steam-bus.spec | awk '{print $$2}')
 
 .PHONY: help
@@ -42,11 +44,27 @@ rpm: ## Builds the RPM package
 	cp ./SteamBus.App/steam-bus.spec /tmp/rpmbuild/SPECS/
 	rm -rf /tmp/rpmbuild/SOURCES/SteamBus
 	cp -r ./SteamBus.App/build /tmp/rpmbuild/SOURCES/SteamBus
+	cp ./Makefile /tmp/rpmbuild/SOURCES/SteamBus/
 	cp ./LICENSE /tmp/rpmbuild/SOURCES/SteamBus/
 	cp ./README.md /tmp/rpmbuild/SOURCES/SteamBus/
 	tar --transform 's/^build/SteamBus/' -czf ./SteamBus-$(VERSION).tar.gz -C ./SteamBus.App build
 	rpmbuild --define "_topdir /tmp/rpmbuild" -bb /tmp/rpmbuild/SPECS/steam-bus.spec
 	mv /tmp/rpmbuild/RPMS/x86_64/SteamBus-$(VERSION)-1.fc41.x86_64.rpm .
+
+.PHONY: install
+install: ## Performs install step for RPM
+	# Create target directories
+	mkdir -p $(PREFIX)/usr/share/playtron/plugins/SteamBus
+	mkdir -p $(PREFIX)/usr/share/licenses/SteamBus
+	mkdir -p $(PREFIX)/usr/share/doc/SteamBus
+	mkdir -p $(PREFIX)/usr/bin
+
+	# Copy files to th$(PREFIX)	cp -r $(SOURCE)/SteamBus/* $(PREFIX)/usr/share/playtron/plugins/SteamBus/
+	cp $(SOURCE)/SteamBus/LICENSE $(PREFIX)/usr/share/licenses/SteamBus/LICENSE
+	cp $(SOURCE)/SteamBus/README.md $(PREFIX)/usr/share/doc/SteamBus/README.md
+
+	# Create a symlink for the executable
+	ln -s ../share/playtron/plugins/SteamBus/SteamBus $(PREFIX)/usr/bin/steam-bus
 
 .PHONY: clean
 clean: ## Remove build artifacts
