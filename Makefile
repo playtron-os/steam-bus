@@ -59,7 +59,8 @@ install: ## Performs install step for RPM
 	mkdir -p $(PREFIX)/share/doc/SteamBus
 	mkdir -p $(PREFIX)/bin
 
-	# Copy files to th$(PREFIX)	cp -r $(SOURCE)/SteamBus/* $(PREFIX)/usr/share/playtron/plugins/SteamBus/
+	# Copy files to the target prefix
+	cp -r $(SOURCE)/SteamBus/* $(PREFIX)/share/playtron/plugins/SteamBus/
 	cp $(SOURCE)/SteamBus/LICENSE $(PREFIX)/share/licenses/SteamBus/LICENSE
 	cp $(SOURCE)/SteamBus/README.md $(PREFIX)/share/doc/SteamBus/README.md
 
