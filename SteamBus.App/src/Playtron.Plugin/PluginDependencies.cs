@@ -2,7 +2,7 @@ using Tmds.DBus;
 
 namespace Playtron.Plugin;
 
-/// Interface definition for a library provider
+/// Interface definition for plugin dependencies that are required by the plugin
 [DBusInterface("one.playtron.plugin.PluginDependencies")]
 public interface IPluginDependencies : IDBusObject
 {
