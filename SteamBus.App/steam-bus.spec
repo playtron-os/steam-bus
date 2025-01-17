@@ -12,7 +12,7 @@ Requires: dotnet-sdk-8.0
 SteamBus app. Provides integration and functionality interfacing with Steam Services.
 
 %install
-make -C %{_sourcedir}/SteamBus install PREFIX=%{buildroot} SOURCE=%{_sourcedir}
+make -C %{_sourcedir}/SteamBus install PREFIX=%{buildroot}%{_prefix} SOURCE=%{_sourcedir}
 
 %files
 %license /usr/share/licenses/SteamBus/LICENSE
