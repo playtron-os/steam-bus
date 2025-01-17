@@ -41,6 +41,7 @@ public struct InstallStartedDescription
   public string InstallDirectory { get; set; }
   public ulong TotalDownloadSize { get; set; }
   public bool RequiresInternetConnection { get; set; }
+  public string Os { get; set; }
 }
 
 public enum DownloadStage
@@ -204,9 +205,13 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<ProviderItem> GetProviderItemAsync(string appId);
   Task<ProviderItem[]> GetProviderItemsAsync();
   Task RefreshAsync();
-  //Task DiskAdded(diskPath); // We could just listen to udisks2 directly
-  //Task DiskRemoved(diskPath);
+
   Task<CloudPathObject[]> GetSavePathPatternsAsync(string appId, string platform);
+
+  // Run necessary pre launch steps and return a list of required dependency ids if any are being updated
+  Task<string[]> PreLaunchHookAsync(string appId, bool usingOfflineMode);
+  // Handles clean up post launch
+  Task PostLaunchHookAsync(string appId);
 
   // Signals
   Task<IDisposable> WatchLibraryUpdatedAsync(Action<ProviderItem[]> reply);

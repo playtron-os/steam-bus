@@ -14,12 +14,16 @@ class Manager : IManager
   public static readonly ObjectPath Path = new ObjectPath("/one/playtron/SteamBus");
   public Connection connection;
   public DepotConfigStore depotConfigStore;
+  public DepotConfigStore dependenciesStore;
+  public DisplayManager displayManager;
 
   // Creates a new manager instance with the given DBus connection
-  public Manager(Connection connection, DepotConfigStore depotConfigStore)
+  public Manager(Connection connection, DepotConfigStore depotConfigStore, DepotConfigStore dependenciesStore, DisplayManager displayManager)
   {
     this.connection = connection;
     this.depotConfigStore = depotConfigStore;
+    this.dependenciesStore = dependenciesStore;
+    this.displayManager = displayManager;
   }
 
   // Create a new Steam Client instance. Returns the DBus path to the created
@@ -28,7 +32,7 @@ class Manager : IManager
   public async Task<string> CreateClientAsync()
   {
     string path = "/one/playtron/SteamBus/SteamClient1";
-    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore);
+    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore, dependenciesStore, displayManager);
 
     // Register the object with DBus
     await this.connection.RegisterObjectAsync(client);

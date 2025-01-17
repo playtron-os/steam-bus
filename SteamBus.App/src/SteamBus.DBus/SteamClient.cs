@@ -53,7 +53,7 @@ public interface IDBusSteamClient : IDBusObject
   //Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 }
 
-class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IUser, IAuthTwoFactorFlow, IAuthQrFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator
+class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IUser, IAuthTwoFactorFlow, IAuthQrFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator, IPluginDependencies
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
@@ -97,15 +97,28 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<string>? OnQrCodeUpdated;
   public event Action<ProviderItem[]>? OnLibraryUpdated;
 
+  private SteamClientApp steamClientApp;
+  public event Action<InstallStartedDescription>? OnDependencyInstallStarted;
+  public event Action<InstallProgressedDescription>? OnDependencyInstallProgressed;
+  public event Action<string>? OnDependencyInstallCompleted;
+  public event Action<(string appId, string error)>? OnDependencyInstallFailed;
+  public event Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
+
+
+  private DepotConfigStore dependenciesStore;
+
 
   // Creates a new DBusSteamClient instance with the given DBus path
-  public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore)
+  public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore, DepotConfigStore dependenciesStore, DisplayManager displayManager)
   {
+    steamClientApp = new SteamClientApp(displayManager, dependenciesStore);
+
     // DBus path to this Steam Client instance
     this.Path = path;
 
     // Depot configure store
     this.depotConfigStore = depotConfigStore;
+    this.dependenciesStore = dependenciesStore;
 
     // Create a steam client config
     var config = SteamConfiguration.Create(builder =>
@@ -178,6 +191,78 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       default:
         throw new NotSupportedException();
     }
+  }
+
+  // --- PluginDependencies Implementation
+
+  // Gets a list of all installed dependencies
+  Task<InstalledAppDescription[]> IPluginDependencies.GetInstalledDependenciesAsync()
+  {
+    return Task.FromResult(dependenciesStore.GetInstalledAppInfo());
+  }
+
+  // Gets info about a single dependency item
+  Task<ProviderItem> IPluginDependencies.GetDependencyItemAsync(string appIdString)
+  {
+    if (ParseAppId(appIdString) is not uint appId || appId != SteamClientApp.STEAM_CLIENT_APP_ID) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    return Task.FromResult(new ProviderItem
+    {
+      id = SteamClientApp.STEAM_CLIENT_APP_ID.ToString(),
+      app_type = (uint)AppType.Tool,
+      name = "Steam",
+      provider = "Steam",
+    });
+  }
+
+  // Gets a list of the dependencies required to run this plugin which need to be installed
+  Task<ProviderItem[]> IPluginDependencies.GetRequiredDependenciesAsync()
+  {
+    // Empty array here since no tool is really required for this plugin
+    // the download for steam client happens async during game launch and not before using the plugin
+    return Task.FromResult<ProviderItem[]>([]);
+  }
+
+  // Starts installation of all the required dependencies
+  Task IPluginDependencies.InstallAllRequiredDependenciesAsync()
+  {
+    // Does nothing for the same reason as GetRequiredDependenciesAsync
+    return Task.CompletedTask;
+  }
+
+  Task<IDisposable> IPluginDependencies.WatchInstallStartedAsync(Action<InstallStartedDescription> reply)
+  {
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallStarted), reply);
+    steamClientApp.OnDependencyInstallStarted = OnDependencyInstallStarted;
+    return res;
+  }
+
+  Task<IDisposable> IPluginDependencies.WatchInstallProgressedAsync(Action<InstallProgressedDescription> reply)
+  {
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallProgressed), reply);
+    steamClientApp.OnDependencyInstallProgressed = OnDependencyInstallProgressed;
+    return res;
+  }
+
+  Task<IDisposable> IPluginDependencies.WatchInstallCompletedAsync(Action<string> reply)
+  {
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallCompleted), reply);
+    steamClientApp.OnDependencyInstallCompleted = OnDependencyInstallCompleted;
+    return res;
+  }
+
+  Task<IDisposable> IPluginDependencies.WatchInstallFailedAsync(Action<(string appId, string error)> reply)
+  {
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyInstallFailed), reply);
+    steamClientApp.OnDependencyInstallFailed = OnDependencyInstallFailed;
+    return res;
+  }
+
+  Task<IDisposable> IPluginDependencies.WatchDependencyNewVersionFoundAsync(Action<(string appId, string version)> reply)
+  {
+    var res = SignalWatcher.AddAsync(this, nameof(OnDependencyAppNewVersionFound), reply);
+    steamClientApp.OnDependencyAppNewVersionFound = OnDependencyAppNewVersionFound;
+    return res;
   }
 
   // --- LibraryProvider Implementation
@@ -348,6 +433,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       option.WorkingDirectory = option.WorkingDirectory.Replace('\\', System.IO.Path.DirectorySeparatorChar);
       if (installedInfo != null)
       {
+        if (!option.Executable.StartsWith("\\"))
+          option.Executable = System.IO.Path.GetFullPath(System.IO.Path.Join(installedInfo.Value.Info.InstalledPath, option.Executable));
+
         option.WorkingDirectory = System.IO.Path.GetFullPath(System.IO.Path.Join(installedInfo.Value.Info.InstalledPath, option.WorkingDirectory));
       }
       options.Add(option);
@@ -468,6 +556,31 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     Console.WriteLine("Pausing current install");
     await ContentDownloader.PauseInstall();
+  }
+
+  async Task<string[]> IPluginLibraryProvider.PreLaunchHookAsync(string appId, bool wantsOfflineMode)
+  {
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    session!.UpdateConfigFiles(wantsOfflineMode);
+
+    try
+    {
+      await steamClientApp.Start(session!.GetLogonDetails().Username!);
+    }
+    catch (DBusException exception)
+    {
+      if (exception.ErrorName == DbusErrors.DependencyUpdateRequired)
+        return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
+
+      throw;
+    }
+
+    return [];
+  }
+
+  async Task IPluginLibraryProvider.PostLaunchHookAsync(string appId)
+  {
+    await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(5));
   }
 
   // InstallStart Signal
@@ -655,6 +768,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         login.Password = null;
         login.AccessToken = authSession.refreshToken;
         login.ShouldRememberPassword = true;
+        login.AccountID = authSession.accountId;
         steamGuardData = authSession.steamGuard;
       }
       else
@@ -845,6 +959,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
   {
     Console.WriteLine("Logged off of Steam: {0}", callback.Result);
+    OnUserPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("Identifier", ""), new KeyValuePair<string, object>("Status", 0)], ["Avatar", "Username", "Identifier", "Status"]));
   }
 
 

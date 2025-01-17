@@ -6,15 +6,18 @@ public class DepotConfigStore
 {
     private const string STORE_FILENAME = ".steambus.manifest";
 
+    private List<string>? folders;
+
     private Dictionary<uint, string> manifestPathMap = [];
     private Dictionary<uint, KeyValue> manifestMap = [];
 
     /// <summary>
     /// Initializes the DepotConfigStore
     /// </summary>
-    static public async Task<DepotConfigStore> CreateAsync()
+    static public async Task<DepotConfigStore> CreateAsync(List<string>? folders = null)
     {
         var store = new DepotConfigStore();
+        store.folders = folders;
         await store.Reload();
         return store;
     }
@@ -25,6 +28,16 @@ public class DepotConfigStore
     /// <returns></returns>
     public async Task Reload()
     {
+        manifestMap.Clear();
+        manifestPathMap.Clear();
+
+        if (folders != null)
+        {
+            foreach (var dir in folders)
+                await ReloadApps(dir);
+            return;
+        }
+
         var libraryFoldersConfig = await LibraryFoldersConfig.CreateAsync();
         var directories = libraryFoldersConfig.GetInstallDirectories();
 
@@ -32,30 +45,33 @@ public class DepotConfigStore
         manifestPathMap.Clear();
 
         foreach (var dir in directories)
+            await ReloadApps(dir);
+    }
+
+    private async Task ReloadApps(string dir)
+    {
+        if (!Directory.Exists(dir))
+            return;
+
+        var appPaths = Directory.EnumerateDirectories(dir);
+
+        foreach (var appPath in appPaths ?? [])
         {
-            if (!Directory.Exists(dir))
-                continue;
+            var manifestPath = Path.Join(appPath, STORE_FILENAME);
 
-            var appPaths = Directory.EnumerateDirectories(dir);
-
-            foreach (var appPath in appPaths ?? [])
+            if (File.Exists(manifestPath))
             {
-                var manifestPath = Path.Join(appPath, STORE_FILENAME);
+                var manifestData = await File.ReadAllTextAsync(manifestPath);
+                if (string.IsNullOrEmpty(manifestData))
+                    continue;
 
-                if (File.Exists(manifestPath))
-                {
-                    var manifestData = await File.ReadAllTextAsync(manifestPath);
-                    if (string.IsNullOrEmpty(manifestData))
-                        continue;
+                var data = KeyValue.LoadFromString(manifestData);
+                if (data == null)
+                    continue;
 
-                    var data = KeyValue.LoadFromString(manifestData);
-                    if (data == null)
-                        continue;
-
-                    var appId = data["appid"].AsUnsignedInteger();
-                    manifestMap.TryAdd(appId, data);
-                    manifestPathMap.TryAdd(appId, manifestPath);
-                }
+                var appId = data["appid"].AsUnsignedInteger();
+                manifestMap.TryAdd(appId, data);
+                manifestPathMap.TryAdd(appId, manifestPath);
             }
         }
 
@@ -288,6 +304,7 @@ public class DepotConfigStore
                 Version = entry.Value["version"].AsString() ?? "",
                 LatestVersion = entry.Value["latestversion"].AsString() ?? "",
                 UpdatePending = entry.Value["updatepending"].AsString() == "1",
+                Os = entry.Value["os"].AsString() ?? ""
             })
             .ToArray();
     }
@@ -311,7 +328,7 @@ public class DepotConfigStore
             Version = manifest["version"].AsString() ?? "",
             LatestVersion = manifest["latestversion"].AsString() ?? "",
             UpdatePending = manifest["updatepending"].AsString() == "1",
-            Os = manifest["os"].AsString()!
+            Os = manifest["os"].AsString() ?? ""
         }, manifest["branch"].AsString() ?? "");
     }
 

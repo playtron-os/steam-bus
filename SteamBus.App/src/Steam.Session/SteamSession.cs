@@ -16,6 +16,7 @@ using SteamKit2.Authentication;
 using SteamKit2.CDN;
 using SteamKit2.Internal;
 using Playtron.Plugin;
+using Steam.Config;
 
 namespace Steam.Session;
 
@@ -74,6 +75,9 @@ class SteamSession
   public Action<(string appId, string version)>? OnAppNewVersionFound;
   public Action<string>? OnAuthError;
 
+  private LocalConfig localConfig;
+  private LoginUsersConfig loginUsersConfig;
+
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
@@ -81,6 +85,8 @@ class SteamSession
     this.authenticator = authenticator;
     this.SteamGuardData = steamGuardData;
     this.depotConfigStore = depotConfigStore;
+    this.localConfig = new LocalConfig(LocalConfig.DefaultPath());
+    this.loginUsersConfig = new LoginUsersConfig(LoginUsersConfig.DefaultPath());
 
     var clientConfiguration = SteamConfiguration.Create(config =>
         config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
@@ -556,7 +562,7 @@ class SteamSession
       {
         Console.WriteLine("Polling for QR result");
         var result = await qrAuthSession.PollingWaitForResultAsync(abortedToken.Token);
-        Console.WriteLine("Got QR result");
+        Console.WriteLine($"Got QR result, AccountName:{result.AccountName}");
         logonDetails.Username = result.AccountName;
         logonDetails.AccessToken = result.RefreshToken;
         if (result.NewGuardData != null)
@@ -571,19 +577,18 @@ class SteamSession
       catch (TaskCanceledException)
       {
         Console.WriteLine("Login failure, task cancelled");
+        Abort(false);
         return;
       }
       catch (Exception ex)
       {
-        Console.WriteLine($"##### TEST: {ex.StackTrace}, {ex.Data}, {ex.InnerException}");
         Console.Error.WriteLine("Failed to authenticate with Steam when qrAuthSession is not null: " + ex.Message, ex);
         OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+        Abort(false);
         return;
       }
       finally
       {
-        Abort(false);
-
         if (qrAuthSession != null)
         {
           qrAuthSession.ChallengeURLChanged = null;
@@ -765,6 +770,12 @@ class SteamSession
 
     this.seq++;
     IsLoggedOn = true;
+
+    if (logonDetails?.Username != null && logonDetails?.AccessToken != null)
+    {
+      localConfig.SetRefreshToken(logonDetails.Username, logonDetails.AccessToken);
+      localConfig.Save();
+    }
   }
 
 
@@ -813,49 +824,56 @@ class SteamSession
       }
     }
     Console.WriteLine("Making requests for {0} apps", requests.Count);
-    var result = await steamApps!.PICSGetProductInfo(requests, []);
-    if (result == null)
+    try
     {
-      // TODO: Handle error
-      Console.WriteLine("Failed to get apps");
-      return;
-    }
-
-    if (result.Complete)
-    {
-      if (result.Results == null || result.Results.Count == 0)
+      var result = await steamApps!.PICSGetProductInfo(requests, []);
+      if (result == null)
       {
-        Console.WriteLine("No results retrieved");
+        // TODO: Handle error
+        Console.WriteLine("Failed to get apps");
         return;
       }
 
-      foreach (var productInfo in result.Results)
+      if (result.Complete)
       {
-        foreach (var entry in productInfo.Apps)
+        if (result.Results == null || result.Results.Count == 0)
         {
-          AppInfo[entry.Key] = entry.Value;
+          Console.WriteLine("No results retrieved");
+          return;
+        }
 
-          if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
+        foreach (var productInfo in result.Results)
+        {
+          foreach (var entry in productInfo.Apps)
           {
-            var (version, branch) = item;
-            var newVersion = GetSteam3AppBuildNumber(entry.Key, branch);
+            AppInfo[entry.Key] = entry.Value;
 
-            if (version != newVersion.ToString())
+            if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
             {
-              Console.WriteLine($"Found new version for appid:{entry.Key}, version:{newVersion}, installedVersion:{version}");
+              var (version, branch) = item;
+              var newVersion = GetSteam3AppBuildNumber(entry.Key, branch);
 
-              depotConfigStore.SetUpdatePending(entry.Key, newVersion.ToString());
-              depotConfigStore.Save(entry.Key);
+              if (version != newVersion.ToString())
+              {
+                Console.WriteLine($"Found new version for appid:{entry.Key}, version:{newVersion}, installedVersion:{version}");
 
-              OnAppNewVersionFound?.Invoke((entry.Key.ToString(), newVersion.ToString()));
+                depotConfigStore.SetUpdatePending(entry.Key, newVersion.ToString());
+                depotConfigStore.Save(entry.Key);
+
+                OnAppNewVersionFound?.Invoke((entry.Key.ToString(), newVersion.ToString()));
+              }
             }
           }
         }
       }
+      else if (result.Failed)
+      {
+        Console.WriteLine("Some requests failed");
+      }
     }
-    else if (result.Failed)
+    catch (Exception exception)
     {
-      Console.WriteLine("Some requests failed");
+      Console.Error.WriteLine($"Error when getting product list for licenses, ex: {exception.Message}", exception);
     }
     Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
     isLoadingLibrary = false;
@@ -875,9 +893,30 @@ class SteamSession
   {
     Console.WriteLine($"Account persona name: {callback.PersonaName}");
     this.PersonaName = callback.PersonaName;
+    SaveLoginUsersConfig();
+
     // We need to explicitly make a request for our user to obtain avatar
     // I didn't find any other way
-    steamFriends.RequestFriendInfo([SteamUser.SteamID]);
+    if (steamFriends != null && SteamUser?.SteamID != null)
+      steamFriends.RequestFriendInfo([SteamUser.SteamID]);
+  }
+
+  private void SaveLoginUsersConfig()
+  {
+    if (logonDetails?.Username != null && logonDetails?.AccessToken != null)
+    {
+      var sub = Jwt.GetSub(logonDetails.AccessToken);
+
+      if (sub != null)
+      {
+        loginUsersConfig.SetUser(sub, logonDetails.Username, PersonaName);
+        loginUsersConfig.Save();
+      }
+      else
+      {
+        Console.Error.WriteLine("Error parsing Sub out of access token");
+      }
+    }
   }
 
   private void OnPersonaState(SteamFriends.PersonaStateCallback callback)
@@ -986,5 +1025,18 @@ class SteamSession
     };
     var section_kv = appinfo.Children.Where(c => c.Name == section_key).FirstOrDefault();
     return section_kv;
+  }
+
+  public void UpdateConfigFiles(bool wantsOfflineMode)
+  {
+    if (logonDetails?.Username != null && logonDetails?.AccessToken != null)
+    {
+      var sub = Jwt.GetSub(logonDetails.AccessToken);
+
+      if (sub != null)
+        loginUsersConfig.UpdateConfigFiles(sub, logonDetails.AccountID.ToString(), wantsOfflineMode);
+      else
+        Console.Error.WriteLine("Error parsing Sub out of access token");
+    }
   }
 }

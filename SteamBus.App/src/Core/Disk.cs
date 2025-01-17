@@ -12,17 +12,25 @@ static class Disk
     public static async Task<string> GetMountPointFromProc(string device)
     {
         var lines = await File.ReadAllLinesAsync("/proc/mounts");
+        string selectedMountPoint = "";
 
         foreach (var line in lines ?? [])
         {
             var parts = line.Split(' ');
+
+            if (parts.Length < 2)
+                continue;
+
             if (parts[0] == device)
             {
-                return parts[1];
+                var mountPoint = parts[1];
+
+                if (!mountPoint.StartsWith("/sysroot") && !mountPoint.EndsWith(".btrfs") && mountPoint.Length > selectedMountPoint.Length)
+                    selectedMountPoint = mountPoint;
             }
         }
 
-        return string.Empty;
+        return selectedMountPoint;
     }
 
     public static async Task<string> GetMountPointFromProc()
