@@ -31,7 +31,7 @@ plugins:
   # Execute commands to build the project
   - - "@semantic-release/exec"
     - shell: true
-      prepareCmd: "make in-docker TARGET=build-release && make in-docker TARGET=rpm"
+      prepareCmd: "make in-docker TARGET='build-release rpm'"
       publishCmd: "echo '${nextRelease.version}' > .version.txt"
 
   # Commit the following changes to git after other plugins have run
