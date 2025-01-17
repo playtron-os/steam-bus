@@ -54,17 +54,17 @@ rpm: ## Builds the RPM package
 .PHONY: install
 install: ## Performs install step for RPM
 	# Create target directories
-	mkdir -p $(PREFIX)/usr/share/playtron/plugins/SteamBus
-	mkdir -p $(PREFIX)/usr/share/licenses/SteamBus
-	mkdir -p $(PREFIX)/usr/share/doc/SteamBus
-	mkdir -p $(PREFIX)/usr/bin
+	mkdir -p $(PREFIX)/share/playtron/plugins/SteamBus
+	mkdir -p $(PREFIX)/share/licenses/SteamBus
+	mkdir -p $(PREFIX)/share/doc/SteamBus
+	mkdir -p $(PREFIX)/bin
 
 	# Copy files to th$(PREFIX)	cp -r $(SOURCE)/SteamBus/* $(PREFIX)/usr/share/playtron/plugins/SteamBus/
-	cp $(SOURCE)/SteamBus/LICENSE $(PREFIX)/usr/share/licenses/SteamBus/LICENSE
-	cp $(SOURCE)/SteamBus/README.md $(PREFIX)/usr/share/doc/SteamBus/README.md
+	cp $(SOURCE)/SteamBus/LICENSE $(PREFIX)/share/licenses/SteamBus/LICENSE
+	cp $(SOURCE)/SteamBus/README.md $(PREFIX)/share/doc/SteamBus/README.md
 
 	# Create a symlink for the executable
-	ln -s ../share/playtron/plugins/SteamBus/SteamBus $(PREFIX)/usr/bin/steam-bus
+	ln -s ../share/playtron/plugins/SteamBus/SteamBus $(PREFIX)/bin/steam-bus
 
 .PHONY: clean
 clean: ## Remove build artifacts
