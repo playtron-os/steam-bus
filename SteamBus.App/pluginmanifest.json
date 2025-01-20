@@ -1,0 +1,4 @@
+{
+    "id": "steam",
+    "startup_command": "steam-bus"
+}
