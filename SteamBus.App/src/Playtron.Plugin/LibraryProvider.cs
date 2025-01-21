@@ -223,4 +223,5 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<IDisposable> WatchMoveItemProgressedAsync(Action<(string appId, double progress)> reply);
   Task<IDisposable> WatchInstalledAppsUpdatedAsync(Action reply);
   Task<IDisposable> WatchLaunchReadyAsync(Action<string> reply);
+  Task<IDisposable> WatchLaunchErrorAsync(Action<(string appId, string error)> reply);
 }

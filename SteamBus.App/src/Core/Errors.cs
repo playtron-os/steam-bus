@@ -18,6 +18,7 @@ public static class DbusErrors
     public const string DependencyUpdateRequired = "one.playtron.Error.DependencyUpdateRequired";
     public const string Timeout = "one.playtron.Error.Timeout";
     public const string DependencyError = "one.playtron.Error.DependencyError";
+    public const string PreLaunchError = "one.playtron.Error.PreLaunchError";
 }
 
 public static class DbusExceptionHelper

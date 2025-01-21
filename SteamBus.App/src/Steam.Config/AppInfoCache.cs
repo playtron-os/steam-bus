@@ -37,7 +37,13 @@ public class AppInfoCache
                 var finalPath = GetFinalPath(appId);
 
                 if (data == null)
-                    File.Delete(finalPath);
+                {
+                    try
+                    {
+                        File.Delete(finalPath);
+                    }
+                    catch (Exception) { }
+                }
                 else
                 {
                     Directory.CreateDirectory(path);
