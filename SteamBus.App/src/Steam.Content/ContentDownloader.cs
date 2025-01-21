@@ -480,7 +480,7 @@ class ContentDownloader
   async Task<bool> AccountHasAccess(uint depotId)
   {
     var steamUser = this.session.SteamClient.GetHandler<SteamUser>();
-    if (steamUser == null || steamUser.SteamID == null || (this.session.Licenses == null && steamUser.SteamID.AccountType != EAccountType.AnonUser))
+    if (steamUser == null || steamUser.SteamID == null || (this.session.PackageIDs == null && steamUser.SteamID.AccountType != EAccountType.AnonUser))
     {
       return false;
     }
@@ -492,7 +492,7 @@ class ContentDownloader
     }
     else
     {
-      licenseQuery = this.session.Licenses?.Select(x => x.PackageID).Distinct() ?? [];
+      licenseQuery = this.session.PackageIDs?.Distinct() ?? [];
     }
 
     await this.session.RequestPackageInfo(licenseQuery);

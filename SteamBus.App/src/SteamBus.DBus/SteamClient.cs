@@ -69,9 +69,6 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   private string authFile = "auth.json";
   private string cacheDir = "cache";
-  private Dictionary<uint, SteamApps.LicenseListCallback.License> licenses = new Dictionary<uint, SteamApps.LicenseListCallback.License>();
-  private Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> packages = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
-  private Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> apps = new Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo>();
 
   private PlaytronPluginProperties pluginInfo = new PlaytronPluginProperties();
 
@@ -103,13 +100,18 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<string>? OnDependencyInstallCompleted;
   public event Action<(string appId, string error)>? OnDependencyInstallFailed;
   public event Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
+  public event Action<string>? OnLaunchReady;
 
 
   private DepotConfigStore dependenciesStore;
 
+  private bool isOnline = false;
+
+  private TaskCompletionSource? _fetchingSteamClientData;
+
 
   // Creates a new DBusSteamClient instance with the given DBus path
-  public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore, DepotConfigStore dependenciesStore, DisplayManager displayManager)
+  public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore, DepotConfigStore dependenciesStore, DisplayManager displayManager, INetworkManager networkManager)
   {
     steamClientApp = new SteamClientApp(displayManager, dependenciesStore);
 
@@ -160,8 +162,66 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Console.WriteLine($"Cache directory does not exist at '{cacheDir}'. Creating it.");
       Directory.CreateDirectory(this.cacheDir);
     }
+
+    networkManager.WatchPropertiesAsync((changes) =>
+    {
+      try
+      {
+        foreach (var (key, value) in changes.Changed)
+        {
+          if (key == "Connectivity" && value != null)
+          {
+            uint valueUint = (uint)value;
+            NmConnectivityStatus connectivity = (NmConnectivityStatus)valueUint;
+            var wasOnline = isOnline;
+            isOnline = connectivity == NmConnectivityStatus.Full;
+
+            if (wasOnline != isOnline)
+            {
+              Console.WriteLine($"Network online status changed: {isOnline}");
+
+              if (isOnline)
+                _ = Task.Run(OnOnline);
+            }
+          }
+        }
+      }
+      catch (Exception exception)
+      {
+        Console.Error.WriteLine($"Error occurred when listening to network manager property changes, err:{exception}");
+      }
+    });
+
+    _ = Task.Run(async () =>
+    {
+      try
+      {
+        var connectivity = (NmConnectivityStatus)await networkManager.GetAsync<uint>("Connectivity");
+        isOnline = connectivity == NmConnectivityStatus.Full;
+        Console.WriteLine($"Initial network online status: {isOnline}");
+      }
+      catch (Exception exception)
+      {
+        Console.Error.WriteLine($"Error occurred when getting initial network online status, err:{exception}");
+      }
+    });
   }
 
+  private async Task OnOnline()
+  {
+    if (this.session == null) return;
+
+    if (this.session.IsPendingLogin)
+    {
+      Console.WriteLine("Previous session exists, trying to re-login to steam");
+
+      await this.session.Login();
+      if (this.session.IsLoggedOn)
+      {
+        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+      }
+    }
+  }
 
   // Decrypt the given base64 encoded string using our private key
   private string Decrypt(string base64EncodedString)
@@ -218,15 +278,60 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Gets a list of the dependencies required to run this plugin which need to be installed
   Task<ProviderItem[]> IPluginDependencies.GetRequiredDependenciesAsync()
   {
-    // Empty array here since no tool is really required for this plugin
-    // the download for steam client happens async during game launch and not before using the plugin
-    return Task.FromResult<ProviderItem[]>([]);
+    return Task.FromResult<ProviderItem[]>([
+      new ProviderItem
+      {
+        id = SteamClientApp.STEAM_CLIENT_APP_ID.ToString(),
+        app_type = (uint)AppType.Tool,
+        name = "Steam",
+        provider = "Steam",
+      }
+    ]);
   }
 
   // Starts installation of all the required dependencies
   Task IPluginDependencies.InstallAllRequiredDependenciesAsync()
   {
-    // Does nothing for the same reason as GetRequiredDependenciesAsync
+    steamClientApp.OnUpdateStarted();
+
+    _ = Task.Run(async () =>
+    {
+      Console.WriteLine("Triggering steam client update");
+
+      try
+      {
+        try
+        {
+          await steamClientApp.Start("", this.session?.GetLogonDetails()?.Username ?? "", false);
+
+          if (!steamClientApp.updating)
+          {
+            Console.WriteLine("No update is needed for steam client");
+            OnDependencyInstallCompleted?.Invoke(SteamClientApp.STEAM_CLIENT_APP_ID.ToString());
+            steamClientApp.RunSteamShutdown();
+            return;
+          }
+        }
+        catch (DBusException exception)
+        {
+          if (exception.ErrorName != DbusErrors.DependencyUpdateRequired)
+            throw;
+        }
+
+        if (steamClientApp.updateEndedTask != null) await steamClientApp.updateEndedTask.Task;
+
+        Console.WriteLine("Steam client update finished successfully");
+      }
+      catch (Exception exception)
+      {
+        Console.Error.WriteLine($"Error occurred when performing steam client update, err:{exception}");
+      }
+      finally
+      {
+        steamClientApp.RunSteamShutdown();
+      }
+    });
+
     return Task.CompletedTask;
   }
 
@@ -325,23 +430,17 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appIdString)
   {
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     await this.session!.WaitForLibrary();
-    if (!this.session.AppInfo.TryGetValue(appId, out var appinfo)) throw DbusExceptionHelper.ThrowInvalidAppId();
-    return SteamSession.GetProviderItem(appIdString, appinfo.KeyValues);
+    if (!this.session.ProviderItemMap.TryGetValue(appId, out var providerItem)) throw DbusExceptionHelper.ThrowInvalidAppId();
+    return providerItem;
   }
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
   {
     if (this.session is null) return [];
     await this.session.WaitForLibrary();
-    List<ProviderItem> providerItems = new(session.AppInfo.Count);
-    foreach (var app in this.session.AppInfo)
-    {
-      providerItems.Add(SteamSession.GetProviderItem(app.Key.ToString(), app.Value.KeyValues));
-    }
-    return providerItems.ToArray();
+    return this.session.GetProviderItems().ToArray();
   }
 
   Task IPluginLibraryProvider.RefreshAsync()
@@ -391,7 +490,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
-    await session!.RequestAppInfo(appId, false);
+    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+
+    if (!session!.IsPendingLogin)
+      await session!.RequestAppInfo(appId, false);
 
     var info = session!.GetSteam3AppSection(appId, EAppInfoSection.Config) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
     var installedInfo = depotConfigStore.GetInstalledAppInfo(appId);
@@ -560,12 +662,20 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<string[]> IPluginLibraryProvider.PreLaunchHookAsync(string appId, bool wantsOfflineMode)
   {
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (steamClientApp.updating)
+      return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
+
+    if (_fetchingSteamClientData != null) await _fetchingSteamClientData.Task;
+
+    if (!wantsOfflineMode && !isOnline)
+      wantsOfflineMode = true;
+
     session!.UpdateConfigFiles(wantsOfflineMode);
 
     try
     {
-      await steamClientApp.Start(session!.GetLogonDetails().Username!);
+      await steamClientApp.Start(appId, session!.GetLogonDetails().Username!, wantsOfflineMode);
     }
     catch (DBusException exception)
     {
@@ -578,9 +688,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return [];
   }
 
-  async Task IPluginLibraryProvider.PostLaunchHookAsync(string appId)
+  Task IPluginLibraryProvider.PostLaunchHookAsync(string appId)
   {
-    await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(5));
+    _ = Task.Run(async () => await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(8)));
+    return Task.CompletedTask;
   }
 
   // InstallStart Signal
@@ -630,6 +741,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(InstalledAppsUpdated), reply);
   }
 
+  // LaunchReady Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchLaunchReadyAsync(Action<string> reply)
+  {
+    var res = SignalWatcher.AddAsync(this, nameof(OnLaunchReady), reply);
+    steamClientApp.OnLaunchReady = OnLaunchReady;
+    return res;
+  }
+
   public void EmitInstalledAppsUpdated()
   {
     InstalledAppsUpdated?.Invoke();
@@ -658,7 +777,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   int GetCurrentAuthStatus()
   {
     var isLoggedOn = this.session?.IsLoggedOn ?? false;
-    int status = isLoggedOn ? 2 : 0;
+    var IsPendingLogin = this.session?.IsPendingLogin ?? false;
+    int status = isLoggedOn || IsPendingLogin ? 2 : 0;
     if (this.needsDeviceConfirmation || (this.tfaCodeTask != null))
     {
       status = 1;
@@ -784,12 +904,32 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     needsDeviceConfirmation = false;
     this.session?.Disconnect();
     this.session = InitSession(login, steamGuardData);
-    await this.session.Login();
-    if (this.session.IsLoggedOn)
+
+    if (isOnline)
     {
-      OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+      await this.session.Login();
+      if (this.session.IsLoggedOn)
+        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+
+      return this.session.IsLoggedOn;
     }
-    return this.session.IsLoggedOn;
+
+    var isValid = login.AccessToken != null && !Jwt.IsExpired(login.AccessToken);
+
+    if (isValid)
+    {
+      Console.WriteLine("No internet connection when changing user, skipping login");
+      this.session.IsPendingLogin = true;
+      OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+      return true;
+    }
+
+    Console.WriteLine("Session has expired, disconnecting");
+    this.session?.Disconnect();
+    this.session = null;
+    OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+
+    return false;
   }
 
   // Log out of the given account
@@ -954,6 +1094,43 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     needsDeviceConfirmation = false;
     tfaCodeTask = null;
     OnUserPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("Identifier", user), new KeyValuePair<string, object>("Status", 2)], ["Avatar", "Username"]));
+
+    _ = Task.Run(async () =>
+    {
+      if (loginDetails.Username == null || steamClientApp.running) return;
+
+      _fetchingSteamClientData = new();
+      Console.WriteLine("Logging in with steam client to fetch latest data");
+
+      try
+      {
+        await steamClientApp.Start("", loginDetails.Username, false);
+      }
+      catch (Exception exception)
+      {
+        Console.Error.WriteLine($"Failed starting steam client to fetch data post login, err:{exception}");
+      }
+      finally
+      {
+        try
+        {
+          if (steamClientApp.updateEndedTask != null) await steamClientApp.updateEndedTask.Task;
+        }
+        catch (Exception) { }
+
+        try
+        {
+          if (steamClientApp.readyTask != null) await steamClientApp.readyTask.Task;
+        }
+        catch (Exception) { }
+
+        await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(5));
+        Console.WriteLine("Shut down steam client after fetching data");
+      }
+
+      _fetchingSteamClientData?.TrySetResult();
+      _fetchingSteamClientData = null;
+    });
   }
 
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
@@ -1129,7 +1306,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     uint appidParsed = uint.Parse(appid);
     Console.WriteLine("Getting paths for {0}", appid);
-    var appInfo = this.apps[appidParsed];
+    var appInfo = this.session!.AppInfo[appidParsed];
     if (appInfo == null)
     {
       Console.WriteLine("Unable to load appInfo");

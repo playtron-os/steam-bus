@@ -18,6 +18,13 @@ class SteamBus
     string? busAddress = Address.Session;
     if (busAddress is null)
     {
+      Console.Write("Can not determine session bus address");
+      return;
+    }
+
+    string? systemBusAddress = Address.System;
+    if (systemBusAddress is null)
+    {
       Console.Write("Can not determine system bus address");
       return;
     }
@@ -27,16 +34,26 @@ class SteamBus
     await connection.ConnectAsync();
     Console.WriteLine("Connected to user session bus.");
 
+    // Connect to the system bus
+    using Connection systemConnection = new Connection(systemBusAddress);
+    await systemConnection.ConnectAsync();
+    Console.WriteLine("Connected to system bus.");
+
     await connection.RegisterServiceAsync("one.playtron.SteamBus");
     Console.WriteLine("Registered address: one.playtron.SteamBus");
 
+    var networkManager = systemConnection.CreateProxy<INetworkManager>(
+      "org.freedesktop.NetworkManager",
+      "/org/freedesktop/NetworkManager"
+    );
+
     // Register the Steam Manager object
-    await connection.RegisterObjectAsync(new Manager(connection, depotConfigStore, dependenciesStore, displayManager));
+    await connection.RegisterObjectAsync(new Manager(connection, depotConfigStore, dependenciesStore, displayManager, networkManager));
 
     // Create a default DBusSteamClient instance
     string path = "/one/playtron/SteamBus/SteamClient0";
 
-    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore, dependenciesStore, displayManager);
+    DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore, dependenciesStore, displayManager, networkManager);
     await connection.RegisterObjectAsync(client);
 
     // Register with Playserve

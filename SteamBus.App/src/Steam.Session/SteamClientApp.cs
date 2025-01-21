@@ -9,14 +9,13 @@ public class SteamClientApp
 {
     public const uint STEAM_CLIENT_APP_ID = 769;
 
-    private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(60);
 
     private const string COMMAND = "steam";
     private static string[] ARGUMENTS = [
         "-srt-logger-opened",
-        "-silent",
-        "-noreactlogin",
+        "-silent"
     ];
 
     public Action<InstallStartedDescription>? OnDependencyInstallStarted;
@@ -24,18 +23,23 @@ public class SteamClientApp
     public Action<string>? OnDependencyInstallCompleted;
     public Action<(string appId, string error)>? OnDependencyInstallFailed;
     public Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
+    public Action<string>? OnLaunchReady;
 
-    private bool running;
-    private bool updating;
+    public bool running { get; private set; }
+    public bool updating { get; private set; }
     private string updatingToVersion = "0";
     private Process? process;
 
     private TaskCompletionSource? updateStartedTask;
+    public TaskCompletionSource? updateEndedTask { get; private set; }
     private TaskCompletionSource? startingTask;
+    public TaskCompletionSource? readyTask { get; private set; }
     private TaskCompletionSource? endingTask;
 
     private DisplayManager displayManager;
     private DepotConfigStore depotConfigStore;
+
+    private string forAppId = "";
 
     public SteamClientApp(DisplayManager displayManager, DepotConfigStore depotConfigStore)
     {
@@ -48,25 +52,37 @@ public class SteamClientApp
         return $"{BaseDirectory.DataHome}/steambus/tools/steam";
     }
 
-    public async Task Start(string username)
+    public async Task Start(string forAppId, string username, bool offlineMode)
     {
+        this.forAppId = forAppId;
+
         if (startingTask != null) await startingTask.Task;
         if (endingTask != null) await endingTask.Task;
         if (running) return;
 
-        running = true;
         startingTask = new();
         updateStartedTask = new();
+        updateEndedTask = new();
 
         // Kill current steam processes if any exist
         var processes = Process.GetProcessesByName("steam");
-        await ProcessUtils.TerminateProcessesGracefullyAsync(processes, STEAM_FORCEFULLY_QUIT_TIMEOUT);
-
-        var arguments = new List<string>(ARGUMENTS)
+        if (processes.Length > 0)
         {
-          "-login",
-          username
-        };
+            endingTask = new();
+            await ProcessUtils.TerminateProcessesGracefullyAsync(processes, STEAM_FORCEFULLY_QUIT_TIMEOUT);
+            if (endingTask != null) await Task.WhenAny([endingTask.Task, Task.Delay(1000)]);
+        }
+
+        running = true;
+        readyTask = new();
+
+        var arguments = new List<string>(ARGUMENTS);
+
+        if (!offlineMode)
+        {
+            arguments.Add("-login");
+            arguments.Add(username);
+        }
 
         var display = displayManager.GetHeadlessDisplayId();
 
@@ -137,9 +153,10 @@ public class SteamClientApp
         if (string.IsNullOrEmpty(e.Data)) return;
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
 
+        var hasRunningString = e.Data.Contains("BuildCompleteAppOverviewChange") || e.Data.Contains("steam-runtime-launcher-service is running");
+
         // Mark steam client as started when it outputs this string
-        if (startingTask != null &&
-            (e.Data.Contains("BuildCompleteAppOverviewChange") || e.Data.Contains("steam-runtime-launcher-service is running")))
+        if (startingTask != null && (hasRunningString || e.Data.Contains("Starting steamwebhelper")))
         {
             // If an update was happening, mark it as complete
             if (updating)
@@ -150,9 +167,12 @@ public class SteamClientApp
                 Console.WriteLine("Steam client update has completed");
                 updating = false;
                 OnDependencyInstallCompleted?.Invoke(STEAM_CLIENT_APP_ID.ToString());
+
+                updateEndedTask?.TrySetResult();
+                updateEndedTask = null;
             }
 
-            Console.WriteLine("Steam client has started and is ready");
+            Console.WriteLine("Steam client has started");
 
             startingTask.TrySetResult();
             startingTask = null;
@@ -160,6 +180,17 @@ public class SteamClientApp
             // Create new update task in case steam client starts updating in the background
             updateStartedTask?.TrySetCanceled();
             updateStartedTask = new();
+            updateEndedTask?.TrySetCanceled();
+            updateEndedTask = null;
+        }
+
+        // Mark steam client as running
+        if (hasRunningString && readyTask != null)
+        {
+            readyTask.TrySetResult();
+            readyTask = null;
+            Console.WriteLine("Steam client is ready");
+            OnLaunchReady?.Invoke(forAppId);
             return;
         }
 
@@ -206,15 +237,7 @@ public class SteamClientApp
 
                 Console.WriteLine("Steam client update has started");
                 updating = true;
-                OnDependencyInstallStarted?.Invoke(new InstallStartedDescription
-                {
-                    AppId = STEAM_CLIENT_APP_ID.ToString(),
-                    Version = updatingToVersion,
-                    InstallDirectory = SteamConfig.GetConfigDirectory(),
-                    TotalDownloadSize = totalBytesValue,
-                    RequiresInternetConnection = true,
-                    Os = "linux",
-                });
+                OnUpdateStarted(updatingToVersion, totalBytesValue);
             }
             else
             {
@@ -243,7 +266,29 @@ public class SteamClientApp
                 updateStartedTask = null;
             }
 
+            if (updateEndedTask == null)
+                updateEndedTask = new();
         }
+    }
+
+    public void OnUpdateStarted(string? version = null, ulong? totalBytes = null)
+    {
+        if (version == null || totalBytes == null)
+        {
+            var info = depotConfigStore.GetInstalledAppInfo(STEAM_CLIENT_APP_ID)?.Info;
+            version ??= info?.Version ?? "0";
+            totalBytes ??= info?.TotalDownloadSize ?? 0;
+        }
+
+        OnDependencyInstallStarted?.Invoke(new InstallStartedDescription
+        {
+            AppId = STEAM_CLIENT_APP_ID.ToString(),
+            Version = version,
+            InstallDirectory = SteamConfig.GetConfigDirectory(),
+            TotalDownloadSize = (ulong)totalBytes,
+            RequiresInternetConnection = true,
+            Os = "linux",
+        });
     }
 
     private void OnExited(object? sender, EventArgs e)
@@ -263,6 +308,10 @@ public class SteamClientApp
         endingTask = null;
         startingTask?.TrySetCanceled();
         startingTask = null;
+        readyTask?.TrySetResult();
+        readyTask = null;
+        updateEndedTask?.TrySetCanceled();
+        updateEndedTask = null;
         updateStartedTask?.TrySetCanceled();
         updateStartedTask = null;
 
@@ -355,7 +404,11 @@ public class SteamClientApp
 
     public bool RunSteamShutdown()
     {
-        if (!running || !Process.GetProcessesByName("steam").Any()) return false;
+        if (!running || !Process.GetProcessesByName("steam").Any())
+        {
+            running = false;
+            return false;
+        }
 
         Console.WriteLine("Shutting down steam client");
 
@@ -368,9 +421,7 @@ public class SteamClientApp
             {
                 FileName = "steam",
                 Arguments = "-shutdown",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                UseShellExecute = true,
                 CreateNoWindow = true
             };
             startInfo.EnvironmentVariables["DISPLAY"] = display;

@@ -24,10 +24,11 @@ class SteamSession
 {
   public const uint INVALID_APP_ID = uint.MaxValue;
   public bool IsLoggedOn { get; private set; }
+  public bool IsPendingLogin { get; set; }
   public string PersonaName { get; private set; } = "";
   public string AvatarUrl { get; private set; } = "";
 
-  public ReadOnlyCollection<SteamApps.LicenseListCallback.License> Licenses
+  public ReadOnlyCollection<uint> PackageIDs
   {
     get;
     private set;
@@ -37,6 +38,7 @@ class SteamSession
   public Dictionary<uint, byte[]> DepotKeys { get; } = [];
   public ConcurrentDictionary<(uint, string), TaskCompletionSource<SteamContent.CDNAuthToken>> CDNAuthTokens { get; } = [];
   public Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> AppInfo { get; } = [];
+  public Dictionary<uint, ProviderItem> ProviderItemMap { get; } = [];
   public Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> PackageInfo { get; } = [];
   public Dictionary<string, byte[]> AppBetaPasswords { get; } = [];
 
@@ -75,18 +77,32 @@ class SteamSession
   public Action<(string appId, string version)>? OnAppNewVersionFound;
   public Action<string>? OnAuthError;
 
-  private LocalConfig localConfig;
   private LoginUsersConfig loginUsersConfig;
+  private UserCache userCache;
+  private LibraryCache libraryCache;
+  private AppInfoCache appInfoCache;
 
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
+    details.ShouldRememberPassword = true;
     this.logonDetails = details;
     this.authenticator = authenticator;
     this.SteamGuardData = steamGuardData;
     this.depotConfigStore = depotConfigStore;
-    this.localConfig = new LocalConfig(LocalConfig.DefaultPath());
     this.loginUsersConfig = new LoginUsersConfig(LoginUsersConfig.DefaultPath());
+    this.userCache = new UserCache(UserCache.DefaultPath());
+    this.libraryCache = new LibraryCache(LibraryCache.DefaultPath());
+    this.appInfoCache = new AppInfoCache(AppInfoCache.DefaultPath());
+
+    if (details.AccountID != 0)
+    {
+      AvatarUrl = userCache.GetKey(UserCache.AVATAR_KEY, details.AccountID) ?? "";
+      PersonaName = userCache.GetKey(UserCache.PERSONA_NAME, details.AccountID) ?? "";
+
+      PackageIDs = new ReadOnlyCollection<uint>(libraryCache.GetPackageIDs(details.AccountID));
+      ProviderItemMap = libraryCache.GetApps(details.AccountID).ToDictionary((x) => uint.Parse(x.id));
+    }
 
     var clientConfiguration = SteamConfiguration.Create(config =>
         config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
@@ -156,17 +172,20 @@ class SteamSession
 
   public async Task<bool> WaitForCredentials()
   {
-    if (IsLoggedOn || bAborted)
+    if ((IsLoggedOn && !IsPendingLogin) || bAborted)
       return IsLoggedOn;
 
-    await WaitUntilCallback(() => { }, () => IsLoggedOn);
+    await WaitUntilCallback(() => { }, () => IsLoggedOn && !IsPendingLogin);
 
     return IsLoggedOn;
   }
 
   public async Task WaitForLibrary()
   {
-    if (!isLoadingLibrary && Licenses?.Count == 0)
+    if (IsPendingLogin)
+      return;
+
+    if (!isLoadingLibrary && PackageIDs?.Count == 0)
       return;
 
     while (!bAborted)
@@ -221,19 +240,32 @@ class SteamSession
 
     var appInfoMultiple = await steamApps.PICSGetProductInfo([request], []);
 
-    foreach (var appInfo in appInfoMultiple.Results)
+    if (appInfoMultiple.Results != null)
     {
-      foreach (var app_value in appInfo.Apps)
+      foreach (var appInfo in appInfoMultiple.Results)
       {
-        var app = app_value.Value;
+        foreach (var app_value in appInfo.Apps)
+        {
+          var app = app_value.Value;
 
-        Console.WriteLine("Got AppInfo for {0}", app.ID);
-        AppInfo[app.ID] = app;
+          Console.WriteLine("Got AppInfo for {0}", app.ID);
+          AppInfo[app.ID] = app;
+          ProviderItemMap[app.ID] = GetProviderItem(app.ID.ToString(), app.KeyValues);
+          appInfoCache.Save(app.ID, app.KeyValues);
+        }
+
+        foreach (var app in appInfo.UnknownApps)
+        {
+          AppInfo.Remove(app);
+          ProviderItemMap.Remove(app);
+          appInfoCache.Save(app, null);
+        }
       }
 
-      foreach (var app in appInfo.UnknownApps)
+      if (SteamUser?.SteamID?.AccountID != null)
       {
-        AppInfo[app] = null;
+        libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values);
+        libraryCache.Save();
       }
     }
   }
@@ -396,7 +428,7 @@ class SteamSession
     }
 
     Console.WriteLine("Got credentials...");
-    Task.Run(this.TickCallbacks);
+    _ = Task.Run(this.TickCallbacks);
   }
 
 
@@ -427,6 +459,7 @@ class SteamSession
 
   private void Abort(bool sendLogOff = true)
   {
+    IsPendingLogin = false;
     Disconnect(sendLogOff);
   }
 
@@ -471,10 +504,19 @@ class SteamSession
     if (!AuthenticatedUser())
     {
       Console.Write("No credentials specified. Initializing QR flow");
-      qrAuthSession = await SteamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
+      try
       {
-        DeviceFriendlyName = $"{Environment.MachineName} (SteamBus)",
-      });
+        qrAuthSession = await SteamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
+        {
+          DeviceFriendlyName = $"{Environment.MachineName} (SteamBus)",
+        });
+      }
+      catch (Exception exception)
+      {
+        Console.Error.WriteLine($"Error starting QR auth session, err:{exception}");
+        Abort(false);
+        return;
+      }
 
       qrAuthSession.ChallengeURLChanged = () =>
       {
@@ -670,9 +712,9 @@ class SteamSession
       // Any operations outstanding need to be aborted
       bAborted = true;
     }
-    else if (connectionBackoff >= 10)
+    else if (connectionBackoff >= 4)
     {
-      Console.WriteLine("Could not connect to Steam after 10 tries");
+      Console.WriteLine("Could not connect to Steam after 4 tries");
       Abort(false);
     }
     else if (!bAborted)
@@ -770,9 +812,16 @@ class SteamSession
 
     this.seq++;
     IsLoggedOn = true;
+    IsPendingLogin = false;
 
+    SaveToken();
+  }
+
+  public void SaveToken()
+  {
     if (logonDetails?.Username != null && logonDetails?.AccessToken != null)
     {
+      var localConfig = new LocalConfig(LocalConfig.DefaultPath());
       localConfig.SetRefreshToken(logonDetails.Username, logonDetails.AccessToken);
       localConfig.Save();
     }
@@ -794,7 +843,7 @@ class SteamSession
     var installedAppIdsToVersion = depotConfigStore.GetAppIdToVersionBranchMap(true);
 
     Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
-    this.Licenses = licenseList.LicenseList;
+
     List<uint> packageIds = [];
     // Parse licenses and associate their access tokens
     foreach (var license in licenseList.LicenseList)
@@ -805,6 +854,14 @@ class SteamSession
         PackageTokens.TryAdd(license.PackageID, license.AccessToken);
       }
     }
+    PackageIDs = new ReadOnlyCollection<uint>(packageIds);
+
+    if (SteamUser?.SteamID?.AccountID != null)
+    {
+      libraryCache.SetPackageIDs(SteamUser.SteamID.AccountID, packageIds);
+      libraryCache.Save();
+    }
+
     Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
     await RequestPackageInfo(packageIds);
     Console.WriteLine("Got packages");
@@ -823,6 +880,7 @@ class SteamSession
         appids.Add(appidI);
       }
     }
+
     Console.WriteLine("Making requests for {0} apps", requests.Count);
     try
     {
@@ -847,6 +905,8 @@ class SteamSession
           foreach (var entry in productInfo.Apps)
           {
             AppInfo[entry.Key] = entry.Value;
+            ProviderItemMap[entry.Key] = GetProviderItem(entry.Key.ToString(), entry.Value.KeyValues);
+            appInfoCache.Save(entry.Key, entry.Value.KeyValues);
 
             if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
             {
@@ -865,6 +925,12 @@ class SteamSession
             }
           }
         }
+
+        if (SteamUser?.SteamID?.AccountID != null)
+        {
+          libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values);
+          libraryCache.Save();
+        }
       }
       else if (result.Failed)
       {
@@ -881,9 +947,8 @@ class SteamSession
     {
       List<ProviderItem> updatedItems = new(appids.Count);
       foreach (var id in appids)
-      {
-        updatedItems.Add(GetProviderItem(id.ToString(), AppInfo[id].KeyValues));
-      }
+        if (ProviderItemMap.TryGetValue(id, out var providerItem))
+          updatedItems.Add(providerItem);
       OnLibraryUpdated?.Invoke(updatedItems.ToArray());
     }
   }
@@ -893,6 +958,13 @@ class SteamSession
   {
     Console.WriteLine($"Account persona name: {callback.PersonaName}");
     this.PersonaName = callback.PersonaName;
+
+    if (SteamUser?.SteamID?.AccountID != null)
+    {
+      userCache.SetKey(UserCache.PERSONA_NAME, SteamUser.SteamID.AccountID, PersonaName);
+      userCache.Save();
+    }
+
     SaveLoginUsersConfig();
 
     // We need to explicitly make a request for our user to obtain avatar
@@ -921,11 +993,22 @@ class SteamSession
 
   private void OnPersonaState(SteamFriends.PersonaStateCallback callback)
   {
-    if (callback.FriendID == SteamUser.SteamID && callback.AvatarHash is not null)
+    if (callback.FriendID == SteamUser?.SteamID && callback.AvatarHash is not null)
     {
       var avatarStr = BitConverter.ToString(callback.AvatarHash).Replace("-", "").ToLowerInvariant();
       AvatarUrl = $"https://avatars.akamai.steamstatic.com/{avatarStr}_full.jpg";
+      userCache.SetKey(UserCache.AVATAR_KEY, SteamUser.SteamID.AccountID, AvatarUrl);
+      userCache.Save();
     }
+  }
+
+  public List<ProviderItem> GetProviderItems()
+  {
+    List<ProviderItem> providerItems = new(ProviderItemMap.Count);
+    foreach (var app in ProviderItemMap)
+      providerItems.Add(app.Value);
+
+    return providerItems;
   }
 
   public static ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
@@ -1004,17 +1087,18 @@ class SteamSession
 
   public KeyValue? GetSteam3AppSection(uint appId, EAppInfoSection section)
   {
-    if (AppInfo == null)
-    {
-      return null;
-    }
+    KeyValue appinfo;
 
     if (!AppInfo.TryGetValue(appId, out var app) || app == null)
     {
-      return null;
-    }
+      var cached = appInfoCache.GetCached(appId);
+      if (cached == null) return null;
 
-    var appinfo = app.KeyValues;
+      appinfo = cached;
+    }
+    else
+      appinfo = app.KeyValues;
+
     var section_key = section switch
     {
       EAppInfoSection.Common => "common",
@@ -1029,6 +1113,10 @@ class SteamSession
 
   public void UpdateConfigFiles(bool wantsOfflineMode)
   {
+    Console.WriteLine($"Updating steam config files with offline mode: {wantsOfflineMode}");
+
+    SaveToken();
+
     if (logonDetails?.Username != null && logonDetails?.AccessToken != null)
     {
       var sub = Jwt.GetSub(logonDetails.AccessToken);

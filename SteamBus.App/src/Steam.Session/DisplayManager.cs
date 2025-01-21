@@ -40,10 +40,17 @@ public class DisplayManager
 
                         AppDomain.CurrentDomain.ProcessExit += (sender, e) =>
                         {
-                            if (!process.HasExited)
+                            try
                             {
-                                Console.WriteLine($"Terminating process with PID: {process.Id}");
-                                process.Kill();
+                                if (!process.HasExited)
+                                {
+                                    Console.WriteLine($"Terminating process with PID: {process.Id}");
+                                    process.Kill();
+                                }
+                            }
+                            catch (Exception exception)
+                            {
+                                Console.Error.WriteLine($"Failed to terminate display manager, err:{exception}");
                             }
                         };
 
