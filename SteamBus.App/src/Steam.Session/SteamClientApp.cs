@@ -24,9 +24,11 @@ public class SteamClientApp
     public Action<(string appId, string error)>? OnDependencyInstallFailed;
     public Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
     public Action<string>? OnLaunchReady;
+    public Action<string>? OnLaunchError;
 
     public bool running { get; private set; }
     public bool updating { get; private set; }
+    public bool loginFailed { get; private set; }
     private string updatingToVersion = "0";
     private Process? process;
 
@@ -39,12 +41,15 @@ public class SteamClientApp
     private DisplayManager displayManager;
     private DepotConfigStore depotConfigStore;
 
+    private SteamuiLogs steamuiLogs;
+
     private string forAppId = "";
 
     public SteamClientApp(DisplayManager displayManager, DepotConfigStore depotConfigStore)
     {
         this.displayManager = displayManager;
         this.depotConfigStore = depotConfigStore;
+        this.steamuiLogs = new SteamuiLogs(SteamuiLogs.DefaultPath());
     }
 
     private static string GetManifestDirectory()
@@ -74,7 +79,9 @@ public class SteamClientApp
         }
 
         running = true;
+        loginFailed = false;
         readyTask = new();
+        steamuiLogs.Delete();
 
         var arguments = new List<string>(ARGUMENTS);
 
@@ -187,6 +194,26 @@ public class SteamClientApp
         // Mark steam client as running
         if (hasRunningString && readyTask != null)
         {
+            _ = Task.Run(async () =>
+            {
+                var delay = TimeSpan.FromMilliseconds(100);
+                var timeout = TimeSpan.FromMilliseconds(5000);
+                await AsyncUtils.WaitForConditionAsync(() =>
+                {
+                    if (!running) return true;
+                    if (!steamuiLogs.Exists()) return false;
+
+                    if (steamuiLogs.IsLoginFailed())
+                    {
+                        Console.Error.WriteLine("Steam client login failed");
+                        loginFailed = true;
+                        OnLaunchError?.Invoke(DbusErrors.PreLaunchError);
+                        RunSteamShutdown();
+                    }
+
+                    return true;
+                }, delay, timeout);
+            });
             readyTask.TrySetResult();
             readyTask = null;
             Console.WriteLine("Steam client is ready");

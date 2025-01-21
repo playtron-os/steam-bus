@@ -101,6 +101,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(string appId, string error)>? OnDependencyInstallFailed;
   public event Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
   public event Action<string>? OnLaunchReady;
+  public event Action<string>? OnLaunchError;
 
 
   private DepotConfigStore dependenciesStore;
@@ -746,6 +747,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     var res = SignalWatcher.AddAsync(this, nameof(OnLaunchReady), reply);
     steamClientApp.OnLaunchReady = OnLaunchReady;
+    return res;
+  }
+
+  // LaunchError Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchLaunchErrorAsync(Action<string> reply)
+  {
+    var res = SignalWatcher.AddAsync(this, nameof(OnLaunchError), reply);
+    steamClientApp.OnLaunchError = OnLaunchError;
     return res;
   }
 
