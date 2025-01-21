@@ -201,16 +201,23 @@ public class SteamClientApp
             _ = Task.Run(async () =>
             {
                 var delay = TimeSpan.FromMilliseconds(100);
-                var timeout = TimeSpan.FromMilliseconds(5000);
-                await AsyncUtils.WaitForConditionAsync(() =>
+                var res = await AsyncUtils.WaitForConditionAsync(async () =>
                 {
-                    if (!running) return true;
-                    if (!steamuiLogs.Exists()) return false;
+                    if (!running)
+                    {
+                        return true;
+                    }
+                    if (!steamuiLogs.Exists())
+                    {
+                        return false;
+                    }
 
-                    if (steamuiLogs.IsLoginFailed())
+                    if (await steamuiLogs.IsLoginFailed())
                     {
                         Console.Error.WriteLine("Steam client login failed");
                         loginFailed = true;
+                        readyTask.TrySetCanceled();
+                        readyTask = null;
                         OnLaunchError?.Invoke((forAppId, DbusErrors.PreLaunchError));
                         RunSteamShutdown();
                     }
@@ -223,7 +230,17 @@ public class SteamClientApp
                     }
 
                     return true;
-                }, delay, timeout);
+                }, delay, STEAM_START_TIMEOUT);
+
+                if (!res)
+                {
+                    Console.Error.WriteLine("Timed out waiting for steamui_login.txt file to populate");
+                    loginFailed = true;
+                    readyTask.TrySetCanceled();
+                    readyTask = null;
+                    OnLaunchError?.Invoke((forAppId, DbusErrors.PreLaunchError));
+                    RunSteamShutdown();
+                }
             });
 
             return;

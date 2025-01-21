@@ -108,7 +108,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   private bool isOnline = false;
 
-  private TaskCompletionSource? _fetchingSteamClientData;
+  private TaskCompletionSource? fetchingSteamClientData;
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
@@ -667,7 +667,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (steamClientApp.updating)
       return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
 
-    if (_fetchingSteamClientData != null) await _fetchingSteamClientData.Task;
+    if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
 
     if (!wantsOfflineMode && !isOnline)
       wantsOfflineMode = true;
@@ -1108,7 +1108,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       if (loginDetails.Username == null || steamClientApp.running) return;
 
-      _fetchingSteamClientData = new();
+      fetchingSteamClientData = new();
       Console.WriteLine("Logging in with steam client to fetch latest data");
 
       try
@@ -1153,8 +1153,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         }
       }
 
-      _fetchingSteamClientData?.TrySetResult();
-      _fetchingSteamClientData = null;
+      fetchingSteamClientData?.TrySetResult();
+      fetchingSteamClientData = null;
     });
   }
 

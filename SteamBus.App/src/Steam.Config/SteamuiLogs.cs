@@ -39,21 +39,35 @@ public class SteamuiLogs
 
     public bool Exists() => File.Exists(path);
 
-    public bool IsLoginFailed()
+    public async Task<bool> IsLoginFailed()
     {
-        if (!File.Exists(path)) return false;
+        if (!File.Exists(path))
+        {
+            return false;
+        }
 
         try
         {
-            using (var stream = File.OpenText(path))
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
             {
-                string? line;
-                while ((line = stream.ReadLine()) != null)
+                using (var stream = File.OpenText(path))
                 {
-                    if (line.Contains("WaitingForCredentials - Password is not set") || line.Contains("WaitingForCredentials - Access Denied") || line.Contains("WaitingForCredentials - Invalid Password"))
-                        return true;
+                    while (true)
+                    {
+                        cts.Token.ThrowIfCancellationRequested();
 
-                    if (line.Contains("SetLoginState")) return false;
+                        var line = await stream.ReadLineAsync();
+                        if (line == null)
+                        {
+                            await Task.Delay(50, cts.Token);
+                            continue;
+                        }
+
+                        if (line.Contains("WaitingForCredentials - Password is not set") || line.Contains("WaitingForCredentials - Access Denied") || line.Contains("WaitingForCredentials - Invalid Password"))
+                            return true;
+
+                        if (line.Contains("SetLoginState")) return false;
+                    }
                 }
             }
         }
