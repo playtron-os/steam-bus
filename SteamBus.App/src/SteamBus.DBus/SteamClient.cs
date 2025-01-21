@@ -1104,6 +1104,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
       try
       {
+        // Delete offline ticket so we can re-generated it and know when to quit the client
+        session?.DeleteUserConfigOfflineTicket();
+
         await steamClientApp.Start("", loginDetails.Username, false);
       }
       catch (Exception exception)
@@ -1124,8 +1127,21 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         }
         catch (Exception) { }
 
-        await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(5));
-        Console.WriteLine("Shut down steam client after fetching data");
+
+        try
+        {
+          // Wait until offline field is populated with updated data
+          var delay = TimeSpan.FromMilliseconds(200);
+          var timeout = TimeSpan.FromSeconds(10);
+          await AsyncUtils.WaitForConditionAsync(() => session?.IsUserConfigReady() ?? false, delay, timeout);
+
+          await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(5));
+          Console.WriteLine("Shut down steam client after fetching data");
+        }
+        catch (Exception err)
+        {
+          Console.Error.WriteLine($"Error waiting and shutting down steam client after launching it to fetch configs: {err}");
+        }
       }
 
       _fetchingSteamClientData?.TrySetResult();

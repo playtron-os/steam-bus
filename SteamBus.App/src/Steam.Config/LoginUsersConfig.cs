@@ -117,19 +117,16 @@ public class LoginUsersConfig
         UpdateUserSharedConfig(accountId);
     }
 
-    private void UpdateUserConfig(string accountId)
+    public (KeyValue, string) GetUserConfig(string accountId)
     {
-        // Updates other user related config
         var steamConfigDir = SteamConfig.GetConfigDirectory();
         var userConfigPath = Path.Join(steamConfigDir, "userdata", accountId, "config", "localconfig.vdf");
         var parent = Directory.GetParent(userConfigPath)!.FullName;
-        Directory.CreateDirectory(parent);
 
         if (!File.Exists(userConfigPath))
         {
-            var newUserData = UpdateUserConfig(new KeyValue("users"));
-            newUserData.SaveToFile(userConfigPath, false);
-            return;
+            Directory.CreateDirectory(parent);
+            return (new KeyValue("users"), userConfigPath);
         }
 
         // Use this method to read the file because using ReadToEnd isn't reading the entire file
@@ -143,9 +140,14 @@ public class LoginUsersConfig
             }
         }
 
-        var userData = KeyValue.LoadFromString(content) ?? new KeyValue("users");
+        return (KeyValue.LoadFromString(content) ?? new KeyValue("users"), userConfigPath);
+    }
+
+    private void UpdateUserConfig(string accountId)
+    {
+        var (userData, path) = GetUserConfig(accountId);
         userData = UpdateUserConfig(userData);
-        userData.SaveToFile(userConfigPath, false);
+        userData.SaveToFile(path, false);
     }
 
     private KeyValue UpdateUserConfig(KeyValue data)

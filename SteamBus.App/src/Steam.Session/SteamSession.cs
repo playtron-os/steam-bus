@@ -1127,4 +1127,23 @@ class SteamSession
         Console.Error.WriteLine("Error parsing Sub out of access token");
     }
   }
+
+  public void DeleteUserConfigOfflineTicket()
+  {
+    if (logonDetails.AccountID == 0) return;
+
+    var (config, path) = loginUsersConfig.GetUserConfig(logonDetails.AccountID.ToString());
+    var child = config.Children.Find((c) => c.Name == "Offline");
+    if (child != null) config.Children.Remove(child);
+
+    config.SaveToFile(path, false);
+  }
+
+  public bool IsUserConfigReady()
+  {
+    if (logonDetails.AccountID == 0) return false;
+
+    var (config, _) = loginUsersConfig.GetUserConfig(logonDetails.AccountID.ToString());
+    return !string.IsNullOrEmpty(config["Offline"]?["Ticket"]?.Value);
+  }
 }
