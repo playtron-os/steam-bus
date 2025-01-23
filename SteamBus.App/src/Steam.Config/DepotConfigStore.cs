@@ -1,15 +1,133 @@
+using System.Threading.Tasks;
 using Playtron.Plugin;
 using Steam.Config;
+using Steam.Content;
+using Steam.Session;
 using SteamKit2;
 
+enum Universe
+{
+    Individual = 0,
+    Public = 1,
+    Beta = 2,
+    Internal = 3,
+    Dev = 4,
+    Rc = 5,
+}
+
+public enum StateFlags
+{
+    Invalid = 0,
+    Uninstalled = 1 << 0,            // 1
+    UpdateRequired = 1 << 1,         // 2
+    FullyInstalled = 1 << 2,         // 4
+    Encrypted = 1 << 3,              // 8
+    Locked = 1 << 4,                 // 16
+    FilesMissing = 1 << 5,           // 32
+    AppRunning = 1 << 6,             // 64
+    FilesCorrupt = 1 << 7,           // 128
+    UpdateRunning = 1 << 8,          // 256
+    UpdatePaused = 1 << 9,           // 512
+    UpdateStarted = 1 << 10,         // 1024
+    Uninstalling = 1 << 11,          // 2048
+    BackupRunning = 1 << 12,         // 4096
+    Reconfiguring = 1 << 16,         // 65536
+    Validating = 1 << 17,            // 131072
+    AddingFiles = 1 << 18,           // 262144
+    Preallocating = 1 << 19,         // 524288
+    Downloading = 1 << 20,           // 1048576
+    Staging = 1 << 21,               // 2097152
+    Committing = 1 << 22,            // 4194304
+    UpdateStopping = 1 << 23         // 8388608
+}
+
+
+/*
+"AppState"
+{
+        "appid"         "394380"
+        "Universe"              "1"
+        "name"          "BattleStick"
+        "StateFlags"            "4"
+        "installdir"            "BattleStick"
+        "LastUpdated"           "1737493571"
+        "LastPlayed"            "0"
+        "SizeOnDisk"            "126911410"
+        "StagingSize"           "0"
+        "buildid"               "1136323"
+        "LastOwner"             "76561197999515283"
+        "UpdateResult"          "0"
+        "BytesToDownload"               "37841104"
+        "BytesDownloaded"               "37841104"
+        "BytesToStage"          "126911410"
+        "BytesStaged"           "126911410"
+        "TargetBuildID"         "1136323"
+        "AutoUpdateBehavior"            "0"
+        "AllowOtherDownloadsWhileRunning"               "0"
+        "ScheduledAutoUpdate"           "0"
+        "InstalledDepots"
+        {
+                "394382"
+                {
+                        "manifest"              "511842974107429179"
+                        "size"          "126911410"
+                }
+        }
+        "UserConfig"
+        {
+                "language"              "english"
+        }
+        "MountedConfig"
+        {
+                "language"              "english"
+        }
+}
+*/
 public class DepotConfigStore
 {
-    private const string STORE_FILENAME = ".steambus.manifest";
+    public const string KEY_APP_STATE = "AppState";
+    public const string KEY_APP_ID = "appid";
+    public const string KEY_UNIVERSE = "Universe";
+    public const string KEY_NAME = "name";
+    public const string KEY_STATE_FLAGS = "StateFlags";
+    public const string KEY_INSTALL_DIR = "installdir";
+    public const string KEY_LAST_UPDATED = "LastUpdated";
+    public const string KEY_LAST_PLAYED = "LastPlayed";
+    public const string KEY_SIZE_ON_DISK = "SizeOnDisk";
+    public const string KEY_BUILD_ID = "buildid";
+    public const string KEY_LAST_OWNER = "LastOwner";
+    public const string KEY_UPDATE_RESULT = "UpdateResult";
+    public const string KEY_BYTES_TO_DOWNLOAD = "BytesToDownload";
+    public const string KEY_BYTES_DOWNLOADED = "BytesDownloaded";
+    public const string KEY_BYTES_TO_STAGE = "BytesToStage";
+    public const string KEY_BYTES_STAGED = "BytesStaged";
+    public const string KEY_TARGET_BUILD_ID = "TargetBuildID";
+    public const string KEY_AUTO_UPDATE_BEHAVIOR = "AutoUpdateBehavior";
+    public const string KEY_ALLOW_OTHER_DOWNLOADS_WHILE_RUNNING = "AllowOtherDownloadsWhileRunning";
+    public const string KEY_SCHEDULED_AUTO_UPDATE = "ScheduledAutoUpdate";
+    public const string KEY_FULL_VALIDATE_AFTER_NEXT_UPDATE = "FullValidateAfterNextUpdate";
+    public const string KEY_INSTALLED_DEPOTS = "InstalledDepots";
+    public const string KEY_INSTALLED_DEPOTS_MANIFEST = "manifest";
+    public const string KEY_INSTALLED_DEPOTS_SIZE = "size";
+    public const string KEY_USER_CONFIG = "UserConfig";
+    public const string KEY_USER_CONFIG_LANGUAGE = "language";
+    public const string KEY_MOUNTED_CONFIG = "MountedConfig";
+    public const string KEY_MOUNTED_CONFIG_LANGUAGE = "language";
+    public const string KEY_SHARED_DEPOTS = "SharedDepots";
+
+    public const string EXTRA_KEY_LATEST_BUILD_ID = "LatestBuildID";
+    public const string EXTRA_KEY_OSLIST = "oslist";
 
     private List<string>? folders;
 
     private Dictionary<uint, string> manifestPathMap = [];
     private Dictionary<uint, KeyValue> manifestMap = [];
+
+    // Path to manifest file specific to SteamBus, if this file is present it means the app has been imported to SteamBus
+    private Dictionary<uint, string> manifestExtraPathMap = [];
+    private Dictionary<uint, KeyValue> manifestExtraMap = [];
+
+    public SteamSession? steamSession;
 
     /// <summary>
     /// Initializes the DepotConfigStore
@@ -30,6 +148,8 @@ public class DepotConfigStore
     {
         manifestMap.Clear();
         manifestPathMap.Clear();
+        manifestExtraMap.Clear();
+        manifestExtraPathMap.Clear();
 
         if (folders != null)
         {
@@ -41,41 +161,72 @@ public class DepotConfigStore
         var libraryFoldersConfig = await LibraryFoldersConfig.CreateAsync();
         var directories = libraryFoldersConfig.GetInstallDirectories();
 
-        manifestMap.Clear();
-        manifestPathMap.Clear();
-
         foreach (var dir in directories)
-            await ReloadApps(dir);
+        {
+            var parentDir = Directory.GetParent(dir)!.FullName;
+            await ReloadApps(parentDir);
+        }
     }
 
     private async Task ReloadApps(string dir)
     {
-        if (!Directory.Exists(dir))
+        var commonDir = Path.Join(dir, "common");
+        if (!Directory.Exists(dir) || !Directory.Exists(commonDir))
             return;
 
-        var appPaths = Directory.EnumerateDirectories(dir);
+        var manifestPaths = Directory.EnumerateFiles(dir);
 
-        foreach (var appPath in appPaths ?? [])
+        foreach (var manifestPath in manifestPaths ?? [])
         {
-            var manifestPath = Path.Join(appPath, STORE_FILENAME);
+            if (!manifestPath.EndsWith(".acf") || manifestPath.Contains(".extra.acf"))
+                continue;
 
-            if (File.Exists(manifestPath))
-            {
-                var manifestData = await File.ReadAllTextAsync(manifestPath);
-                if (string.IsNullOrEmpty(manifestData))
-                    continue;
-
-                var data = KeyValue.LoadFromString(manifestData);
-                if (data == null)
-                    continue;
-
-                var appId = data["appid"].AsUnsignedInteger();
-                manifestMap.TryAdd(appId, data);
-                manifestPathMap.TryAdd(appId, manifestPath);
-            }
+            await ImportApp(manifestPath);
         }
 
         Console.WriteLine($"Depot config store loaded {manifestPathMap.Count} installed apps");
+    }
+
+    public async Task<bool> ImportApp(string manifestPath)
+    {
+        var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
+
+        var manifestData = await File.ReadAllTextAsync(manifestPath);
+        if (string.IsNullOrEmpty(manifestData))
+            return false;
+
+        var data = KeyValue.LoadFromString(manifestData);
+        if (data == null)
+            return false;
+
+        var appId = data["appid"].AsUnsignedInteger();
+        if (appId == 0)
+            return false;
+
+        if (File.Exists(manifestExtraPath))
+        {
+            var manifestExtraData = await File.ReadAllTextAsync(manifestExtraPath);
+            if (string.IsNullOrEmpty(manifestExtraData))
+                return false;
+
+            var extraData = KeyValue.LoadFromString(manifestExtraData);
+            if (extraData == null)
+                return false;
+
+            manifestExtraMap.TryAdd(appId, extraData);
+        }
+        else
+        {
+            var extraData = new KeyValue(KEY_APP_STATE);
+            extraData.SaveToFile(manifestExtraPath, false);
+            manifestExtraMap.TryAdd(appId, extraData);
+        }
+
+        manifestMap.TryAdd(appId, data);
+        manifestPathMap.TryAdd(appId, manifestPath);
+        manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
+
+        return true;
     }
 
     /// <summary>
@@ -86,14 +237,23 @@ public class DepotConfigStore
     {
         manifestMap.TryGetValue(appId, out var manifest);
         manifestPathMap.TryGetValue(appId, out var path);
+        manifestExtraMap.TryGetValue(appId, out var extraManifest);
+        manifestExtraPathMap.TryGetValue(appId, out var extraPath);
 
         if (manifest == null && path != null && File.Exists(path))
         {
-            File.Delete(path);
+            try
+            {
+                File.Delete(path);
+                if (extraPath != null)
+                    File.Delete(extraPath);
+            }
+            catch (Exception) { }
         }
-        else if (manifest != null && path != null)
+        else if (manifest != null && path != null && extraManifest != null && extraPath != null)
         {
             manifest.SaveToFile(path, false);
+            extraManifest.SaveToFile(extraPath, false);
         }
     }
 
@@ -104,9 +264,10 @@ public class DepotConfigStore
     /// <returns></returns>
     public string? GetInstallDirectory(uint appId)
     {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
         if (!manifestPathMap.TryGetValue(appId, out var manifestPath)) return null;
 
-        return Directory.GetParent(manifestPath)?.FullName;
+        return Path.Join(Directory.GetParent(manifestPath)?.FullName, "common", manifest[KEY_INSTALL_DIR].Value);
     }
 
     /// <summary>
@@ -119,7 +280,7 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
 
-        return manifest["depots"]?[depotId.ToString()]?.AsUnsignedLong();
+        return manifest[KEY_INSTALLED_DEPOTS]?[depotId.ToString()]?[KEY_INSTALLED_DEPOTS_MANIFEST]?.AsUnsignedLong();
     }
 
     /// <summary>
@@ -131,7 +292,7 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
 
-        return manifest["downloaded"]?.AsUnsignedInteger();
+        return manifest[KEY_BYTES_DOWNLOADED]?.AsUnsignedInteger();
     }
 
     /// <summary>
@@ -143,7 +304,24 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
 
-        return manifest["downloadstage"]?.AsEnum<DownloadStage>();
+        var stateFlags = manifest[KEY_STATE_FLAGS]?.AsUnsignedInteger();
+
+        if ((stateFlags & (int)StateFlags.Downloading) != 0
+            || (stateFlags & (int)StateFlags.Staging) != 0
+            || (stateFlags & (int)StateFlags.UpdateStarted) != 0
+            || (stateFlags & (int)StateFlags.UpdateRunning) != 0
+            || (stateFlags & (int)StateFlags.Committing) != 0
+            || (stateFlags & (int)StateFlags.Staging) != 0)
+        {
+            return DownloadStage.Downloading;
+        }
+
+        if ((stateFlags & (int)StateFlags.Validating) != 0)
+        {
+            return DownloadStage.Verifying;
+        }
+
+        return DownloadStage.Preallocating;
     }
 
     /// <summary>
@@ -155,11 +333,8 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return false;
 
-        var stage = manifest["downloadstage"];
-        var sizeDownloaded = manifest["downloaded"]?.AsUnsignedInteger();
-        var totalSize = manifest["totaldownload"]?.AsUnsignedInteger();
-
-        return stage == KeyValue.Invalid && sizeDownloaded == totalSize;
+        var stateFlags = manifest[KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
+        return (stateFlags & (int)StateFlags.FullyInstalled) != 0;
     }
 
     /// <summary>
@@ -171,10 +346,20 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return;
 
-        var depots = manifest["depots"];
-        var child = manifest["depots"]?.Children.Find((child) => child.Name == depotId.ToString());
+        var depotIdKey = depotId.ToString();
+        var depots = manifest[KEY_INSTALLED_DEPOTS];
+        var child = depots?.Children.Find((child) => child.Name == depotIdKey);
         if (child != null)
-            depots.Children.Remove(child);
+            depots!.Children.Remove(child);
+
+        foreach (var entry in manifest[KEY_SHARED_DEPOTS].Children)
+        {
+            if (entry.Name == depotIdKey)
+            {
+                manifest[KEY_SHARED_DEPOTS].Children.Remove(entry);
+                break;
+            }
+        }
     }
 
     /// <summary>
@@ -183,10 +368,34 @@ public class DepotConfigStore
     /// <param name="appId"></param>
     /// <param name="depotId"></param>
     /// <param name="manifestId"></param>
-    public void SetManifestID(uint appId, uint depotId, ulong manifestId)
+    /// <param name="manifestSize"></param>
+    public void SetManifestID(uint appId, uint depotId, ulong manifestId, ulong manifestSize)
     {
         if (!manifestMap.ContainsKey(appId)) return;
-        manifestMap[appId]["depots"][depotId.ToString()] = new KeyValue(depotId.ToString(), manifestId.ToString());
+
+        var key = depotId.ToString();
+        if (manifestMap[appId][KEY_INSTALLED_DEPOTS][key] == KeyValue.Invalid)
+            manifestMap[appId][KEY_INSTALLED_DEPOTS][key] = new KeyValue(key);
+
+        manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_MANIFEST] = new KeyValue(KEY_INSTALLED_DEPOTS_MANIFEST, manifestId.ToString());
+        manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_SIZE] = new KeyValue(KEY_INSTALLED_DEPOTS_SIZE, manifestSize.ToString());
+    }
+
+    /// <summary>
+    /// Sets the shared depot id
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="depotId"></param>
+    /// <param name="manifestId"></param>
+    public void SetSharedDepot(uint appId, uint depotId, ulong manifestId)
+    {
+        if (!manifestMap.ContainsKey(appId)) return;
+
+        if (manifestMap[appId][KEY_SHARED_DEPOTS] == KeyValue.Invalid)
+            manifestMap[appId][KEY_SHARED_DEPOTS] = new KeyValue(KEY_SHARED_DEPOTS);
+
+        var key = depotId.ToString();
+        manifestMap[appId][KEY_SHARED_DEPOTS][key] = new KeyValue(key, manifestId.ToString());
     }
 
     /// <summary>
@@ -197,7 +406,7 @@ public class DepotConfigStore
     public void SetTotalSize(uint appId, ulong size)
     {
         if (!manifestMap.ContainsKey(appId)) return;
-        manifestMap[appId]["totaldownload"] = new KeyValue("totaldownload", size.ToString());
+        manifestMap[appId][KEY_BYTES_TO_DOWNLOAD] = new KeyValue(KEY_BYTES_TO_DOWNLOAD, size.ToString());
     }
 
     /// <summary>
@@ -208,7 +417,7 @@ public class DepotConfigStore
     public void SetCurrentSize(uint appId, ulong size)
     {
         if (!manifestMap.ContainsKey(appId)) return;
-        manifestMap[appId]["downloaded"] = new KeyValue("downloaded", size.ToString());
+        manifestMap[appId][KEY_BYTES_DOWNLOADED] = new KeyValue(KEY_BYTES_DOWNLOADED, size.ToString());
     }
 
     /// <summary>
@@ -216,18 +425,53 @@ public class DepotConfigStore
     /// </summary>
     /// <param name="appId"></param>
     /// <param name="stage"></param>
-    public void SetDownloadStage(uint appId, DownloadStage? stage)
+    public void SetDownloadStage(uint appId, DownloadStage? stage, ulong? sizeOnDisk = null)
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
-        if (stage == null)
+        var currentStateFlags = manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
+
+        var stateFlags = StateFlags.FullyInstalled;
+        if ((currentStateFlags & (int)StateFlags.UpdateRequired) != 0)
+            stateFlags |= StateFlags.UpdateRequired;
+
+        // Set download paused in case of app being mid download so steam client doesn't start any downloads
+        if (stage != null)
+            stateFlags |= StateFlags.UpdatePaused;
+
+        switch (stage)
         {
-            var child = manifestMap[appId].Children.Find((child) => child.Name == "downloadstage");
-            if (child != null)
-                manifestMap[appId].Children.Remove(child);
+            case DownloadStage.Preallocating:
+                stateFlags |= StateFlags.Preallocating;
+                break;
+            case DownloadStage.Downloading:
+                stateFlags |= StateFlags.Downloading;
+                break;
+            case DownloadStage.Verifying:
+                stateFlags |= StateFlags.Validating;
+                break;
         }
-        else
-            manifestMap[appId]["downloadstage"] = new KeyValue("downloadstage", stage.ToString());
+
+        manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
+
+        if ((stateFlags & StateFlags.FullyInstalled) != 0)
+            manifestMap[appId][KEY_LAST_UPDATED] = new KeyValue(KEY_LAST_UPDATED, DateTimeOffset.Now.ToUnixTimeSeconds().ToString());
+
+        if (sizeOnDisk != null)
+            UpdateAppSizeOnDisk(appId, (ulong)sizeOnDisk);
+    }
+
+    /// <summary>
+    /// Updates the app size on disk
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="sizeOnDisk"></param>
+    /// <returns></returns>
+    public void UpdateAppSizeOnDisk(uint appId, ulong sizeOnDisk)
+    {
+        var installDirectory = GetInstallDirectory(appId);
+        if (installDirectory == null) return;
+        manifestMap[appId][KEY_SIZE_ON_DISK] = new KeyValue(KEY_SIZE_ON_DISK, sizeOnDisk.ToString());
     }
 
     /// <summary>
@@ -236,17 +480,28 @@ public class DepotConfigStore
     /// <param name="appId"></param>
     /// <param name="version"></param>
     /// <param name="branch"></param>
-    public void SetNewVersion(uint appId, uint version, string branch, string os)
+    /// <param name="os"></param>
+    /// <param name="language"></param>
+    /// <param name="lastOwnedSteamId"></param>
+    public void SetNewVersion(uint appId, uint version, string branch, string os, string language, string? lastOwnedSteamId = null)
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
-        manifestMap[appId]["version"] = new KeyValue("version", version.ToString());
-        manifestMap[appId]["branch"] = new KeyValue("branch", branch);
-        manifestMap[appId]["os"] = new KeyValue("os", os);
+        manifestMap[appId][KEY_UNIVERSE] = new KeyValue(KEY_UNIVERSE, ((int)BranchToUniverse(branch)).ToString());
+        manifestMap[appId][KEY_BUILD_ID] = new KeyValue(KEY_BUILD_ID, version.ToString());
+        manifestMap[appId][KEY_TARGET_BUILD_ID] = new KeyValue(KEY_TARGET_BUILD_ID, version.ToString());
+        manifestExtraMap[appId][EXTRA_KEY_OSLIST] = new KeyValue(EXTRA_KEY_OSLIST, os);
 
-        var child = manifestMap[appId].Children.Find((child) => child.Name == "updatepending");
-        if (child != null)
-            manifestMap[appId].Children.Remove(child);
+        if (manifestExtraMap[appId][KEY_USER_CONFIG] == KeyValue.Invalid)
+            manifestExtraMap[appId][KEY_USER_CONFIG] = new KeyValue(KEY_USER_CONFIG);
+        manifestExtraMap[appId][KEY_USER_CONFIG][KEY_USER_CONFIG_LANGUAGE] = new KeyValue(KEY_USER_CONFIG_LANGUAGE, language);
+
+        if (manifestExtraMap[appId][KEY_MOUNTED_CONFIG] == KeyValue.Invalid)
+            manifestExtraMap[appId][KEY_MOUNTED_CONFIG] = new KeyValue(KEY_MOUNTED_CONFIG);
+        manifestExtraMap[appId][KEY_MOUNTED_CONFIG][KEY_MOUNTED_CONFIG_LANGUAGE] = new KeyValue(KEY_MOUNTED_CONFIG_LANGUAGE, language);
+
+        if (lastOwnedSteamId != null)
+            manifestExtraMap[appId][KEY_LAST_OWNER] = new KeyValue(KEY_LAST_OWNER, lastOwnedSteamId);
     }
 
     /// <summary>
@@ -258,8 +513,9 @@ public class DepotConfigStore
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
-        manifestMap[appId]["updatepending"] = new KeyValue("updatepending", "1");
-        manifestMap[appId]["latestversion"] = new KeyValue("latestversion", latestVersion);
+        var currentStateFlags = manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
+        manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, (currentStateFlags | (int)StateFlags.UpdateRequired).ToString());
+        manifestExtraMap[appId][EXTRA_KEY_LATEST_BUILD_ID] = new KeyValue(EXTRA_KEY_LATEST_BUILD_ID, latestVersion);
     }
 
     /// <summary>
@@ -267,9 +523,12 @@ public class DepotConfigStore
     /// </summary>
     /// <param name="installDirectory"></param>
     /// <param name="appId"></param>
-    public void EnsureEntryExists(string installDirectory, uint appId)
+    /// <param name="name"></param>
+    public void EnsureEntryExists(string installDirectory, uint appId, string name)
     {
-        var manifestPath = Path.Join(installDirectory, STORE_FILENAME);
+        var steamappsFolder = Directory.GetParent(Directory.GetParent(installDirectory)!.FullName)!.FullName;
+        var manifestPath = Path.Join(steamappsFolder, $"appmanifest_{appId}.acf");
+        var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
 
         if (!manifestPathMap.ContainsKey(appId))
             manifestPathMap.Add(appId, manifestPath);
@@ -278,14 +537,31 @@ public class DepotConfigStore
 
         if (!manifestMap.ContainsKey(appId))
         {
-            manifestMap.Add(appId, new KeyValue("manifest"));
-            manifestMap[appId]["appid"] = new KeyValue("appid", appId.ToString());
+            manifestMap.Add(appId, new KeyValue(KEY_APP_STATE));
+            manifestMap[appId][KEY_APP_ID] = new KeyValue(KEY_APP_ID, appId.ToString());
         }
 
-        if (manifestMap[appId]["depots"] == KeyValue.Invalid)
+        if (manifestMap[appId][KEY_INSTALLED_DEPOTS] == KeyValue.Invalid)
+            manifestMap[appId][KEY_INSTALLED_DEPOTS] = new KeyValue(KEY_INSTALLED_DEPOTS);
+
+        manifestMap[appId][KEY_NAME] = new KeyValue(KEY_NAME, name);
+        manifestMap[appId][KEY_INSTALL_DIR] = new KeyValue(KEY_INSTALL_DIR, Path.GetFileName(installDirectory));
+        manifestMap[appId][KEY_AUTO_UPDATE_BEHAVIOR] = new KeyValue(KEY_AUTO_UPDATE_BEHAVIOR, "1");
+        manifestMap[appId][KEY_ALLOW_OTHER_DOWNLOADS_WHILE_RUNNING] = new KeyValue(KEY_ALLOW_OTHER_DOWNLOADS_WHILE_RUNNING, "0");
+        manifestMap[appId][KEY_SCHEDULED_AUTO_UPDATE] = new KeyValue(KEY_SCHEDULED_AUTO_UPDATE, "0");
+        manifestMap[appId][KEY_FULL_VALIDATE_AFTER_NEXT_UPDATE] = new KeyValue(KEY_FULL_VALIDATE_AFTER_NEXT_UPDATE, "0");
+
+        // Extra
+        if (!manifestExtraMap.ContainsKey(appId))
         {
-            manifestMap[appId]["depots"] = new KeyValue("depots");
+            manifestExtraMap.TryAdd(appId, new KeyValue(KEY_APP_STATE));
+            manifestExtraMap[appId][KEY_APP_ID] = new KeyValue(KEY_APP_ID, appId.ToString());
         }
+
+        if (!manifestExtraPathMap.ContainsKey(appId))
+            manifestExtraPathMap.Add(appId, manifestExtraPath);
+        else
+            manifestExtraPathMap[appId] = manifestExtraPath;
     }
 
     /// <summary>
@@ -294,19 +570,27 @@ public class DepotConfigStore
     /// <returns></returns>
     public InstalledAppDescription[] GetInstalledAppInfo()
     {
-        return manifestMap.Where((entry) => manifestPathMap.ContainsKey(entry.Key)).Select((entry) =>
-            new InstalledAppDescription
+        var manifests = manifestMap.Where((entry) => manifestPathMap.ContainsKey(entry.Key));
+        var infos = new List<InstalledAppDescription>();
+
+        foreach (var entry in manifests)
+        {
+            if (!manifestExtraMap.TryGetValue(entry.Key, out var manifestExtra)) continue;
+
+            infos.Add(new InstalledAppDescription
             {
-                AppId = entry.Value["appid"].AsString()!,
-                InstalledPath = Directory.GetParent(manifestPathMap[entry.Key])!.FullName,
-                DownloadedBytes = entry.Value["downloaded"].AsUnsignedLong(),
-                TotalDownloadSize = entry.Value["totaldownload"].AsUnsignedLong(),
-                Version = entry.Value["version"].AsString() ?? "",
-                LatestVersion = entry.Value["latestversion"].AsString() ?? "",
-                UpdatePending = entry.Value["updatepending"].AsString() == "1",
-                Os = entry.Value["os"].AsString() ?? ""
-            })
-            .ToArray();
+                AppId = entry.Key.ToString(),
+                InstalledPath = GetInstallDirectory(entry.Key)!,
+                DownloadedBytes = entry.Value[KEY_BYTES_DOWNLOADED].AsUnsignedLong(),
+                TotalDownloadSize = entry.Value[KEY_BYTES_TO_DOWNLOAD].AsUnsignedLong(),
+                Version = entry.Value[KEY_BUILD_ID].AsString() ?? "",
+                LatestVersion = manifestExtra[EXTRA_KEY_LATEST_BUILD_ID].AsString() ?? "",
+                UpdatePending = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
+                Os = manifestExtra[EXTRA_KEY_OSLIST].AsString() ?? ""
+            });
+        }
+
+        return infos.ToArray();
     }
 
     /// <summary>
@@ -316,20 +600,23 @@ public class DepotConfigStore
     public (InstalledAppDescription Info, string Branch)? GetInstalledAppInfo(uint appId)
     {
         manifestMap.TryGetValue(appId, out var manifest);
-        manifestPathMap.TryGetValue(appId, out var manifestPath);
-        if (manifest == null || manifestPath == null) return null;
+        var installDirectory = GetInstallDirectory(appId);
+        if (manifest == null || installDirectory == null) return null;
+        if (!manifestExtraMap.TryGetValue(appId, out var manifestExtra)) return null;
+
+        var branch = UniverseToBranch(manifest[KEY_UNIVERSE].AsEnum<Universe>());
 
         return (new InstalledAppDescription
         {
-            AppId = manifest["appid"].AsString()!,
-            InstalledPath = Directory.GetParent(manifestPath)!.FullName,
-            DownloadedBytes = manifest["downloaded"].AsUnsignedLong(),
-            TotalDownloadSize = manifest["totaldownload"].AsUnsignedLong(),
-            Version = manifest["version"].AsString() ?? "",
-            LatestVersion = manifest["latestversion"].AsString() ?? "",
-            UpdatePending = manifest["updatepending"].AsString() == "1",
-            Os = manifest["os"].AsString() ?? ""
-        }, manifest["branch"].AsString() ?? "");
+            AppId = manifest[KEY_APP_ID].AsString()!,
+            InstalledPath = installDirectory,
+            DownloadedBytes = manifest[KEY_BYTES_DOWNLOADED].AsUnsignedLong(),
+            TotalDownloadSize = manifest[KEY_BYTES_TO_DOWNLOAD].AsUnsignedLong(),
+            Version = manifest[KEY_BUILD_ID].AsString() ?? "",
+            LatestVersion = manifestExtra[EXTRA_KEY_LATEST_BUILD_ID].AsString() ?? "",
+            UpdatePending = (manifest[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
+            Os = manifestExtra[EXTRA_KEY_OSLIST].AsString() ?? ""
+        }, branch);
     }
 
     /// <summary>
@@ -342,10 +629,11 @@ public class DepotConfigStore
 
         foreach (var entry in manifestMap)
         {
-            var version = entry.Value["version"]?.AsString();
-            var branch = entry.Value["branch"]?.AsString();
+            var version = entry.Value[KEY_BUILD_ID]?.AsString();
+            var needsUpdate = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0;
+            var branch = UniverseToBranch(entry.Value[KEY_UNIVERSE].AsEnum<Universe>());
 
-            if (version != null && branch != null && (!ignoreUpdatePending || entry.Value["updatepending"] == KeyValue.Invalid))
+            if (version != null && branch != null && (!ignoreUpdatePending || !needsUpdate))
                 map.Add(entry.Key.ToString(), (version, branch));
         }
 
@@ -358,11 +646,19 @@ public class DepotConfigStore
     /// <param name="appId"></param>
     public void RemoveInstalledApp(uint appId)
     {
-        manifestPathMap.TryGetValue(appId, out var path);
+        var installDirectory = GetInstallDirectory(appId);
 
-        if (path != null)
+        if (installDirectory != null)
         {
-            Directory.Delete(Directory.GetParent(path)!.FullName, true);
+            if (Directory.Exists(installDirectory))
+                Directory.Delete(installDirectory, true);
+
+            if (manifestPathMap.TryGetValue(appId, out var manifestPath) && File.Exists(manifestPath))
+                File.Delete(manifestPath);
+
+            if (manifestExtraPathMap.TryGetValue(appId, out var manifestExtraPath) && File.Exists(manifestExtraPath))
+                File.Delete(manifestExtraPath);
+
             manifestPathMap.Remove(appId);
             manifestMap.Remove(appId);
         }
@@ -375,11 +671,11 @@ public class DepotConfigStore
     /// <param name="newInstallDirectory"></param>
     public async Task<string> MoveInstalledApp(uint appId, string newInstallDirectory, Action<(string appId, double progress)>? OnMoveItemProgressed)
     {
-        manifestPathMap.TryGetValue(appId, out var path);
-        if (path == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
+        if (!manifestPathMap.TryGetValue(appId, out var currentManifestPath) || !manifestExtraPathMap.TryGetValue(appId, out var currentExtraManifestPath))
+            throw DbusExceptionHelper.ThrowAppNotInstalled();
 
-        var currentInstallDirectory = Directory.GetParent(path)!.FullName;
-        if (!Directory.Exists(currentInstallDirectory)) throw DbusExceptionHelper.ThrowMissingDirectory();
+        var currentInstallDirectory = GetInstallDirectory(appId);
+        if (currentInstallDirectory == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
 
         // Ensure the destination directory exists
         Directory.CreateDirectory(newInstallDirectory);
@@ -427,13 +723,59 @@ public class DepotConfigStore
 
         // Delete the source directory after moving
         Directory.Delete(currentInstallDirectory, true);
+        File.Delete(currentManifestPath);
+        File.Delete(currentExtraManifestPath);
 
         // Update state
-        manifestPathMap[appId] = newInstallDirectory;
+        manifestPathMap[appId] = Path.Join(Directory.GetParent(Directory.GetParent(newInstallDirectory)!.FullName)!.FullName, $"appmanifest_{appId}.acf");
+        manifestExtraPathMap[appId] = manifestPathMap[appId].Replace(".acf", ".extra.acf");
+
+        // Save state
+        manifestMap[appId].SaveToFile(manifestPathMap[appId], false);
+        manifestExtraMap[appId].SaveToFile(manifestExtraPathMap[appId], false);
 
         // Final progress update to 100%
         OnMoveItemProgressed?.Invoke((appId.ToString(), 100));
 
         return newInstallDirectory;
+    }
+
+    private Universe BranchToUniverse(string branch)
+    {
+        if (branch == "beta")
+            return Universe.Beta;
+
+        if (branch == "dev")
+            return Universe.Dev;
+
+        if (branch == "individual")
+            return Universe.Individual;
+
+        if (branch == "internal")
+            return Universe.Internal;
+
+        if (branch == "rc")
+            return Universe.Rc;
+
+        return Universe.Public;
+    }
+
+    private string UniverseToBranch(Universe universe)
+    {
+        switch (universe)
+        {
+            case Universe.Beta:
+                return "beta";
+            case Universe.Dev:
+                return "dev";
+            case Universe.Individual:
+                return "individual";
+            case Universe.Internal:
+                return "internal";
+            case Universe.Rc:
+                return "rc";
+        }
+
+        return "public";
     }
 }

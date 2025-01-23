@@ -418,9 +418,10 @@ class ContentDownloader
           RequiresInternetConnection = requiresInternetConnection,
           Os = os,
         };
+        var steamId = session.GetLogonDetails().AccountID;
 
-        depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId);
-        depotConfigStore.SetNewVersion(appId, version, branch, os);
+        depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
+        depotConfigStore.SetNewVersion(appId, version, branch, os, language ?? "", steamId.ToString());
 
         await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
@@ -1098,7 +1099,19 @@ class ContentDownloader
       }
     }
 
-    depotConfigStore.SetManifestID(appId, depot.DepotId, depot.ManifestId);
+    depotConfigStore.SetManifestID(appId, depot.DepotId, depot.ManifestId, depotCounter.completeDownloadSize);
+
+    var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    var depotChild = depots?[depot.DepotId.ToString()];
+
+    if (depotChild != null && depotChild != KeyValue.Invalid)
+    {
+      var depotfromapp = depotChild["depotfromapp"]?.AsString();
+
+      if (!string.IsNullOrEmpty(depotfromapp) && uint.TryParse(depotChild.Name, out var depotId) && uint.TryParse(depotfromapp, out var sharedDepotId))
+        depotConfigStore.SetSharedDepot(appId, depotId, sharedDepotId);
+    }
+
     depotConfigStore.Save(appId);
 
     Console.WriteLine("Depot {0} - Downloaded {1} bytes ({2} bytes uncompressed)", depot.DepotId, depotCounter.depotBytesCompressed, depotCounter.depotBytesUncompressed);

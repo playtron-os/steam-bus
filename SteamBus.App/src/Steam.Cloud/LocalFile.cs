@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 namespace Steam.Cloud;
 
 
-class LocalFile
+public class LocalFile
 {
   // File system path to the file
   private readonly string filePath;

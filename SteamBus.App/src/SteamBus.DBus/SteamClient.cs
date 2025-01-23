@@ -432,6 +432,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appIdString)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     await this.session!.WaitForLibrary();
     if (!this.session.ProviderItemMap.TryGetValue(appId, out var providerItem)) throw DbusExceptionHelper.ThrowInvalidAppId();
     return providerItem;
@@ -439,8 +440,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
   {
-    if (this.session is null) return [];
-    await this.session.WaitForLibrary();
+    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    await this.session!.WaitForLibrary();
     return this.session.GetProviderItems().ToArray();
   }
 
@@ -770,6 +771,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var session = new SteamSession(login, depotConfigStore, steamGuardData, this);
     session.OnLibraryUpdated = OnLibraryUpdated;
     session.OnAppNewVersionFound = OnAppNewVersionFound;
+    session.InstalledAppsUpdated = InstalledAppsUpdated;
     session.OnAuthError = OnAuthError;
 
     // Subscribe to client callbacks
@@ -1339,7 +1341,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     List<CloudPathObject> results = [];
     List<KeyValue> overrides = [];
-    var ufs = appInfo.KeyValues["ufs"];
+    var ufs = appInfo["ufs"];
 
     if (ufs.Children.Count == 0)
     {

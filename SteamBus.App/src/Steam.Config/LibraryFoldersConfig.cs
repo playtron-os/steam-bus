@@ -30,6 +30,7 @@ public class LibraryFoldersConfig
     public string path;
 
     public const string FILENAME = "libraryfolders.vdf";
+    public const string EXTERNAL_FILENAME = "libraryfolder.vdf";
 
     // Content of the main libraryfolders config file
     const string DEFAULT_MAIN_LIBRARY_FOLDERS_CONTENT = """
@@ -79,7 +80,7 @@ public class LibraryFoldersConfig
     public static string DefaultPath()
     {
         string baseDir = SteamConfig.GetConfigDirectory();
-        return Path.Join(baseDir, "config", FILENAME);
+        return Path.Join(baseDir, "steamapps", FILENAME);
     }
 
     /// <summary>
@@ -112,6 +113,9 @@ public class LibraryFoldersConfig
     /// </summary>
     public void Save()
     {
+        var parent = Directory.GetParent(path)!.FullName;
+        if (!Directory.Exists(parent))
+            Directory.CreateDirectory(parent);
         this.data?.SaveToFile(this.path, false);
     }
 
@@ -128,6 +132,9 @@ public class LibraryFoldersConfig
         else
             installPath = Path.Join(mountPoint, "SteamLibrary");
 
+        var child = data!.Children.Find((child) => child["path"].AsString() == installPath);
+        if (child != null) return;
+
         var index = data!.Children.Count.ToString();
         var newEntry = new KeyValue(index);
         newEntry["path"] = new KeyValue("path", installPath);
@@ -139,16 +146,22 @@ public class LibraryFoldersConfig
         newEntry["apps"] = new KeyValue("apps");
         data[index] = newEntry;
 
-        var steamappsFolder = Path.Join(installPath, "steamapps");
-        Directory.CreateDirectory(steamappsFolder);
+        string baseDir = SteamConfig.GetConfigDirectory();
+        var configFolder = Path.Join(baseDir, "config");
+
+        if (!Directory.Exists(configFolder))
+            Directory.CreateDirectory(configFolder);
 
         if (isMainDisk)
         {
-            File.CreateSymbolicLink(Path.Join(steamappsFolder, FILENAME), path);
+            var target = Path.Join(configFolder, FILENAME);
+
+            if (!File.Exists(target))
+                File.CreateSymbolicLink(path, target);
         }
         else
         {
-            var externalLibraryFoldersConfigFile = Path.Join(installPath, FILENAME);
+            var externalLibraryFoldersConfigFile = Path.Join(installPath, EXTERNAL_FILENAME);
 
             if (!File.Exists(externalLibraryFoldersConfigFile))
             {
@@ -156,6 +169,8 @@ public class LibraryFoldersConfig
                 singleEntry.SaveToFile(externalLibraryFoldersConfigFile, false);
             }
         }
+
+        Console.WriteLine($"Added {mountPoint} to steam library folder");
     }
 
     /// <summary>

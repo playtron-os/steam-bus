@@ -282,8 +282,8 @@ public class SteamClientApp
             {
                 var manifestDir = GetManifestDirectory();
                 Directory.CreateDirectory(manifestDir);
-                depotConfigStore.EnsureEntryExists(manifestDir, STEAM_CLIENT_APP_ID);
-                depotConfigStore.SetNewVersion(STEAM_CLIENT_APP_ID, uint.Parse(updatingToVersion), "public", "linux");
+                depotConfigStore.EnsureEntryExists(manifestDir, STEAM_CLIENT_APP_ID, "Steam");
+                depotConfigStore.SetNewVersion(STEAM_CLIENT_APP_ID, uint.Parse(updatingToVersion), "public", "linux", "english");
                 depotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
                 depotConfigStore.Save(STEAM_CLIENT_APP_ID);
 
@@ -330,17 +330,17 @@ public class SteamClientApp
             var info = depotConfigStore.GetInstalledAppInfo(STEAM_CLIENT_APP_ID)?.Info;
             version ??= info?.Version ?? "0";
             totalBytes ??= info?.TotalDownloadSize ?? 0;
-        }
 
-        OnDependencyInstallStarted?.Invoke(new InstallStartedDescription
-        {
-            AppId = STEAM_CLIENT_APP_ID.ToString(),
-            Version = version,
-            InstallDirectory = SteamConfig.GetConfigDirectory(),
-            TotalDownloadSize = (ulong)totalBytes,
-            RequiresInternetConnection = true,
-            Os = "linux",
-        });
+            OnDependencyInstallStarted?.Invoke(new InstallStartedDescription
+            {
+                AppId = STEAM_CLIENT_APP_ID.ToString(),
+                Version = version,
+                InstallDirectory = SteamConfig.GetConfigDirectory(),
+                TotalDownloadSize = (ulong)totalBytes,
+                RequiresInternetConnection = true,
+                Os = "linux",
+            });
+        }
     }
 
     private void OnExited(object? sender, EventArgs e)
