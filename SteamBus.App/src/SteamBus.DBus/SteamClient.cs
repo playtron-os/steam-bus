@@ -1108,7 +1108,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     _ = Task.Run(async () =>
     {
-      if (loginDetails.Username == null || steamClientApp.running) return;
+      if (loginDetails.Username == null || steamClientApp.running || !isOnline) return;
 
       fetchingSteamClientData = new();
       Console.WriteLine("Logging in with steam client to fetch latest data");
@@ -1143,8 +1143,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         {
           // Wait until offline field is populated with updated data
           var delay = TimeSpan.FromMilliseconds(200);
-          var timeout = TimeSpan.FromSeconds(10);
-          await AsyncUtils.WaitForConditionAsync(() => session?.IsUserConfigReady() ?? false, delay, timeout);
+          var timeout = TimeSpan.FromSeconds(20);
+          var success = await AsyncUtils.WaitForConditionAsync(() => session?.IsUserConfigReady() ?? false, delay, timeout);
+
+          if (!success) Console.Error.WriteLine($"Steam has not generated user files...");
 
           await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(5));
           Console.WriteLine("Shut down steam client after fetching data");

@@ -62,6 +62,8 @@ public class LoginUsersConfig
     // Save the configuration
     public void Save()
     {
+        var parent = Directory.GetParent(path)!.FullName;
+        Directory.CreateDirectory(parent);
         this.data?.SaveToFile(this.path, false);
     }
 

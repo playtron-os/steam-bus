@@ -836,11 +836,15 @@ public class SteamSession
 
   public void SaveToken()
   {
-    if (logonDetails?.Username != null && logonDetails?.AccessToken != null)
+    if (logonDetails?.Username != null && logonDetails?.AccessToken != null && SteamUser?.SteamID != null)
     {
       var localConfig = new LocalConfig(LocalConfig.DefaultPath());
       localConfig.SetRefreshToken(logonDetails.Username, logonDetails.AccessToken);
       localConfig.Save();
+
+      var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+      globalConfig.SetSteamUser(logonDetails.Username, SteamUser.SteamID.ConvertToUInt64().ToString());
+      globalConfig.Save();
     }
   }
 
@@ -1178,7 +1182,7 @@ public class SteamSession
     foreach (var dir in directories)
     {
       var steamappsDir = Directory.GetParent(dir)?.FullName;
-      if (steamappsDir == null) continue;
+      if (steamappsDir == null || !Directory.Exists(steamappsDir)) continue;
 
       var files = Directory.EnumerateFiles(steamappsDir);
 
