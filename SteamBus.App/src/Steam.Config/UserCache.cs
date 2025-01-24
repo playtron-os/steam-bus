@@ -45,7 +45,7 @@ public class UserCache
         var content = stream.ReadToEnd();
 
         var data = KeyValue.LoadFromString(content);
-        this.data = data;
+        this.data = data ?? new KeyValue("UserCache");
         stream.Close();
     }
 

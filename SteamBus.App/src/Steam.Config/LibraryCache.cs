@@ -49,14 +49,14 @@ public class LibraryCache
         var content = stream.ReadToEnd();
 
         var data = KeyValue.LoadFromString(content);
-        this.data = data;
+        this.data = data ?? new KeyValue("LibraryCache");
         stream.Close();
     }
 
     // Save the configuration
     public void Save()
     {
-        _ = Task.Run(() => this.data?.SaveToFile(this.path, false));
+        this.data?.SaveToFile(this.path, false);
     }
 
     // Adds the list of package ids to the cache
