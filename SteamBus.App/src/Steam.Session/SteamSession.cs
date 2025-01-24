@@ -17,10 +17,11 @@ using SteamKit2.CDN;
 using SteamKit2.Internal;
 using Playtron.Plugin;
 using Steam.Config;
+using Steam.Content;
 
 namespace Steam.Session;
 
-class SteamSession
+public class SteamSession
 {
   public const uint INVALID_APP_ID = uint.MaxValue;
   public bool IsLoggedOn { get; private set; }
@@ -37,7 +38,7 @@ class SteamSession
   public Dictionary<uint, ulong> PackageTokens { get; } = [];
   public Dictionary<uint, byte[]> DepotKeys { get; } = [];
   public ConcurrentDictionary<(uint, string), TaskCompletionSource<SteamContent.CDNAuthToken>> CDNAuthTokens { get; } = [];
-  public Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> AppInfo { get; } = [];
+  public Dictionary<uint, KeyValue> AppInfo { get; } = [];
   public Dictionary<uint, ProviderItem> ProviderItemMap { get; } = [];
   public Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> PackageInfo { get; } = [];
   public Dictionary<string, byte[]> AppBetaPasswords { get; } = [];
@@ -76,6 +77,7 @@ class SteamSession
   private DepotConfigStore depotConfigStore;
   public Action<(string appId, string version)>? OnAppNewVersionFound;
   public Action<string>? OnAuthError;
+  public Action? InstalledAppsUpdated;
 
   private LoginUsersConfig loginUsersConfig;
   private UserCache userCache;
@@ -90,6 +92,7 @@ class SteamSession
     this.authenticator = authenticator;
     this.SteamGuardData = steamGuardData;
     this.depotConfigStore = depotConfigStore;
+    depotConfigStore.steamSession = this;
     this.loginUsersConfig = new LoginUsersConfig(LoginUsersConfig.DefaultPath());
     this.userCache = new UserCache(UserCache.DefaultPath());
     this.libraryCache = new LibraryCache(LibraryCache.DefaultPath());
@@ -102,6 +105,10 @@ class SteamSession
 
       PackageIDs = new ReadOnlyCollection<uint>(libraryCache.GetPackageIDs(details.AccountID));
       ProviderItemMap = libraryCache.GetApps(details.AccountID).ToDictionary((x) => uint.Parse(x.id));
+    }
+    else
+    {
+      PackageIDs = new ReadOnlyCollection<uint>([]);
     }
 
     var clientConfiguration = SteamConfiguration.Create(config =>
@@ -219,6 +226,16 @@ class SteamSession
     if ((AppInfo.ContainsKey(appId) && !bForce) || bAborted)
       return;
 
+    if (!bForce)
+    {
+      var cached = appInfoCache.GetCached(appId);
+      if (cached != null)
+      {
+        AppInfo[appId] = cached;
+        return;
+      }
+    }
+
     var appTokens = await steamApps?.PICSGetAccessTokens([appId], []);
 
     if (appTokens.AppTokensDenied.Contains(appId))
@@ -249,7 +266,7 @@ class SteamSession
           var app = app_value.Value;
 
           Console.WriteLine("Got AppInfo for {0}", app.ID);
-          AppInfo[app.ID] = app;
+          AppInfo[app.ID] = app.KeyValues;
           ProviderItemMap[app.ID] = GetProviderItem(app.ID.ToString(), app.KeyValues);
           appInfoCache.Save(app.ID, app.KeyValues);
         }
@@ -904,7 +921,7 @@ class SteamSession
         {
           foreach (var entry in productInfo.Apps)
           {
-            AppInfo[entry.Key] = entry.Value;
+            AppInfo[entry.Key] = entry.Value.KeyValues;
             ProviderItemMap[entry.Key] = GetProviderItem(entry.Key.ToString(), entry.Value.KeyValues);
             appInfoCache.Save(entry.Key, entry.Value.KeyValues);
 
@@ -943,6 +960,7 @@ class SteamSession
     }
     Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
     isLoadingLibrary = false;
+
     if (!firstCallback)
     {
       List<ProviderItem> updatedItems = new(appids.Count);
@@ -951,6 +969,8 @@ class SteamSession
           updatedItems.Add(providerItem);
       OnLibraryUpdated?.Invoke(updatedItems.ToArray());
     }
+
+    await ImportSteamClientApps();
   }
 
   // Invoked shortly after login to provide account information
@@ -1097,7 +1117,7 @@ class SteamSession
       appinfo = cached;
     }
     else
-      appinfo = app.KeyValues;
+      appinfo = app;
 
     var section_key = section switch
     {
@@ -1145,5 +1165,41 @@ class SteamSession
 
     var (config, _) = loginUsersConfig.GetUserConfig(logonDetails.AccountID.ToString());
     return !string.IsNullOrEmpty(config["Offline"]?["Ticket"]?.Value);
+  }
+
+  private async Task ImportSteamClientApps()
+  {
+    var installedAppIds = depotConfigStore.GetInstalledAppInfo().Select((info) => info.AppId).ToHashSet();
+
+    var libraryFoldersConfig = await LibraryFoldersConfig.CreateAsync();
+    var directories = libraryFoldersConfig.GetInstallDirectories();
+    var hadImport = false;
+
+    foreach (var dir in directories)
+    {
+      var steamappsDir = Directory.GetParent(dir)?.FullName;
+      if (steamappsDir == null) continue;
+
+      var files = Directory.EnumerateFiles(steamappsDir);
+
+      foreach (var file in files)
+      {
+        if (!file.EndsWith(".acf") || file.EndsWith(".extra.acf"))
+          continue;
+
+        var appId = file.Split("_").LastOrDefault()?.Split(".").FirstOrDefault();
+        if (appId == null || installedAppIds.Contains(appId))
+          continue;
+
+        if (await depotConfigStore.ImportApp(file))
+        {
+          installedAppIds.Add(appId);
+          hadImport = true;
+        }
+      }
+    }
+
+    if (hadImport)
+      InstalledAppsUpdated?.Invoke();
   }
 }

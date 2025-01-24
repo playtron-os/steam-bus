@@ -8,7 +8,7 @@ namespace Steam.Cloud;
 // These are handled by CCloud_ExternalStorageTransferReport_Notification
 // and don't provide any data back to the client.
 
-class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
+public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
 {
   // Handles requests to actual cloud
   private SteamKit2.Internal.Cloud unifiedCloud = steamUnifiedMessages.CreateService<SteamKit2.Internal.Cloud>();

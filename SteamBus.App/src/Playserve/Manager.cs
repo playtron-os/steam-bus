@@ -22,6 +22,7 @@ public interface IPluginManager : IDBusObject
     // Methods
     Task<bool> IsPluginRegisteredAsync(string pluginName);
     Task RegisterPluginAsync(string pluginName, ObjectPath pluginPath);
+    Task<DriveInfo[]> GetDrivesAsync();
 
     // Properties
     Task<string> GetVersionAsync();

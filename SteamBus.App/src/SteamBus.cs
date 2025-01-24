@@ -2,6 +2,7 @@
 using SteamBus.DBus;
 using System.Reflection;
 using Xdg.Directories;
+using Steam.Config;
 
 namespace SteamBus;
 
@@ -63,11 +64,10 @@ class SteamBus
         "one.playtron.Playserve",
         "/one/playtron/plugins/Manager"
       );
-      await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
 
       await pluginManager.WatchOnDriveAddedAsync(async (driveInfo) =>
       {
-        Console.WriteLine($"Drive:{driveInfo.Name} added");
+        Console.WriteLine($"Drive:{driveInfo.Name} at Path:{driveInfo.Path} added");
         await depotConfigStore.Reload();
         client.EmitInstalledAppsUpdated();
       });
@@ -78,6 +78,17 @@ class SteamBus
         await depotConfigStore.Reload();
         client.EmitInstalledAppsUpdated();
       });
+
+      var drives = await pluginManager.GetDrivesAsync();
+      var libraryConfig = await LibraryFoldersConfig.CreateAsync();
+      foreach (var drive in drives)
+      {
+        Console.WriteLine($"Verifying drive {drive.Name} is in library config");
+        libraryConfig.AddDiskEntry(drive.Path);
+      }
+      libraryConfig.Save();
+
+      await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
     }
     catch (Exception ex)
     {
