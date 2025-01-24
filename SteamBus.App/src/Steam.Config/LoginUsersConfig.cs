@@ -62,8 +62,7 @@ public class LoginUsersConfig
     // Save the configuration
     public void Save()
     {
-        var parent = Directory.GetParent(path)!.FullName;
-        Directory.CreateDirectory(parent);
+        Disk.EnsureParentFolderExists(path);
         this.data?.SaveToFile(this.path, false);
     }
 
@@ -149,6 +148,7 @@ public class LoginUsersConfig
     {
         var (userData, path) = GetUserConfig(accountId);
         userData = UpdateUserConfig(userData);
+        Disk.EnsureParentFolderExists(path);
         userData.SaveToFile(path, false);
     }
 
@@ -178,8 +178,7 @@ public class LoginUsersConfig
         // Updates other user related config
         var steamConfigDir = SteamConfig.GetConfigDirectory();
         var userSharedConfigPath = Path.Join(steamConfigDir, "userdata", accountId, "7", "remote", "sharedconfig.vdf");
-        var parent = Directory.GetParent(userSharedConfigPath)!.FullName;
-        Directory.CreateDirectory(parent);
+        Disk.EnsureParentFolderExists(userSharedConfigPath);
 
         if (!File.Exists(userSharedConfigPath))
         {

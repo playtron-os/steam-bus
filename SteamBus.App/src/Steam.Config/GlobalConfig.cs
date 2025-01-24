@@ -78,8 +78,7 @@ public class GlobalConfig
     // Save the configuration
     public void Save()
     {
-        var parent = Directory.GetParent(path)!.FullName;
-        Directory.CreateDirectory(parent);
+        Disk.EnsureParentFolderExists(path);
         this.data?.SaveToFile(this.path, false);
     }
 

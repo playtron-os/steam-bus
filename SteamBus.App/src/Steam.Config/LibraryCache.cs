@@ -56,6 +56,7 @@ public class LibraryCache
     // Save the configuration
     public void Save()
     {
+        Disk.EnsureParentFolderExists(path);
         this.data?.SaveToFile(this.path, false);
     }
 
