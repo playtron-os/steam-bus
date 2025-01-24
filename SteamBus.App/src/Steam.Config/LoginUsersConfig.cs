@@ -1,3 +1,4 @@
+using System.Text;
 using SteamKit2;
 
 
@@ -88,9 +89,16 @@ public class LoginUsersConfig
         foreach (var child in data?.Children ?? [])
         {
             if (child.Name == sub)
+            {
                 child["MostRecent"] = new KeyValue("MostRecent", "1");
+                child["AllowAutoLogin"] = new KeyValue("AllowAutoLogin", "1");
+                child["Timestamp"] = new KeyValue("Timestamp", DateTimeOffset.Now.ToUnixTimeSeconds().ToString());
+            }
             else
+            {
                 child["MostRecent"] = new KeyValue("MostRecent", "0");
+                child["AllowAutoLogin"] = new KeyValue("AllowAutoLogin", "0");
+            }
         }
     }
 
@@ -100,6 +108,7 @@ public class LoginUsersConfig
         if (data != null && data[sub] != KeyValue.Invalid)
         {
             data[sub]["WantsOfflineMode"] = new KeyValue("WantsOfflineMode", wantsOfflineMode ? "1" : "0");
+            data[sub]["SkipOfflineModeWarning"] = new KeyValue("SkipOfflineModeWarning", "1");
             SetUserMostRecent(sub);
             Save();
         }
@@ -108,27 +117,37 @@ public class LoginUsersConfig
         UpdateUserSharedConfig(accountId);
     }
 
-    private void UpdateUserConfig(string accountId)
+    public (KeyValue, string) GetUserConfig(string accountId)
     {
-        // Updates other user related config
         var steamConfigDir = SteamConfig.GetConfigDirectory();
         var userConfigPath = Path.Join(steamConfigDir, "userdata", accountId, "config", "localconfig.vdf");
         var parent = Directory.GetParent(userConfigPath)!.FullName;
-        Directory.CreateDirectory(parent);
 
         if (!File.Exists(userConfigPath))
         {
-            var newUserData = UpdateUserConfig(new KeyValue("UserLocalConfigStore"));
-            newUserData.SaveToFile(userConfigPath, false);
-            return;
+            Directory.CreateDirectory(parent);
+            return (new KeyValue("users"), userConfigPath);
         }
 
-        var stream = File.OpenText(path);
-        var content = stream.ReadToEnd();
-        var userData = KeyValue.LoadFromString(content)!;
-        stream.Close();
+        // Use this method to read the file because using ReadToEnd isn't reading the entire file
+        string content = "";
+        using (var stream = File.OpenText(userConfigPath))
+        {
+            string? line;
+            while ((line = stream.ReadLine()) != null)
+            {
+                content += line;
+            }
+        }
+
+        return (KeyValue.LoadFromString(content) ?? new KeyValue("users"), userConfigPath);
+    }
+
+    private void UpdateUserConfig(string accountId)
+    {
+        var (userData, path) = GetUserConfig(accountId);
         userData = UpdateUserConfig(userData);
-        userData.SaveToFile(userConfigPath, false);
+        userData.SaveToFile(path, false);
     }
 
     private KeyValue UpdateUserConfig(KeyValue data)
