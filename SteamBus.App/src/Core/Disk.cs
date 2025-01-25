@@ -142,4 +142,11 @@ static class Disk
             throw new Exception($"An error occurred while calculating folder size: {ex.Message}", ex);
         }
     }
+
+    public static void EnsureParentFolderExists(string filePath)
+    {
+        var parent = Directory.GetParent(filePath)?.FullName;
+        if (parent == null) return;
+        Directory.CreateDirectory(parent);
+    }
 }

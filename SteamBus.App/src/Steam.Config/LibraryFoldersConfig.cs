@@ -113,9 +113,7 @@ public class LibraryFoldersConfig
     /// </summary>
     public void Save()
     {
-        var parent = Directory.GetParent(path)!.FullName;
-        if (!Directory.Exists(parent))
-            Directory.CreateDirectory(parent);
+        Disk.EnsureParentFolderExists(path);
         this.data?.SaveToFile(this.path, false);
     }
 
@@ -157,7 +155,10 @@ public class LibraryFoldersConfig
             var target = Path.Join(configFolder, FILENAME);
 
             if (!File.Exists(target))
+            {
+                Disk.EnsureParentFolderExists(target);
                 File.CreateSymbolicLink(path, target);
+            }
         }
         else
         {
@@ -166,6 +167,7 @@ public class LibraryFoldersConfig
             if (!File.Exists(externalLibraryFoldersConfigFile))
             {
                 var singleEntry = KeyValue.LoadFromString(DEFAULT_EXTERNAL_LIBRARY_FOLDERS_CONTENT)!;
+                Disk.EnsureParentFolderExists(externalLibraryFoldersConfigFile);
                 singleEntry.SaveToFile(externalLibraryFoldersConfigFile, false);
             }
         }

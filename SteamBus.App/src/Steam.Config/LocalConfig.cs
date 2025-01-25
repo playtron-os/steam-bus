@@ -68,6 +68,7 @@ public class LocalConfig
   // Save the configuration
   public void Save()
   {
+    Disk.EnsureParentFolderExists(path);
     this.data?.SaveToFile(this.path, false);
   }
 
