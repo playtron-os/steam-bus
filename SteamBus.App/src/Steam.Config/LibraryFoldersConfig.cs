@@ -154,11 +154,11 @@ public class LibraryFoldersConfig
         {
             var target = Path.Join(configFolder, FILENAME);
 
-            if (!File.Exists(target))
-            {
-                Disk.EnsureParentFolderExists(target);
-                File.CreateSymbolicLink(path, target);
-            }
+            if (File.Exists(path) || Directory.Exists(path))
+                File.Delete(path);
+
+            Disk.EnsureParentFolderExists(target);
+            File.CreateSymbolicLink(path, target);
         }
         else
         {
