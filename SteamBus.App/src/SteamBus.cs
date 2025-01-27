@@ -3,6 +3,7 @@ using SteamBus.DBus;
 using System.Reflection;
 using Xdg.Directories;
 using Steam.Config;
+using System.Text.RegularExpressions;
 
 namespace SteamBus;
 
@@ -84,7 +85,7 @@ class SteamBus
       foreach (var drive in drives)
       {
         Console.WriteLine($"Verifying drive {drive.Name} is in library config");
-        libraryConfig.AddDiskEntry(drive.Path);
+        libraryConfig.AddDiskEntry(Regex.Unescape(drive.Path));
       }
       libraryConfig.Save();
 
