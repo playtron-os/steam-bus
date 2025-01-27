@@ -869,11 +869,12 @@ public class SteamSession
     // Parse licenses and associate their access tokens
     foreach (var license in licenseList.LicenseList)
     {
+      if ((license.LicenseFlags & ELicenseFlags.Expired) != 0)
+        continue;
+
       packageIds.Add(license.PackageID);
       if (license.AccessToken > 0)
-      {
         PackageTokens.TryAdd(license.PackageID, license.AccessToken);
-      }
     }
     PackageIDs = new ReadOnlyCollection<uint>(packageIds);
 
@@ -882,6 +883,8 @@ public class SteamSession
       libraryCache.SetPackageIDs(SteamUser.SteamID.AccountID, packageIds);
       libraryCache.Save();
     }
+
+    ProviderItemMap.Clear();
 
     Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
     await RequestPackageInfo(packageIds);

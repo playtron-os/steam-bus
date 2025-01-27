@@ -12,6 +12,7 @@ using System.Text;
 using Xdg.Directories;
 using Steam.Config;
 using Steam.Cloud;
+using System.Text.RegularExpressions;
 
 namespace SteamBus.DBus;
 
@@ -619,7 +620,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     // Configure the download options
     var installdir = await downloader.GetAppInstallDir(appId);
-    var downloadOptions = new AppDownloadOptions(options, await Disk.GetInstallRootFromDevice(disk, installdir));
+    var installFolder = await Disk.GetInstallRootFromDevice(disk, installdir);
+    var downloadOptions = new AppDownloadOptions(options, installFolder);
 
     // Start downloading the app
     try

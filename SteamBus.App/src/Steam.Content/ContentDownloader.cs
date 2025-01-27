@@ -1038,8 +1038,9 @@ class ContentDownloader
         Directory.CreateDirectory(Path.Combine(installDir, STAGING_DIR));
       }
     }
-    catch
+    catch (Exception exception)
     {
+      Console.Error.WriteLine($"Error creating directories, ex:{exception}");
       return false;
     }
 

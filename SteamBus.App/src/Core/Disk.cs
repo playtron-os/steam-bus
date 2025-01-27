@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Steam.Config;
 using SteamKit2;
@@ -26,12 +27,12 @@ static class Disk
             {
                 var mountPoint = parts[1];
 
-                if (!mountPoint.StartsWith("/sysroot") && !mountPoint.EndsWith(".btrfs") && mountPoint.Length > selectedMountPoint.Length)
+                if (!mountPoint.StartsWith("/sysroot") && !mountPoint.EndsWith(".btrfs") && !mountPoint.StartsWith("/boot") && mountPoint.Length > selectedMountPoint.Length)
                     selectedMountPoint = mountPoint;
             }
         }
 
-        return selectedMountPoint;
+        return Regex.Unescape(selectedMountPoint);
     }
 
     public static async Task<string> GetMountPointFromProc()
@@ -43,7 +44,7 @@ static class Disk
             var parts = line.Split(' ');
             if (IsMountPointMainDisk(parts[1]))
             {
-                return parts[1];
+                return Regex.Unescape(parts[1]);
             }
         }
 
