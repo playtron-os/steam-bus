@@ -1606,7 +1606,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         OnCloudSaveSyncProgressed?.Invoke(new CloudSyncProgress
         {
           AppdId = appIdString,
-          Progress = (uint)((float)downloaded / totalSize * 100f),
+          Progress = (double)downloaded / totalSize * 100,
           SyncState = (uint)SyncState.Download
         });
       }

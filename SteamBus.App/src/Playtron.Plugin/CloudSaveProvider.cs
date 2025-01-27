@@ -16,7 +16,7 @@ public struct CloudPathObject
 public struct CloudSyncProgress
 {
   public string AppdId;
-  public uint Progress;
+  public double Progress;
   public uint SyncState;
 }
 
