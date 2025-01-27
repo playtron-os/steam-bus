@@ -8,6 +8,14 @@ namespace Steam.Cloud;
 // These are handled by CCloud_ExternalStorageTransferReport_Notification
 // and don't provide any data back to the client.
 
+// Common interface betwen different file types that eventually move to RemoteCacheFile
+public interface IRemoteFile
+{
+  public string GetRemotePath();
+  public string Sha1();
+  public ulong UpdateTime { get; }
+}
+
 public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
 {
   // Handles requests to actual cloud
@@ -131,6 +139,19 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
     return response.Body;
   }
 
+  public async Task<CCloud_AppLaunchIntent_Response?> SendLaunchIntent(uint appid, ulong client_id)
+  {
+    CCloud_AppLaunchIntent_Request request = new() { appid = appid, client_id = client_id, machine_name = Environment.MachineName };
+
+    var response = await unifiedCloud.SignalAppLaunchIntent(request);
+    if (response.Result != EResult.OK)
+    {
+      Console.WriteLine("Failed to send launch intent for {0}: {1}", appid, response.Result);
+      return null;
+    }
+    return response.Body;
+  }
+
   public static Dictionary<string, LocalFile> MapFilePaths(CloudPathObject[] paths)
   {
     Dictionary<string, LocalFile> results = [];
@@ -140,8 +161,8 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
       string[] files = Directory.GetFiles(mapRoot.path, mapRoot.pattern, new EnumerationOptions() { RecurseSubdirectories = mapRoot.recursive });
       foreach (var file in files)
       {
-        var newFile = new LocalFile(file, file.Remove(0, mapRoot.path.Length + 1), mapRoot.alias);
-        results.Add(newFile.GetRemotePath(), newFile);
+        var newFile = new LocalFile(file, file[mapRoot.path.Length..], mapRoot.alias);
+        results.Add(newFile.GetRemotePath().ToLower(), newFile);
       }
     }
     return results;

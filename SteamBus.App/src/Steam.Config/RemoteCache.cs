@@ -1,3 +1,4 @@
+using Steam.Cloud;
 using SteamKit2;
 using SteamKit2.Internal;
 
@@ -114,9 +115,27 @@ public class RemoteCache
 		{
 			if (entry.Name == "ChangeNumber" || entry.Name == "ostype") continue;
 			RemoteCacheFile cacheFile = new(entry);
-			result.Add(cacheFile.GetRemoteSavePath(), cacheFile);
+			result.Add(cacheFile.GetRemotePath().ToLower(), cacheFile);
 		}
 		return result;
+	}
+
+	public void UpdateLocalCache(ulong changeNumber, string osType, RemoteCacheFile[] files)
+	{
+		KeyValue newPair = new(this.appid.ToString());
+		newPair["ChangeNumber"] = new KeyValue("ChangeNumber", changeNumber.ToString());
+		newPair["ostype"] = new KeyValue("ostype", osType);
+		foreach (var file in files)
+		{
+			newPair.Children.Add(file.GetKeyValue());
+		}
+		data = newPair;
+	}
+
+	public void Save()
+	{
+		Console.WriteLine("Saving data to {0}", this.path);
+		data.SaveToFile(this.path, false);
 	}
 
 	public static string GetRemoteCachePath(uint userid, uint appid)
@@ -133,20 +152,79 @@ public class RemoteCache
 }
 
 
-public class RemoteCacheFile(KeyValue data)
+public class RemoteCacheFile : IRemoteFile
 {
-	public string Path { get; } = data.Name ?? "";
-	public ERemoteStorageFileRoot Root { get; } = data["root"].AsEnum<ERemoteStorageFileRoot>();
-	public string Sha = data["sha"].AsString() ?? "";
-	public uint Size = data["size"].AsUnsignedInteger();
-	public ulong LocalTime = data["localtime"].AsUnsignedLong();
-	public ulong RemoteTime = data["remotetime"].AsUnsignedLong();
-	public ulong Time = data["time"].AsUnsignedLong();
-	public ERemoteStorageSyncState SyncState = data["syncstate"].AsEnum<ERemoteStorageSyncState>();
-	public ERemoteStoragePlatform PlatformsToSync { get; } = data["platformstosync2"].AsEnum<ERemoteStoragePlatform>();
-	public ECloudStoragePersistState PersistState = data["persiststate"].AsEnum<ECloudStoragePersistState>();
+	public string Path { get; }
+	public ERemoteStorageFileRoot Root { get; }
+	public string Sha;
+	public uint Size;
+	public ulong LocalTime;
+	public ulong RemoteTime;
+	public ulong Time;
+	public ERemoteStorageSyncState SyncState;
+	public ERemoteStoragePlatform PlatformsToSync { get; }
+	public ECloudStoragePersistState PersistState;
 
-	public string GetRemoteSavePath()
+	public RemoteCacheFile(KeyValue data)
+	{
+		Path = data.Name ?? "";
+		Root = data["root"].AsEnum<ERemoteStorageFileRoot>();
+		Sha = data["sha"].AsString() ?? "";
+		Size = data["size"].AsUnsignedInteger();
+		LocalTime = data["localtime"].AsUnsignedLong();
+		RemoteTime = data["remotetime"].AsUnsignedLong();
+		Time = data["time"].AsUnsignedLong();
+		SyncState = data["syncstate"].AsEnum<ERemoteStorageSyncState>();
+		PlatformsToSync = data["platformstosync2"].AsEnum<ERemoteStoragePlatform>();
+		PersistState = data["persiststate"].AsEnum<ECloudStoragePersistState>();
+	}
+
+	public RemoteCacheFile(CCloud_AppFileInfo fileInfo, string path)
+	{
+		var (root, relpath) = CloudUtils.SplitRootPath(path);
+		Path = relpath;
+		Root = GetRemoteRootEnum(root);
+		Sha = BitConverter.ToString(fileInfo.sha_file).Replace("-", "").ToLower();
+		Size = fileInfo.raw_file_size;
+		LocalTime = fileInfo.time_stamp;
+		RemoteTime = fileInfo.time_stamp;
+		Time = fileInfo.time_stamp;
+		SyncState = ERemoteStorageSyncState.unknown;
+		PlatformsToSync = (ERemoteStoragePlatform)fileInfo.platforms_to_sync;
+		PersistState = fileInfo.persist_state;
+	}
+
+	public RemoteCacheFile(LocalFile localFile)
+	{
+		var (root, relpath) = CloudUtils.SplitRootPath(localFile.GetRemotePath());
+		Path = relpath;
+		Root = GetRemoteRootEnum(root);
+		Sha = localFile.Sha1();
+		LocalTime = localFile.UpdateTime;
+		Time = localFile.UpdateTime;
+		Size = localFile.Size;
+		RemoteTime = 0;
+		SyncState = ERemoteStorageSyncState.inprogress;
+		PlatformsToSync = ERemoteStoragePlatform.All;
+		PersistState = ECloudStoragePersistState.k_ECloudStoragePersistStatePersisted;
+	}
+
+	public KeyValue GetKeyValue()
+	{
+		KeyValue keyValue = new(this.Path);
+		keyValue.Children.Add(new KeyValue("root", this.Root.ToString("D")));
+		keyValue.Children.Add(new KeyValue("size", this.Size.ToString()));
+		keyValue.Children.Add(new KeyValue("localtime", this.LocalTime.ToString()));
+		keyValue.Children.Add(new KeyValue("time", this.Time.ToString()));
+		keyValue.Children.Add(new KeyValue("remotetime", this.RemoteTime.ToString()));
+		keyValue.Children.Add(new KeyValue("sha", this.Sha));
+		keyValue.Children.Add(new KeyValue("syncstate", this.SyncState.ToString("D")));
+		keyValue.Children.Add(new KeyValue("persiststate", this.PersistState.ToString("D")));
+		keyValue.Children.Add(new KeyValue("platformstosync2", this.PlatformsToSync.ToString("D")));
+		return keyValue;
+	}
+
+	public string GetRemotePath()
 	{
 		if (Root <= 0)
 		{
@@ -157,5 +235,44 @@ public class RemoteCacheFile(KeyValue data)
 		string rootStr = enumName[24..];
 
 		return $"%{rootStr}%{Path}";
+	}
+
+	public static ERemoteStorageFileRoot GetRemoteRootEnum(string root)
+	{
+		return root.ToLower() switch
+		{
+			"" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootDefault,
+			"gameinstall" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootGameInstall,
+			"winmydocuments" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootWinMyDocuments,
+			"winappdatalocal" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootWinAppDataLocal,
+			"winappdataroaming" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootWinAppDataRoaming,
+			"steamuserbasestorage" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootSteamUserBaseStorage,
+			"machome" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootMacHome,
+			"macappsupport" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootMacAppSupport,
+			"macdocuments" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootMacDocuments,
+			"winsavedgames" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootWinSavedGames,
+			"winprogramdata" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootWinProgramData,
+			"steamclouddocuments" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootSteamCloudDocuments,
+			"winappdatalocallow" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootWinAppDataLocalLow,
+			"maccaches" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootMacCaches,
+			"linuxhome" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootLinuxHome,
+			"linuxxdgdatahome" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootLinuxXdgDataHome,
+			"linuxxdgconfighome" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootLinuxXdgConfigHome,
+			"androidsteampackageroot" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootAndroidSteamPackageRoot,
+			_ => ERemoteStorageFileRoot.k_ERemoteStorageFileRootInvalid,
+		};
+	}
+
+	public string Sha1()
+	{
+		return Sha;
+	}
+
+	public ulong UpdateTime
+	{
+		get
+		{
+			return Time;
+		}
 	}
 }

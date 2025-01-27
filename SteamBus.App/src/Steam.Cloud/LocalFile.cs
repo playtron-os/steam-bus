@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 namespace Steam.Cloud;
 
 
-public class LocalFile
+public class LocalFile : IRemoteFile
 {
   // File system path to the file
   private readonly string filePath;
@@ -26,26 +26,13 @@ public class LocalFile
     this.Size = (uint)stat.Length;
   }
 
-  public async Task<string> Sha1()
+  public string Sha1()
   {
     // Calculate sha1 hash
     FileStream handle = File.OpenRead(this.filePath);
     BufferedStream bs = new(handle);
-    var sha1 = await SHA1.HashDataAsync(bs);
-    return BitConverter.ToString(sha1).Replace("-", "").ToLower();
-  }
-
-  // Splits path after the variable
-  public (string, string) SplitRootPath()
-  {
-    var path = GetRemotePath();
-    var percentageSign = path.IndexOf('%', 1);
-    if (percentageSign == -1)
-    {
-      return ("", path);
-    }
-
-    return (path[1..percentageSign++], path[percentageSign..]);
+    var data = SHA1.HashData(bs);
+    return BitConverter.ToString(data).Replace("-", "").ToLower();
   }
 
   public string GetRemotePath()
