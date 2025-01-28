@@ -103,6 +103,7 @@ public class CloudUtils
             fileRes.EnsureSuccessStatusCode();
             var fileData = await fileRes.Content.ReadAsStreamAsync() ?? throw new Exception("file stream error");
             var dirname = Path.GetDirectoryName(fspath);
+
             if (fileData != null && dirname != null)
             {
                 Directory.CreateDirectory(dirname);
@@ -119,6 +120,7 @@ public class CloudUtils
                     await fileData.CopyToAsync(fileH);
                 }
             }
+            File.SetLastWriteTimeUtc(fspath, DateTime.UnixEpoch.AddSeconds(file.RemoteTime));
         }
         catch (Exception e)
         {
