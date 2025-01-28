@@ -91,7 +91,7 @@ in-docker:
 	@# Run the given make target inside Docker
 	docker build -t $(IMAGE_NAME):$(IMAGE_TAG) .
 	docker run --rm \
-		-v $(PWD):/src:Z \
+		-v $(shell pwd):/src:Z \
 		--workdir /src \
 		--user $(shell id -u):$(shell id -g) \
 		-e DOTNET_CLI_HOME=/tmp \
