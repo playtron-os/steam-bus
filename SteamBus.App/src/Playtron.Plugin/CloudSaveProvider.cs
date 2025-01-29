@@ -20,6 +20,17 @@ public struct CloudSyncProgress
   public uint SyncState;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct CloudSyncFailure
+{
+  public string AppdId;
+  public string Error;
+  public ulong Local;
+  public ulong Remote;
+  public ulong QuotaUsage;
+  public ulong Quota;
+}
+
 public enum SyncState
 {
   Download,
@@ -34,7 +45,7 @@ public interface ICloudSaveProvider : IDBusObject
   // Task CloudSaveResolveConflict(string appid, string platform, CloudPathObject[] paths, bool keepLocal);
 
   Task<IDisposable> WatchCloudSaveSyncProgressedAsync(Action<CloudSyncProgress> reply);
-  Task<IDisposable> WatchCloudSaveSyncFailedAsync(Action<(string appid, string error, CloudUtils.ConflictDetails? conflictDetails)> reply);
+  Task<IDisposable> WatchCloudSaveSyncFailedAsync(Action<CloudSyncFailure> reply);
 }
 
 

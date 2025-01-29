@@ -94,7 +94,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<string>? OnQrCodeUpdated;
   public event Action<ProviderItem[]>? OnLibraryUpdated;
   public event Action<CloudSyncProgress>? OnCloudSaveSyncProgressed;
-  public event Action<(string appid, string error, CloudUtils.ConflictDetails? conflictDetails)>? OnCloudSyncFailed;
+  public event Action<CloudSyncFailure>? OnCloudSyncFailed;
 
   private SteamClientApp steamClientApp;
   public event Action<InstallStartedDescription>? OnDependencyInstallStarted;
@@ -1482,7 +1482,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnCloudSaveSyncProgressed), reply);
   }
 
-  Task<IDisposable> ICloudSaveProvider.WatchCloudSaveSyncFailedAsync(Action<(string appid, string error, CloudUtils.ConflictDetails? conflictDetails)> reply)
+  Task<IDisposable> ICloudSaveProvider.WatchCloudSaveSyncFailedAsync(Action<CloudSyncFailure> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnCloudSyncFailed), reply);
   }
@@ -1525,8 +1525,15 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Check if there are any changes we need to apply
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
-    var analisis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles);
-    if (changelist.current_change_number == changeNumber && analisis.missingLocal.Count == 0)
+    var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles);
+    if (analysis.conflictDetails != null)
+    {
+      var local = analysis.conflictDetails?.local ?? 0;
+      var remote = analysis.conflictDetails?.remote ?? 0;
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
+      return;
+    }
+    if (changelist.current_change_number == changeNumber && analysis.missingLocal.Count == 0)
     {
       Console.WriteLine("files are synced");
       return;
@@ -1535,7 +1542,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Collect files that need to be downloaded/restored
     List<RemoteCacheFile> filesToDownload = [];
     // Files to restore
-    foreach (var file in analisis.missingLocal)
+    foreach (var file in analysis.missingLocal)
     {
       file.SyncState = ERemoteStorageSyncState.inprogress;
       filesToDownload.Add(file);
@@ -1622,7 +1629,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     if (currentError != null)
     {
-      OnCloudSyncFailed?.Invoke((appIdString, currentError, analisis.conflictDetails));
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = currentError });
     }
     // Set this to unknown for now, this shouldnt break anything afaik
     remoteCacheFile.UpdateLocalCache(changelist.current_change_number, "-1", cachedFiles.Values.ToArray());
@@ -1656,11 +1663,16 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       return;
     }
+    var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
+    var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, true);
     if (changelist.current_change_number != changeNumber)
     {
       Console.WriteLine("Potential conflict, different change numbers detected");
+      
       return;
     }
+    Console.WriteLine("Before upload analysis: Changed locally: {0} Missing local: {1}, Conflict?: {2}", analysis.changedLocal.Count, analysis.missingLocal.Count, analysis.conflictDetails != null);
+
     Console.WriteLine("Uploading is not implemented yet");
   }
 }

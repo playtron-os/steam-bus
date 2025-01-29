@@ -21,7 +21,7 @@ public class CloudUtils
         public ulong remote;
     }
 
-    public static AnalisisResult AnalyzeSaves(CCloud_GetAppFileChangelist_Response changelist, Dictionary<string, RemoteCacheFile> remoteFiles, Dictionary<string, LocalFile> localFiles)
+    public static AnalisisResult AnalyzeSaves(CCloud_GetAppFileChangelist_Response changelist, Dictionary<string, RemoteCacheFile> remoteFiles, Dictionary<string, LocalFile> localFiles, bool upload = false)
     {
         AnalisisResult res = new() { missingLocal = [], changedLocal = [] };
         ConflictDetails conflictDetails = new();
@@ -106,7 +106,8 @@ public class CloudUtils
 
             if (fileData != null && dirname != null)
             {
-                Directory.CreateDirectory(dirname);
+                if (dirname.Length > 0)
+                    Directory.CreateDirectory(dirname);
                 if (file_size != raw_file_size)
                 {
                     Console.WriteLine("Got compressed file");
