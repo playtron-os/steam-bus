@@ -27,7 +27,8 @@ static class Disk
             {
                 var mountPoint = parts[1];
 
-                if (!mountPoint.StartsWith("/sysroot") && !mountPoint.EndsWith(".btrfs") && !mountPoint.StartsWith("/boot") && mountPoint.Length > selectedMountPoint.Length)
+                if (!mountPoint.StartsWith("/sysroot") && !mountPoint.EndsWith(".btrfs") && !mountPoint.StartsWith("/boot") && !mountPoint.StartsWith("/etc")
+                    && mountPoint.Length > selectedMountPoint.Length)
                     selectedMountPoint = mountPoint;
             }
         }
