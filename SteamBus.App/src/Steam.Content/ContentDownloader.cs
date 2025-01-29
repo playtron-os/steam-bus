@@ -260,6 +260,10 @@ class ContentDownloader
     try
     {
       this.options = options;
+      await Client.DetectLancacheServerAsync();
+      if (Client.UseLancacheServer) {
+        Console.WriteLine("Using LanCache server for downloads");
+      }
       cdnPool = new CDNClientPool(this.session.SteamClient, appId);
       var cts = new CancellationTokenSource();
       cdnPool!.ExhaustedToken = cts;
