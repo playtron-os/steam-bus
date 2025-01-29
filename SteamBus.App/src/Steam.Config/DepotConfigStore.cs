@@ -189,6 +189,9 @@ public class DepotConfigStore
 
     public async Task<bool> ImportApp(string manifestPath)
     {
+        if (manifestPathMap.ContainsValue(manifestPath))
+            return false;
+
         var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
 
         var manifestData = await File.ReadAllTextAsync(manifestPath);

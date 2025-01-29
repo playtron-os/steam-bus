@@ -111,10 +111,7 @@ public class SteamSession
       PackageIDs = new ReadOnlyCollection<uint>([]);
     }
 
-    var clientConfiguration = SteamConfiguration.Create(config =>
-        config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
-    );
-
+    var clientConfiguration = GetDefaultSteamClientConfig();
     this.SteamClient = new SteamClient(clientConfiguration);
 
     this.SteamUser = this.SteamClient.GetHandler<SteamUser>();
@@ -1208,5 +1205,79 @@ public class SteamSession
 
     if (hadImport)
       InstalledAppsUpdated?.Invoke();
+  }
+
+  public static async Task<ProviderItem?> GetProviderItemRequest(uint appId)
+  {
+    var steamClient = new SteamClient(GetDefaultSteamClientConfig());
+    var steamUser = steamClient.GetHandler<SteamUser>();
+    var steamApps = steamClient.GetHandler<SteamApps>();
+    if (steamUser == null || steamApps == null) return null;
+
+    var callbacks = new CallbackManager(steamClient);
+    var loginTask = new TaskCompletionSource();
+
+    callbacks.Subscribe<SteamClient.ConnectedCallback>((_) => steamUser.LogOnAnonymous());
+    callbacks.Subscribe<SteamClient.DisconnectedCallback>((_) => loginTask.TrySetCanceled());
+    callbacks.Subscribe<SteamUser.LoggedOnCallback>((_) => loginTask.TrySetResult());
+    callbacks.Subscribe<SteamUser.LoggedOffCallback>((_) => loginTask.TrySetCanceled());
+
+    var cts = new CancellationTokenSource();
+    _ = Task.Run(async () =>
+    {
+      var token = cts.Token;
+
+      try
+      {
+        while (!token.IsCancellationRequested)
+          await callbacks.RunWaitCallbackAsync(token);
+      }
+      catch (OperationCanceledException)
+      {
+        //
+      }
+    });
+
+    steamClient.Connect();
+
+    await loginTask.Task;
+
+    try
+    {
+      var request = new SteamApps.PICSRequest(appId);
+
+      var appInfoMultiple = await steamApps.PICSGetProductInfo([request], []);
+
+      if (appInfoMultiple.Results != null)
+      {
+        foreach (var appInfo in appInfoMultiple.Results)
+        {
+          foreach (var app_value in appInfo.Apps)
+          {
+            var app = app_value.Value;
+            Console.WriteLine("Got AppInfo for {0}", app.ID);
+            return GetProviderItem(app.ID.ToString(), app.KeyValues);
+          }
+        }
+      }
+    }
+    catch (Exception)
+    {
+      throw;
+    }
+    finally
+    {
+      cts.Cancel();
+      steamClient.Disconnect();
+    }
+
+    return null;
+  }
+
+  private static SteamConfiguration GetDefaultSteamClientConfig()
+  {
+    return SteamConfiguration.Create(config =>
+        config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
+    );
   }
 }
