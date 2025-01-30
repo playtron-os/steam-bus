@@ -198,7 +198,7 @@ public interface IPluginLibraryProvider : IDBusObject
   Task UninstallAsync(string appId);
   Task<string> MoveItemAsync(string appId, string disk);
 
-  Task<EulaEntry[]> GetEulasAsync(string appId, string country);
+  Task<EulaEntry[]> GetEulasAsync(string appId, string country, string locale);
 
   // Gets information about installed apps
   Task<InstalledAppDescription[]> GetInstalledAppsAsync();

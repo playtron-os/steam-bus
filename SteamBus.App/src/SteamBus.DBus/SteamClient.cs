@@ -658,7 +658,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return await depotConfigStore.MoveInstalledApp(appId, newInstallDirectory, OnMoveItemProgressed);
   }
 
-  async Task<EulaEntry[]> IPluginLibraryProvider.GetEulasAsync(string appIdString, string country)
+  async Task<EulaEntry[]> IPluginLibraryProvider.GetEulasAsync(string appIdString, string country, string locale)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
