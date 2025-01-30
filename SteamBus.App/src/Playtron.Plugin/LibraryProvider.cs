@@ -11,6 +11,16 @@ namespace Playtron.Plugin;
 using InstallOptionDescription = (string, string, string[]);
 
 [StructLayout(LayoutKind.Sequential)]
+public struct EulaEntry
+{
+  public string Id { get; set; }
+  public string Name { get; set; }
+  public int Version { get; set; }
+  public string Url { get; set; }
+  public string Body { get; set; }
+}
+
+[StructLayout(LayoutKind.Sequential)]
 public struct InstalledAppDescription
 {
   public string AppId { get; set; }
@@ -187,6 +197,8 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<int> InstallAsync(string appId, string disk, InstallOptions options);
   Task UninstallAsync(string appId);
   Task<string> MoveItemAsync(string appId, string disk);
+
+  Task<EulaEntry[]> GetEulasAsync(string appId, string country);
 
   // Gets information about installed apps
   Task<InstalledAppDescription[]> GetInstalledAppsAsync();
