@@ -658,6 +658,52 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return await depotConfigStore.MoveInstalledApp(appId, newInstallDirectory, OnMoveItemProgressed);
   }
 
+  async Task<EulaEntry[]> IPluginLibraryProvider.GetEulasAsync(string appIdString, string country, string locale)
+  {
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+
+    await this.session!.WaitForLibrary();
+    await this.session!.RequestAppInfo(appId);
+
+    var common = session!.GetSteam3AppSection(appId, EAppInfoSection.Common) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
+    var eulas = common["eulas"];
+    if (eulas == KeyValue.Invalid)
+      return [];
+
+    var result = new List<EulaEntry>();
+
+    foreach (var child in eulas.Children)
+    {
+      if (country != string.Empty)
+      {
+        var allowedCountries = child["allowed_countries"];
+        if (allowedCountries != KeyValue.Invalid)
+        {
+          var countries = allowedCountries.AsString()?.Split(" ") ?? [];
+          if (!countries.Contains(country))
+            continue;
+        }
+      }
+
+      var id = child["id"].AsString();
+      var url = child["url"].AsString();
+      if (id == null || url == null)
+        continue;
+
+      result.Add(new EulaEntry
+      {
+        Id = id,
+        Name = child["name"].AsString() ?? "",
+        Version = child["version"].AsInteger(),
+        Url = url,
+        Body = "",
+      });
+    }
+
+    return result.ToArray();
+  }
+
   async Task IPluginLibraryProvider.PauseInstallAsync()
   {
     Console.WriteLine("Pausing current install");
