@@ -113,7 +113,7 @@ public class RemoteCache
 		Dictionary<string, RemoteCacheFile> result = [];
 		foreach (var entry in this.data.Children)
 		{
-			if (entry.Name == "ChangeNumber" || entry.Name == "ostype") continue;
+			if (entry.Children.Count == 0) continue;
 			RemoteCacheFile cacheFile = new(entry);
 			result.Add(cacheFile.GetRemotePath().ToLower(), cacheFile);
 		}

@@ -1368,22 +1368,23 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Unsure if usage of remote directory is bound to the number of savefiles or even its existance.
     var defaultPath = RemoteCache.GetRemoteSavePath(this.session!.SteamUser!.SteamID!.AccountID, appId);
 
-    results.Add(new CloudPathObject { alias = "", path = defaultPath, recursive = true, pattern = "*" });
+    results.Add(new CloudPathObject { alias = "", path = defaultPath, recursive = true, pattern = "*", platforms = [] });
 
 
     foreach (var location in savefiles)
     {
+      List<string> platforms = [];
       if (location["platforms"].Children.Count != 0)
       {
+        var matched = false;
         foreach (var locPlatform in location["platforms"].Children)
         {
-          var platformToCheck = locPlatform.AsString()?.ToLower();
-          if (platformToCheck == "all" || platformToCheck == platform) goto Matched;
-
+          var platformToCheck = locPlatform.AsString()?.ToLower() ?? "";
+          if (platformToCheck != "all") platforms.Add(platformToCheck);
+          if (!matched) matched = platformToCheck == "all" || platformToCheck == platform;
         }
-        continue;
+        if (!matched) continue;
       }
-    Matched:
       var root = location["root"].AsString()!;
       var path = location["path"].AsString()!;
       var pattern = location["pattern"].AsString()!;
@@ -1472,7 +1473,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       }
       var newPath = System.IO.Path.Join(mappedroot, path);
       Console.WriteLine("Appending new path {0} - {1}", alias, newPath);
-      results.Add(new CloudPathObject { alias = alias, path = newPath, recursive = recursive, pattern = pattern });
+      results.Add(new CloudPathObject { alias = alias, path = newPath, recursive = recursive, pattern = pattern, platforms = platforms.ToArray() });
     }
     return results.ToArray();
   }
@@ -1526,13 +1527,13 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
     var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles);
-    if (analysis.conflictDetails != null)
-    {
-      var local = analysis.conflictDetails?.local ?? 0;
-      var remote = analysis.conflictDetails?.remote ?? 0;
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
-      return;
-    }
+    // if (analysis.conflictDetails != null)
+    // {
+    //   var local = analysis.conflictDetails?.local ?? 0;
+    //   var remote = analysis.conflictDetails?.remote ?? 0;
+    //   OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
+    //   return;
+    // }
     if (changelist.current_change_number == changeNumber && analysis.missingLocal.Count == 0)
     {
       Console.WriteLine("files are synced");
@@ -1552,7 +1553,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       if ((file.platforms_to_sync & (uint)platformToSync) == 0) continue;
       var path = "";
-      if (changelist.path_prefixes.Count > 0)
+      if (changelist.path_prefixes.Count > 0 && file.ShouldSerializepath_prefix_index())
       {
         path = changelist.path_prefixes[(int)file.path_prefix_index];
       }
@@ -1625,6 +1626,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         file.LocalTime = 0;
         currentError ??= DbusErrors.CloudFileDownload;
       }
+      cachedFiles[file.GetRemotePath().ToLower()] = file;
     }
 
     if (currentError != null)
@@ -1668,7 +1670,6 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (changelist.current_change_number != changeNumber)
     {
       Console.WriteLine("Potential conflict, different change numbers detected");
-      
       return;
     }
     Console.WriteLine("Before upload analysis: Changed locally: {0} Missing local: {1}, Conflict?: {2}", analysis.changedLocal.Count, analysis.missingLocal.Count, analysis.conflictDetails != null);

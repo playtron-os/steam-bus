@@ -47,13 +47,7 @@ public class CloudUtils
                 conflictDetails.local = file.Value.UpdateTime;
         }
 
-        bool wasCloudUpdated = changelist.files.Count > 0;
-        bool wasLocalUpdated = res.changedLocal.Count > 0;
-
-        if (wasCloudUpdated && wasLocalUpdated)
-        {
-            res.conflictDetails = conflictDetails;
-        }
+        res.conflictDetails = conflictDetails;
 
         return res;
     }

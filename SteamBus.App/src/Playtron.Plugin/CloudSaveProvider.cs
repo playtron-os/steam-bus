@@ -10,6 +10,7 @@ public struct CloudPathObject
   public string path { get; set; }
   public string pattern { get; set; }
   public bool recursive { get; set; }
+  public string[] platforms { get; set; }
 }
 
 [StructLayout(LayoutKind.Sequential)]
