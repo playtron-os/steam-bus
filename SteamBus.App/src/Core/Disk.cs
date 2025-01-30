@@ -6,46 +6,83 @@ using SteamKit2;
 
 static class Disk
 {
+    public static string _homeDrive = "";
+
     public static bool IsMountPointMainDisk(string mountPoint)
     {
         return mountPoint == "/" || mountPoint == "/home" || mountPoint == "/var/home";
     }
 
-    public static async Task<string> GetMountPointFromProc(string device)
+    static async Task<string> RunDf(string arg)
     {
-        var lines = await File.ReadAllLinesAsync("/proc/mounts");
-        string selectedMountPoint = "";
-
-        foreach (var line in lines ?? [])
+        try
         {
-            var parts = line.Split(' ');
-
-            if (parts.Length < 2)
-                continue;
-
-            if (parts[0] == device)
+            ProcessStartInfo psi = new ProcessStartInfo
             {
-                var mountPoint = parts[1];
+                FileName = "/bin/bash",
+                Arguments = $"-c \"df {arg}\"",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
 
-                if (!mountPoint.StartsWith("/sysroot") && !mountPoint.EndsWith(".btrfs") && !mountPoint.StartsWith("/boot") && mountPoint.Length > selectedMountPoint.Length)
-                    selectedMountPoint = mountPoint;
-            }
+            using Process? process = Process.Start(psi);
+            if (process == null) return string.Empty;
+
+            using StreamReader reader = process.StandardOutput;
+            string output = await reader.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            return output;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error running df: {ex.Message}");
         }
 
-        return Regex.Unescape(selectedMountPoint);
+        return string.Empty;
     }
 
-    public static async Task<string> GetMountPointFromProc()
+    static async Task<string> GetHomeDrive()
     {
-        var lines = await File.ReadAllLinesAsync("/proc/mounts");
+        if (string.IsNullOrEmpty(_homeDrive))
+            _homeDrive = await RunDf(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
 
-        foreach (var line in lines ?? [])
+        return _homeDrive;
+    }
+
+    static async Task<string> GetMountPath(string? driveName = null)
+    {
+        var homePath = Regex.Unescape(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
+        if (driveName == null) return homePath;
+
+        var homeDrive = await GetHomeDrive();
+        if (homeDrive == driveName) return homePath;
+
+        try
         {
-            var parts = line.Split(' ');
-            if (IsMountPointMainDisk(parts[1]))
+            var output = await RunDf(driveName);
+            string[] lines = output.Split('\n');
+
+            foreach (string line in lines)
             {
-                return Regex.Unescape(parts[1]);
+                string[] parts = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 6)
+                    continue;
+                var path = parts[5];
+
+                var condition = driveName == null ? IsMountPointMainDisk(path) : line.StartsWith(driveName);
+
+                if (condition)
+                {
+                    if (IsMountPointMainDisk(path)) return homePath;
+                    return Regex.Unescape(path);
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error: {ex.Message}");
         }
 
         return string.Empty;
@@ -54,7 +91,8 @@ static class Disk
     public static async Task<string> GetInstallRootFromDevice(string device, string folderName)
     {
         // Get mount point
-        var mountPoint = await GetMountPointFromProc(device);
+        var mountPoint = await GetMountPath(device);
+        Console.WriteLine($"### MOUNT: {mountPoint}");
         if (string.IsNullOrEmpty(mountPoint))
             throw DbusExceptionHelper.ThrowDiskNotFound();
 
@@ -64,7 +102,7 @@ static class Disk
     public static async Task<string> GetInstallRoot(string folderName)
     {
         // Get mount point
-        var mountPoint = await GetMountPointFromProc();
+        var mountPoint = await GetMountPath();
         if (string.IsNullOrEmpty(mountPoint))
             throw DbusExceptionHelper.ThrowDiskNotFound();
 
