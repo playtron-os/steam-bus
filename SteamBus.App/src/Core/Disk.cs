@@ -6,22 +6,21 @@ using SteamKit2;
 
 static class Disk
 {
+    public static string _homeDrive = "";
+
     public static bool IsMountPointMainDisk(string mountPoint)
     {
         return mountPoint == "/" || mountPoint == "/home" || mountPoint == "/var/home";
     }
 
-    static async Task<string> GetMountPath(string? driveName = null)
+    static async Task<string> RunDf(string arg)
     {
-        var homePath = Regex.Unescape(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
-        if (driveName == null) return homePath;
-
         try
         {
             ProcessStartInfo psi = new ProcessStartInfo
             {
                 FileName = "/bin/bash",
-                Arguments = $"-c \"df {driveName}\"",
+                Arguments = $"-c \"df {arg}\"",
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
@@ -34,6 +33,35 @@ static class Disk
             string output = await reader.ReadToEndAsync();
             await process.WaitForExitAsync();
 
+            return output;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error running df: {ex.Message}");
+        }
+
+        return string.Empty;
+    }
+
+    static async Task<string> GetHomeDrive()
+    {
+        if (string.IsNullOrEmpty(_homeDrive))
+            _homeDrive = await RunDf(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
+
+        return _homeDrive;
+    }
+
+    static async Task<string> GetMountPath(string? driveName = null)
+    {
+        var homePath = Regex.Unescape(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
+        if (driveName == null) return homePath;
+
+        var homeDrive = await GetHomeDrive();
+        if (homeDrive == driveName) return homePath;
+
+        try
+        {
+            var output = await RunDf(driveName);
             string[] lines = output.Split('\n');
 
             foreach (string line in lines)
@@ -64,6 +92,7 @@ static class Disk
     {
         // Get mount point
         var mountPoint = await GetMountPath(device);
+        Console.WriteLine($"### MOUNT: {mountPoint}");
         if (string.IsNullOrEmpty(mountPoint))
             throw DbusExceptionHelper.ThrowDiskNotFound();
 
