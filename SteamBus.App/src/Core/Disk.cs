@@ -46,7 +46,20 @@ static class Disk
     static async Task<string> GetHomeDrive()
     {
         if (string.IsNullOrEmpty(_homeDrive))
-            _homeDrive = await RunDf(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
+        {
+            var output = await RunDf(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
+            string[] lines = output.Split('\n').Skip(1).ToArray();
+
+            foreach (string line in lines)
+            {
+                string[] parts = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 6)
+                    continue;
+
+                _homeDrive = parts[0];
+                break;
+            }
+        }
 
         return _homeDrive;
     }
@@ -62,7 +75,7 @@ static class Disk
         try
         {
             var output = await RunDf(driveName);
-            string[] lines = output.Split('\n');
+            string[] lines = output.Split('\n').Skip(1).ToArray();
 
             foreach (string line in lines)
             {
@@ -92,7 +105,6 @@ static class Disk
     {
         // Get mount point
         var mountPoint = await GetMountPath(device);
-        Console.WriteLine($"### MOUNT: {mountPoint}");
         if (string.IsNullOrEmpty(mountPoint))
             throw DbusExceptionHelper.ThrowDiskNotFound();
 
