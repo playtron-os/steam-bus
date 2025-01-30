@@ -452,10 +452,13 @@ public class DepotConfigStore
                 break;
         }
 
-        manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
-
-        if ((stateFlags & StateFlags.FullyInstalled) != 0)
+        if (stage == null)
+        {
             manifestMap[appId][KEY_LAST_UPDATED] = new KeyValue(KEY_LAST_UPDATED, DateTimeOffset.Now.ToUnixTimeSeconds().ToString());
+            stateFlags &= ~StateFlags.UpdateRequired;
+        }
+
+        manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
 
         if (sizeOnDisk != null)
             UpdateAppSizeOnDisk(appId, (ulong)sizeOnDisk);
