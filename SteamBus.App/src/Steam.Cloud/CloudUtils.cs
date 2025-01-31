@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.IO.Compression;
 using Playtron.Plugin;
 using Steam.Config;
@@ -6,13 +7,25 @@ using SteamKit2.Internal;
 
 namespace Steam.Cloud;
 
+public enum EHTTPMethod
+{
+    Invalid,
+    GET,
+    HEAD,
+    POST,
+    PUT,
+    DELETE,
+    OPTIONS,
+    PATCH
+}
+
 public class CloudUtils
 {
     public struct AnalisisResult
     {
         public List<RemoteCacheFile> missingLocal;
         public List<LocalFile> changedLocal;
-        public ConflictDetails? conflictDetails;
+        public ConflictDetails conflictDetails;
     }
 
     public struct ConflictDetails
@@ -24,14 +37,16 @@ public class CloudUtils
     public static AnalisisResult AnalyzeSaves(CCloud_GetAppFileChangelist_Response changelist, Dictionary<string, RemoteCacheFile> remoteFiles, Dictionary<string, LocalFile> localFiles, bool upload = false)
     {
         AnalisisResult res = new() { missingLocal = [], changedLocal = [] };
-        ConflictDetails conflictDetails = new();
+        ConflictDetails conflictDetails = new() { local = 0, remote = 0 };
+        foreach (var file in changelist.files)
+        {
+            if (conflictDetails.remote < file.time_stamp)
+                conflictDetails.remote = file.time_stamp;
+        }
         foreach (var file in remoteFiles)
         {
             if (!localFiles.TryGetValue(file.Key, out var localFile))
                 res.missingLocal.Add(file.Value);
-
-            if (conflictDetails.remote < file.Value.Time)
-                conflictDetails.remote = file.Value.Time;
         }
         foreach (var file in localFiles)
         {
@@ -116,6 +131,94 @@ public class CloudUtils
                 }
             }
             File.SetLastWriteTimeUtc(fspath, DateTime.UnixEpoch.AddSeconds(file.RemoteTime));
+        }
+        catch (Exception e)
+        {
+            return (file, e);
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+        return (file, null);
+    }
+
+    public static async Task<(RemoteCacheFile, Exception?)> UploadFileAsync(uint appid, RemoteCacheFile file, string fspath, ulong batch, SemaphoreSlim semaphore, HttpClient httpClient, SteamCloud steamCloud)
+    {
+        await semaphore.WaitAsync();
+        try
+        {
+            var cloudpath = file.GetRemotePath();
+            byte[] sha_hash = new byte[20];
+            Stream fileContents;
+            if (file.Size > 512 * 1024)
+            {
+                var zipStream = new MemoryStream(1024);
+                using var newArchive = new ZipArchive(zipStream, ZipArchiveMode.Create);
+                var entry = newArchive.CreateEntry("z");
+                using (var entryStream = entry.Open())
+                {
+                    using var fileStream = File.OpenRead(fspath);
+                    await fileStream.CopyToAsync(entryStream);
+                }
+                fileContents = zipStream;
+            }
+            else
+            {
+                fileContents = File.OpenRead(fspath);
+            }
+
+            for (int i = 0; i < sha_hash.Length; i++)
+            {
+                string hex = file.Sha.Substring(i * 2, 2);
+                sha_hash[i] = Convert.ToByte(hex, 16);
+            }
+            var response = await steamCloud.ClientBeginFileUpload(appid, cloudpath, sha_hash, (uint)fileContents.Length, file.Size, file.LocalTime, file.PlatformsToSync, batch);
+            if (response == null)
+            {
+                Console.WriteLine("Unable to upload file {0}", file.Path);
+                throw new Exception("connection error");
+            }
+            if (response.encrypt_file)
+            {
+                throw new Exception("encryption is unsupported");
+            }
+            foreach (var request in response.block_requests)
+            {
+                string http = request.use_https ? "https" : "http";
+                string url = $"{http}://{request.url_host}{request.url_path}";
+                // These methods are a guess, I assume Steam uses same http method codes here as in steamworks 
+                HttpMethod httpMethod = (EHTTPMethod)request.http_method switch
+                {
+                    EHTTPMethod.GET => HttpMethod.Get,
+                    EHTTPMethod.HEAD => HttpMethod.Head,
+                    EHTTPMethod.POST => HttpMethod.Post,
+                    EHTTPMethod.DELETE => HttpMethod.Delete,
+                    EHTTPMethod.OPTIONS => HttpMethod.Options,
+                    EHTTPMethod.PATCH => HttpMethod.Patch,
+                    EHTTPMethod.PUT => HttpMethod.Put,
+                    _ => HttpMethod.Put
+                };
+                var httpRequest = new HttpRequestMessage(httpMethod, url);
+                foreach (var header in request.request_headers)
+                {
+                    httpRequest.Headers.Add(header.name, header.value);
+                }
+                if (request.ShouldSerializeexplicit_body_data())
+                {
+                    httpRequest.Content = new ByteArrayContent(request.explicit_body_data);
+                }
+                else
+                {
+                    fileContents.Seek((long)request.block_offset, SeekOrigin.Begin);
+                    httpRequest.Content = new StreamContent(fileContents, (int)request.block_length);
+                }
+                var httpRes = await httpClient.SendAsync(httpRequest);
+                // Gracefully handle errors
+                httpRes.EnsureSuccessStatusCode();
+            }
+            var commitRes = await steamCloud.CientCommitFileUpload(appid, true, cloudpath, sha_hash) ?? throw new Exception("Failed to commit file");
+            Console.WriteLine("File {0} is commited?: {1}", cloudpath, commitRes.file_committed);
         }
         catch (Exception e)
         {

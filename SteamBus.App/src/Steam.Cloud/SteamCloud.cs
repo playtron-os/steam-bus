@@ -1,3 +1,4 @@
+using System.Reflection.PortableExecutable;
 using Playtron.Plugin;
 using SteamKit2;
 using SteamKit2.Internal;
@@ -81,7 +82,7 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
   }
 
 
-  public async Task<CCloud_ClientBeginFileUpload_Response?> ClientBeginFileUpload(uint appid, string filename, byte[] sha, uint file_size, uint time_stamp, ERemoteStoragePlatform platformsToSync, ulong upload_batch_id)
+  public async Task<CCloud_ClientBeginFileUpload_Response?> ClientBeginFileUpload(uint appid, string filename, byte[] sha, uint file_size, uint raw_file_size, ulong time_stamp, ERemoteStoragePlatform platformsToSync, ulong upload_batch_id)
   {
     // Unsure what's the difference between raw_file_size and file_size, maybe related to encryption? We don't use encryption so it's fine, right???
     CCloud_ClientBeginFileUpload_Request request = new()
@@ -90,7 +91,7 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
       filename = filename,
       file_sha = sha,
       file_size = file_size,
-      raw_file_size = file_size,
+      raw_file_size = raw_file_size,
       platforms_to_sync = (uint)platformsToSync,
       upload_batch_id = upload_batch_id,
       time_stamp = time_stamp
@@ -139,6 +140,23 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
     return response.Body;
   }
 
+  public async Task<CCloud_ClientDeleteFile_Response?> DeleteFileAsync(uint appid, string file, ulong batch_id)
+  {
+    CCloud_ClientDeleteFile_Request request = new()
+    {
+      appid = appid,
+      filename = file,
+      upload_batch_id = batch_id
+    };
+    var response = await unifiedCloud.ClientDeleteFile(request);
+    if (response.Result != EResult.OK)
+    {
+      Console.WriteLine("Failed to delete file for {0}: {1}", appid, file);
+      return null;
+    }
+    return response.Body;
+  }
+
   public async Task<CCloud_AppLaunchIntent_Response?> SendLaunchIntent(uint appid, ulong client_id)
   {
     CCloud_AppLaunchIntent_Request request = new() { appid = appid, client_id = client_id, machine_name = Environment.MachineName };
@@ -152,16 +170,52 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
     return response.Body;
   }
 
+  public static ERemoteStoragePlatform PlatformsToFlag(string[] platforms)
+  {
+    if (platforms.Length == 0) return ERemoteStoragePlatform.All;
+    ERemoteStoragePlatform res = ERemoteStoragePlatform.None;
+    foreach (var platform in platforms)
+    {
+      switch (platform)
+      {
+        case "windows":
+          res |= ERemoteStoragePlatform.Windows;
+          break;
+        case "macos":
+          res |= ERemoteStoragePlatform.OSX;
+          break;
+        case "ps3":
+          res |= ERemoteStoragePlatform.PS3;
+          break;
+        case "linux":
+          res |= ERemoteStoragePlatform.Linux;
+          break;
+        // These are guesses from now on
+        case "switch":
+          res |= ERemoteStoragePlatform.Switch;
+          break;
+        case "android":
+          res |= ERemoteStoragePlatform.Android;
+          break;
+        case "ios":
+          res |= ERemoteStoragePlatform.IPhoneOS;
+          break;
+      }
+    }
+    return res;
+  }
+
   public static Dictionary<string, LocalFile> MapFilePaths(CloudPathObject[] paths)
   {
     Dictionary<string, LocalFile> results = [];
     foreach (var mapRoot in paths)
     {
       if (!Directory.Exists(mapRoot.path)) continue;
+      ERemoteStoragePlatform syncPlatform = PlatformsToFlag(mapRoot.platforms);
       string[] files = Directory.GetFiles(mapRoot.path, mapRoot.pattern, new EnumerationOptions() { RecurseSubdirectories = mapRoot.recursive });
       foreach (var file in files)
       {
-        var newFile = new LocalFile(file, file[mapRoot.path.Length..], mapRoot.alias);
+        var newFile = new LocalFile(file, file[mapRoot.path.Length..], mapRoot.alias, syncPlatform);
         results.Add(newFile.GetRemotePath().ToLower(), newFile);
       }
     }

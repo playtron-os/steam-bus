@@ -1527,16 +1527,18 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
     var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles);
-    // if (analysis.conflictDetails != null)
-    // {
-    //   var local = analysis.conflictDetails?.local ?? 0;
-    //   var remote = analysis.conflictDetails?.remote ?? 0;
-    //   OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
-    //   return;
-    // }
     if (changelist.current_change_number == changeNumber && analysis.missingLocal.Count == 0)
     {
       Console.WriteLine("files are synced");
+      return;
+    }
+
+    if (changeNumber != 0 && changelist.current_change_number != changeNumber && analysis.changedLocal.Count > 0)
+    {
+      var local = analysis.conflictDetails.local;
+      var remote = analysis.conflictDetails.remote;
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
+      Console.WriteLine("Conflict");
       return;
     }
 
@@ -1667,13 +1669,135 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
     var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, true);
+    Console.WriteLine("Current change number");
     if (changelist.current_change_number != changeNumber)
     {
       Console.WriteLine("Potential conflict, different change numbers detected");
+      var local = analysis.conflictDetails.local;
+      var remote = analysis.conflictDetails.remote;
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
       return;
     }
-    Console.WriteLine("Before upload analysis: Changed locally: {0} Missing local: {1}, Conflict?: {2}", analysis.changedLocal.Count, analysis.missingLocal.Count, analysis.conflictDetails != null);
+    Console.WriteLine("Before upload analysis: Changed locally: {0} Missing local: {1}", analysis.changedLocal.Count, analysis.missingLocal.Count);
 
-    Console.WriteLine("Uploading is not implemented yet");
+    // Begin upload
+    List<string> filesToUpload = [];
+    List<string> filesToDelete = [];
+
+    foreach (var file in analysis.changedLocal)
+    {
+      filesToUpload.Add(file.GetRemotePath());
+    }
+
+    foreach (var file in analysis.missingLocal)
+    {
+      filesToDelete.Add(file.GetRemotePath());
+    }
+
+    var uploadData = await this.session.steamCloud.BeginAppUploadBatch(appidParsed, filesToUpload.ToArray(), filesToDelete.ToArray());
+    if (uploadData == null)
+    {
+      Console.WriteLine("Failed to initialize upload with steam services");
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = DbusErrors.CloudFileUpload });
+      return;
+    }
+
+    Console.WriteLine("New change number is {0}", uploadData.app_change_number);
+    Console.WriteLine("Uploading files to batch {0}", uploadData.batch_id);
+
+    SemaphoreSlim semaphore = new(4);
+    uint totalSize = 0;
+    uint uploaded = 0;
+    var httpClient = new HttpClient();
+    List<Task<(RemoteCacheFile, Exception?)>> uploadTasks = [];
+
+    foreach (var file in analysis.changedLocal)
+    {
+      cachedFiles.TryGetValue(file.GetRemotePath().ToLower(), out var uploadFile);
+      uploadFile ??= new RemoteCacheFile(file);
+      uploadFile.SyncState = ERemoteStorageSyncState.inprogress;
+      totalSize += uploadFile.Size;
+      var fspath = uploadFile.GetRemotePath();
+      // Map the path to file system
+      foreach (var location in paths)
+      {
+        // If there is no variable, we want a default location
+        if (location.alias.Length == 0)
+        {
+          if (fspath[0] != '%')
+          {
+            fspath = System.IO.Path.Join(location.path, fspath);
+          }
+          continue;
+        }
+        var newpath = fspath.Replace(location.alias, location.path, StringComparison.CurrentCultureIgnoreCase);
+        if (newpath != fspath)
+        {
+          fspath = newpath;
+          break;
+        }
+      }
+      var task = CloudUtils.UploadFileAsync(appidParsed, uploadFile, fspath, uploadData.batch_id, semaphore, httpClient, this.session.steamCloud);
+      uploadTasks.Add(task);
+    }
+    string? currentError = null;
+    while (uploadTasks.Count != 0)
+    {
+      var completedTask = await Task.WhenAny(uploadTasks);
+      uploadTasks.Remove(completedTask);
+      (var file, var exception) = completedTask.Result;
+      if (exception is null)
+      {
+        uploaded += file.Size;
+        file.SyncState = ERemoteStorageSyncState.unknown;
+        file.RemoteTime = file.LocalTime;
+
+        OnCloudSaveSyncProgressed?.Invoke(new CloudSyncProgress
+        {
+          AppdId = appid,
+          Progress = (double)uploaded / totalSize * 100,
+          SyncState = (uint)SyncState.Upload
+        });
+      }
+      else
+      {
+        Console.WriteLine("a file encountered an error {0}", exception);
+        file.SyncState = ERemoteStorageSyncState.inprogress;
+        file.RemoteTime = 0;
+        currentError ??= DbusErrors.CloudFileUpload;
+      }
+      cachedFiles[file.GetRemotePath().ToLower()] = file;
+    }
+    foreach (var file in analysis.missingLocal)
+    {
+      cachedFiles.TryGetValue(file.GetRemotePath().ToLower(), out var uploadFile);
+      if (uploadFile == null) continue;
+      uploadFile.PersistState = SteamKit2.Internal.ECloudStoragePersistState.k_ECloudStoragePersistStateDeleted;
+      uploadFile.SyncState = ERemoteStorageSyncState.inprogress;
+      var delRes = await this.session.steamCloud.DeleteFileAsync(appidParsed, file.GetRemotePath(), uploadData.batch_id);
+      if (delRes == null)
+      {
+        Console.WriteLine("Failed to call delete on a file");
+      }
+      cachedFiles.Remove(file.GetRemotePath().ToLower());
+    }
+    EResult eResult = EResult.OK;
+    if (currentError != null)
+    {
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = currentError });
+      eResult = EResult.Fail;
+    }
+    await this.session.steamCloud.CompleteAppUploadBatch(appidParsed, uploadData.batch_id, (uint)eResult);
+
+    remoteCacheFile.UpdateLocalCache(uploadData.app_change_number, "-1", cachedFiles.Values.ToArray());
+    remoteCacheFile.Save();
+    KeyValue autocloud = new("steam_autocloud.vdf");
+    autocloud.Children.Add(new KeyValue("accountid", this.session.SteamUser.SteamID.AccountID.ToString()));
+    foreach (var location in paths)
+    {
+      if (location.alias.Length == 0) continue;
+      autocloud.SaveToFile(System.IO.Path.Join(location.path, "steam_autocloud.vdf"), false);
+    }
+    Console.WriteLine("Download complete");
   }
 }

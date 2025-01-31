@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using SteamKit2;
 
 namespace Steam.Cloud;
 
@@ -13,8 +14,9 @@ public class LocalFile : IRemoteFile
   public string SearchRoot { get; private set; }
   public ulong UpdateTime { get; private set; }
   public uint Size { get; private set; }
+  public ERemoteStoragePlatform PlatformsToSync { get; private set; }
 
-  public LocalFile(string path, string relpath, string root)
+  public LocalFile(string path, string relpath, string root, ERemoteStoragePlatform platform)
   {
     this.filePath = path;
     this.RelativePath = relpath;
@@ -24,6 +26,7 @@ public class LocalFile : IRemoteFile
     TimeSpan time = stat.LastWriteTimeUtc - DateTime.UnixEpoch;
     this.UpdateTime = (ulong)time.TotalSeconds;
     this.Size = (uint)stat.Length;
+    this.PlatformsToSync = platform;
   }
 
   public string Sha1()
