@@ -821,6 +821,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     session.OnAppNewVersionFound = OnAppNewVersionFound;
     session.InstalledAppsUpdated = InstalledAppsUpdated;
     session.OnAuthError = OnAuthError;
+    session.OnAvatarUpdated = () => OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar"]));
 
     // Subscribe to client callbacks
     session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);

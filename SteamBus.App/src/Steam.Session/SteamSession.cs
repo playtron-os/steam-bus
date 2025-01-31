@@ -84,6 +84,8 @@ public class SteamSession
   private LibraryCache libraryCache;
   private AppInfoCache appInfoCache;
 
+  public Action? OnAvatarUpdated;
+
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
@@ -1026,6 +1028,7 @@ public class SteamSession
       AvatarUrl = $"https://avatars.akamai.steamstatic.com/{avatarStr}_full.jpg";
       userCache.SetKey(UserCache.AVATAR_KEY, SteamUser.SteamID.AccountID, AvatarUrl);
       userCache.Save();
+      OnAvatarUpdated?.Invoke();
     }
   }
 
