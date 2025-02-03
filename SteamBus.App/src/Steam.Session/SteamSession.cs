@@ -1207,8 +1207,17 @@ public class SteamSession
       InstalledAppsUpdated?.Invoke();
   }
 
-  public static async Task<ProviderItem?> GetProviderItemRequest(uint appId)
+  public static async Task<ProviderItem?> GetProviderItemRequest(uint appId, bool force = false)
   {
+    if (!force)
+    {
+      var appInfoCache = new AppInfoCache(AppInfoCache.DefaultPath());
+      var cached = appInfoCache.GetCached(appId);
+
+      if (cached != null)
+        return GetProviderItem(appId.ToString(), cached);
+    }
+
     var steamClient = new SteamClient(GetDefaultSteamClientConfig());
     var steamUser = steamClient.GetHandler<SteamUser>();
     var steamApps = steamClient.GetHandler<SteamApps>();
