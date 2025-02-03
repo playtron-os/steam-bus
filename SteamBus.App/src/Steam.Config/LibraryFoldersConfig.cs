@@ -80,7 +80,7 @@ public class LibraryFoldersConfig
     public static string DefaultPath()
     {
         string baseDir = SteamConfig.GetConfigDirectory();
-        return Path.Join(baseDir, "steamapps", FILENAME);
+        return Path.Join(baseDir, "config", FILENAME);
     }
 
     /// <summary>
@@ -145,20 +145,20 @@ public class LibraryFoldersConfig
         data[index] = newEntry;
 
         string baseDir = SteamConfig.GetConfigDirectory();
-        var configFolder = Path.Join(baseDir, "config");
+        var steamappsFolder = Path.Join(baseDir, "steamapps");
 
-        if (!Directory.Exists(configFolder))
-            Directory.CreateDirectory(configFolder);
+        if (!Directory.Exists(steamappsFolder))
+            Directory.CreateDirectory(steamappsFolder);
 
         if (isMainDisk)
         {
-            var target = Path.Join(configFolder, FILENAME);
+            var steamappsFileLink = Path.Join(steamappsFolder, FILENAME);
 
-            if (File.Exists(path) || Directory.Exists(path))
-                File.Delete(path);
+            if (File.Exists(steamappsFileLink) || Directory.Exists(steamappsFileLink))
+                File.Delete(steamappsFileLink);
 
-            Disk.EnsureParentFolderExists(target);
-            File.CreateSymbolicLink(path, target);
+            Disk.EnsureParentFolderExists(steamappsFileLink);
+            File.CreateSymbolicLink(steamappsFileLink, path);
         }
         else
         {
