@@ -433,10 +433,21 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<ProviderItem> IPluginLibraryProvider.GetProviderItemAsync(string appIdString)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
-    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
-    await this.session!.WaitForLibrary();
-    if (!this.session.ProviderItemMap.TryGetValue(appId, out var providerItem)) throw DbusExceptionHelper.ThrowInvalidAppId();
-    return providerItem;
+
+    try
+    {
+      if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+      await this.session!.WaitForLibrary();
+      if (!this.session.ProviderItemMap.TryGetValue(appId, out var providerItem)) throw DbusExceptionHelper.ThrowInvalidAppId();
+      return providerItem;
+    }
+    catch (Exception)
+    {
+      var providerItem = await SteamSession.GetProviderItemRequest(appId);
+      if (providerItem != null) return (ProviderItem)providerItem;
+
+      throw;
+    }
   }
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
