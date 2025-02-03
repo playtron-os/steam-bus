@@ -41,9 +41,8 @@ public enum SyncState
 [DBusInterface("one.playtron.plugin.CloudSaveProvider")]
 public interface ICloudSaveProvider : IDBusObject
 {
-  Task CloudSaveDownloadAsync(string appid, string platform, CloudPathObject[] paths);
-  Task CloudSaveUploadAsync(string appid, string platform, CloudPathObject[] paths);
-  // Task CloudSaveResolveConflict(string appid, string platform, CloudPathObject[] paths, bool keepLocal);
+  Task CloudSaveDownloadAsync(string appid, string platform, bool force, CloudPathObject[] paths);
+  Task CloudSaveUploadAsync(string appid, string platform, bool force, CloudPathObject[] paths);
 
   Task<IDisposable> WatchCloudSaveSyncProgressedAsync(Action<CloudSyncProgress> reply);
   Task<IDisposable> WatchCloudSaveSyncFailedAsync(Action<CloudSyncFailure> reply);

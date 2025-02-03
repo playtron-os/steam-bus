@@ -1472,7 +1472,6 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
           throw new Exception($"Unknown root name {root}");
       }
       var newPath = System.IO.Path.Join(mappedroot, path);
-      Console.WriteLine("Appending new path {0} - {1}", alias, newPath);
       results.Add(new CloudPathObject { alias = alias, path = newPath, recursive = recursive, pattern = pattern, platforms = platforms.ToArray() });
     }
     return results.ToArray();
@@ -1488,7 +1487,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnCloudSyncFailed), reply);
   }
 
-  async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appIdString, string platform, CloudPathObject[] paths)
+  async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appIdString, string platform, bool force, CloudPathObject[] paths)
   {
     if (ParseAppId(appIdString) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
@@ -1533,12 +1532,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       return;
     }
 
-    if (changeNumber != 0 && changelist.current_change_number != changeNumber && analysis.changedLocal.Count > 0)
+    if (!force && changeNumber != 0 && changelist.current_change_number != changeNumber && analysis.changedLocal.Count > 0)
     {
       var local = analysis.conflictDetails.local;
       var remote = analysis.conflictDetails.remote;
       OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
-      Console.WriteLine("Conflict");
       return;
     }
 
@@ -1648,7 +1646,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     Console.WriteLine("Download complete");
   }
-  async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, string platform, CloudPathObject[] paths)
+  async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, string platform, bool force, CloudPathObject[] paths)
   {
     if (ParseAppId(appid) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
@@ -1669,17 +1667,32 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
     var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, true);
-    Console.WriteLine("Current change number");
+    Console.WriteLine("Current change number {0}", changelist.current_change_number);
+    Console.WriteLine("Local change number {0}", changeNumber);
     if (changelist.current_change_number != changeNumber)
     {
-      Console.WriteLine("Potential conflict, different change numbers detected");
-      var local = analysis.conflictDetails.local;
-      var remote = analysis.conflictDetails.remote;
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
-      return;
+      if (!force)
+      {
+        Console.WriteLine("Potential conflict, different change numbers detected");
+        var local = analysis.conflictDetails.local;
+        var remote = analysis.conflictDetails.remote;
+        OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
+        return;
+      }
+      Console.WriteLine("Focefully uploading files");
     }
     Console.WriteLine("Before upload analysis: Changed locally: {0} Missing local: {1}", analysis.changedLocal.Count, analysis.missingLocal.Count);
-
+    if (analysis.changedLocal.Count == 0 && analysis.missingLocal.Count == 0)
+    {
+      Console.WriteLine("Nothing to do");
+      OnCloudSaveSyncProgressed?.Invoke(new CloudSyncProgress
+      {
+        AppdId = appid,
+        Progress = 100,
+        SyncState = (uint)SyncState.Upload
+      });
+      return;
+    }
     // Begin upload
     List<string> filesToUpload = [];
     List<string> filesToDelete = [];
