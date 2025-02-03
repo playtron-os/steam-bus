@@ -19,6 +19,10 @@ public static class DbusErrors
     public const string Timeout = "one.playtron.Error.Timeout";
     public const string DependencyError = "one.playtron.Error.DependencyError";
     public const string PreLaunchError = "one.playtron.Error.PreLaunchError";
+    public const string CloudConflict = "one.playtron.Error.CloudConflict";
+    public const string CloudQuota = "one.playtron.Error.CloudQuota";
+    public const string CloudFileDownload = "one.playtron.Error.CloudFileDownload";
+    public const string CloudFileUpload = "one.playtron.Error.CloudFileUpload";
 }
 
 public static class DbusExceptionHelper

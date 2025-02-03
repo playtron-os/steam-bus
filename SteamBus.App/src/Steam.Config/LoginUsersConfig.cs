@@ -129,19 +129,8 @@ public class LoginUsersConfig
             Directory.CreateDirectory(parent);
             return (new KeyValue("users"), userConfigPath);
         }
-
-        // Use this method to read the file because using ReadToEnd isn't reading the entire file
-        string content = "";
-        using (var stream = File.OpenText(userConfigPath))
-        {
-            string? line;
-            while ((line = stream.ReadLine()) != null)
-            {
-                content += line;
-            }
-        }
-
-        return (KeyValue.LoadFromString(content) ?? new KeyValue("users"), userConfigPath);
+        
+        return (KeyValue.LoadAsText(userConfigPath) ?? new KeyValue("users"), userConfigPath);
     }
 
     private void UpdateUserConfig(string accountId)
