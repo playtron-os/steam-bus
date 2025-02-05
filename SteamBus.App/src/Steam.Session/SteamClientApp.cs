@@ -66,18 +66,18 @@ public class SteamClientApp
         if (endingTask != null) await endingTask.Task;
         if (running) return;
 
-        startingTask = new();
-        updateStartedTask = new();
-        updateEndedTask = new();
-
         // Kill current steam processes if any exist
         var processes = Process.GetProcessesByName("steam");
         if (processes.Length > 0)
         {
             endingTask = new();
             await ProcessUtils.TerminateProcessesGracefullyAsync(processes, STEAM_FORCEFULLY_QUIT_TIMEOUT);
-            if (endingTask != null) await Task.WhenAny([endingTask.Task, Task.Delay(1000)]);
+            if (endingTask != null) await Task.WhenAny([endingTask.Task, Task.Delay(3000)]);
         }
+
+        startingTask = new();
+        updateStartedTask = new();
+        updateEndedTask = new();
 
         running = true;
         isReady = false;
@@ -163,6 +163,17 @@ public class SteamClientApp
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
 
         var hasRunningString = e.Data.Contains("BuildCompleteAppOverviewChange") || e.Data.Contains("steam-runtime-launcher-service is running");
+
+        // Client starting up, so reset initial variables
+        if (e.Data.Contains("Running Steam on"))
+        {
+            running = true;
+            isReady = false;
+            loginFailed = false;
+
+            if (startingTask == null) startingTask = new();
+            if (readyTask == null) readyTask = new();
+        }
 
         // Mark steam client as started when it outputs this string
         if (startingTask != null && (hasRunningString || e.Data.Contains("Starting steamwebhelper")))

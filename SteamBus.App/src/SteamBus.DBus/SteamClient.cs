@@ -754,6 +754,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   Task IPluginLibraryProvider.PostLaunchHookAsync(string appId)
   {
+    Console.WriteLine($"Running post launch hook for appId:{appId}");
+
     _ = Task.Run(async () => await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(8)));
     return Task.CompletedTask;
   }
