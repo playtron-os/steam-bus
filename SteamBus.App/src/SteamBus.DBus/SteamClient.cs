@@ -737,6 +737,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     try
     {
+      if (!wantsOfflineMode && session.playingBlocked) throw DbusExceptionHelper.ThrowPlayingBlocked();
+
       await steamClientApp.Start(appId, session!.GetLogonDetails().Username!, wantsOfflineMode);
     }
     catch (DBusException exception)

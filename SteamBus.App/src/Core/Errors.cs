@@ -23,6 +23,8 @@ public static class DbusErrors
     public const string CloudQuota = "one.playtron.Error.CloudQuota";
     public const string CloudFileDownload = "one.playtron.Error.CloudFileDownload";
     public const string CloudFileUpload = "one.playtron.Error.CloudFileUpload";
+    public const string AppNotOwned = "one.playtron.Error.AppNotOwned";
+    public const string PlayingBlocked = "one.playtron.Error.PlayingBlocked";
 }
 
 public static class DbusExceptionHelper
@@ -75,5 +77,10 @@ public static class DbusExceptionHelper
     public static DBusException ThrowDependencyError(string message = "An error happened when executing a dependency")
     {
         return new DBusException(DbusErrors.DependencyError, message);
+    }
+
+    public static DBusException ThrowPlayingBlocked(string message = "Library is currently in use")
+    {
+        return new DBusException(DbusErrors.PlayingBlocked, message);
     }
 }

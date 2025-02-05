@@ -261,7 +261,8 @@ class ContentDownloader
     {
       this.options = options;
       await Client.DetectLancacheServerAsync();
-      if (Client.UseLancacheServer) {
+      if (Client.UseLancacheServer)
+      {
         Console.WriteLine("Using LanCache server for downloads");
       }
       cdnPool = new CDNClientPool(this.session.SteamClient, appId);
@@ -295,6 +296,8 @@ class ContentDownloader
         }
         else
         {
+          onInstallFailed?.Invoke((appId.ToString(), DbusErrors.AppNotOwned));
+
           var contentName = GetAppName(appId);
           throw new ContentDownloaderException(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
         }
