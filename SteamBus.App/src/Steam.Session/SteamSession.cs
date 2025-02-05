@@ -86,6 +86,9 @@ public class SteamSession
 
   public Action? OnAvatarUpdated;
 
+  public uint playingAppID { get; private set; }
+  public bool playingBlocked { get; private set; }
+
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
@@ -137,6 +140,7 @@ public class SteamSession
     this.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLogIn);
     this.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
     this.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
+    this.Callbacks.Subscribe<SteamUser.PlayingSessionStateCallback>(OnPlayingSessionStateCallback);
     this.Callbacks.Subscribe<SteamFriends.PersonaStateCallback>(OnPersonaState);
   }
 
@@ -1015,6 +1019,14 @@ public class SteamSession
         Console.Error.WriteLine("Error parsing Sub out of access token");
       }
     }
+  }
+
+  private void OnPlayingSessionStateCallback(SteamUser.PlayingSessionStateCallback callback)
+  {
+    Console.WriteLine($"Updating Playing Session State, AppID:{callback.PlayingAppID}, Blocked:{callback.PlayingBlocked}");
+
+    playingAppID = callback.PlayingAppID;
+    playingBlocked = callback.PlayingBlocked;
   }
 
   private void OnPersonaState(SteamFriends.PersonaStateCallback callback)
