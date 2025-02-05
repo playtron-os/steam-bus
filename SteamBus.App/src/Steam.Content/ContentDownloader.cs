@@ -347,6 +347,10 @@ class ContentDownloader
 
           if (!hasSpecificDepots)
           {
+            // TODO: Assess what systemdefined actually does
+            if (depotSection["systemdefined"]?.AsInteger() == 1)
+              continue;
+
             var depotConfig = depotSection["config"];
             if (depotConfig != KeyValue.Invalid)
             {
@@ -434,6 +438,7 @@ class ContentDownloader
         onInstallCompleted?.Invoke(appId.ToString());
 
         depotConfigStore.SetDownloadStage(appId, null);
+        depotConfigStore.UpdateAppSizeOnDisk(appId, await Disk.GetFolderSizeWithDu(installStartedData.InstallDirectory));
         depotConfigStore.Save(appId);
       }
       catch (OperationCanceledException)
@@ -1107,18 +1112,23 @@ class ContentDownloader
       }
     }
 
-    depotConfigStore.SetManifestID(appId, depot.DepotId, depot.ManifestId, depotCounter.completeDownloadSize);
-
     var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
     var depotChild = depots?[depot.DepotId.ToString()];
+    var isSharedDepot = false;
 
     if (depotChild != null && depotChild != KeyValue.Invalid)
     {
       var depotfromapp = depotChild["depotfromapp"]?.AsString();
 
       if (!string.IsNullOrEmpty(depotfromapp) && uint.TryParse(depotChild.Name, out var depotId) && uint.TryParse(depotfromapp, out var sharedDepotId))
+      {
+        isSharedDepot = true;
         depotConfigStore.SetSharedDepot(appId, depotId, sharedDepotId);
+      }
     }
+
+    if (!isSharedDepot)
+      depotConfigStore.SetManifestID(appId, depot.DepotId, depot.ManifestId, depotCounter.completeDownloadSize);
 
     depotConfigStore.Save(appId);
 

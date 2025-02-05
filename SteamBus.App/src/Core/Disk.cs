@@ -136,7 +136,7 @@ static class Disk
         return Path.Join(installPath!, folderName);
     }
 
-    public static async Task<long> GetFolderSizeWithDu(string folderPath)
+    public static async Task<ulong> GetFolderSizeWithDu(string folderPath)
     {
         if (string.IsNullOrWhiteSpace(folderPath))
         {
@@ -180,7 +180,7 @@ static class Disk
 
                 // Parse the output (format: "<size_in_bytes>\t<path>")
                 string[] parts = output.Split('\t');
-                if (long.TryParse(parts[0], out long size))
+                if (ulong.TryParse(parts[0], out ulong size))
                 {
                     return size;
                 }
