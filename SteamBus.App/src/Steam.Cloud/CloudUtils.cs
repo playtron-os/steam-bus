@@ -207,8 +207,10 @@ public class CloudUtils
                 }
                 else
                 {
-                    fileContents.Seek((long)request.block_offset, SeekOrigin.Begin);
-                    httpRequest.Content = new StreamContent(fileContents, (int)request.block_length);
+                    var offset = request.ShouldSerializeblock_offset() ? (long)request.block_offset : 0;
+                    var length = request.ShouldSerializeblock_length() ? (int)request.block_length : (int)fileContents.Length;
+                    fileContents.Seek(offset, SeekOrigin.Begin);
+                    httpRequest.Content = new StreamContent(fileContents, length);
                 }
 
                 foreach (var header in request.request_headers)
