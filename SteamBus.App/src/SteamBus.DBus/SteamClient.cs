@@ -1745,7 +1745,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, true);
     Console.WriteLine("Current change number {0}", changelist.current_change_number);
     Console.WriteLine("Local change number {0}", changeNumber);
-    if (changelist.ShouldSerializecurrent_change_number() && changelist.current_change_number != changeNumber)
+    if (changelist.ShouldSerializecurrent_change_number() && changelist.current_change_number != changeNumber && changelist.files.Count > 0)
     {
       if (!force)
       {
