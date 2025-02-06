@@ -96,6 +96,7 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
       upload_batch_id = upload_batch_id,
       time_stamp = time_stamp
     };
+
     var response = await unifiedCloud.ClientBeginFileUpload(request);
     if (response.Result != EResult.OK)
     {

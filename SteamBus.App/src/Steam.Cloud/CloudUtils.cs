@@ -187,6 +187,7 @@ public class CloudUtils
             {
                 string http = request.use_https ? "https" : "http";
                 string url = $"{http}://{request.url_host}{request.url_path}";
+                Console.WriteLine("Uploading to {0}", url);
                 // These methods are a guess, I assume Steam uses same http method codes here as in steamworks 
                 HttpMethod httpMethod = (EHTTPMethod)request.http_method switch
                 {
@@ -200,18 +201,29 @@ public class CloudUtils
                     _ => HttpMethod.Put
                 };
                 var httpRequest = new HttpRequestMessage(httpMethod, url);
-                foreach (var header in request.request_headers)
-                {
-                    httpRequest.Headers.Add(header.name, header.value);
-                }
                 if (request.ShouldSerializeexplicit_body_data())
                 {
                     httpRequest.Content = new ByteArrayContent(request.explicit_body_data);
                 }
                 else
                 {
-                    fileContents.Seek((long)request.block_offset, SeekOrigin.Begin);
-                    httpRequest.Content = new StreamContent(fileContents, (int)request.block_length);
+                    var offset = request.ShouldSerializeblock_offset() ? (long)request.block_offset : 0;
+                    var length = request.ShouldSerializeblock_length() ? (int)request.block_length : (int)fileContents.Length;
+                    fileContents.Seek(offset, SeekOrigin.Begin);
+                    httpRequest.Content = new StreamContent(fileContents, length);
+                }
+
+                foreach (var header in request.request_headers)
+                {
+                    try
+                    {
+                        httpRequest.Headers.Add(header.name, header.value);
+                    }
+                    catch (Exception)
+                    {
+                        Console.WriteLine("Unable to insert {0} header to request", header.name);
+                        httpRequest.Content.Headers.Add(header.name, header.value);
+                    }
                 }
                 var httpRes = await httpClient.SendAsync(httpRequest);
                 // Gracefully handle errors

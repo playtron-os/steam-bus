@@ -105,7 +105,7 @@ public class RemoteCache
 
 	public ulong? GetChangeNumber()
 	{
-		return this.data["ChangeNumber"].AsUnsignedLong();
+		return this.data["ChangeNumber"].Value != null ? this.data["ChangeNumber"].AsUnsignedLong() : null;
 	}
 
 	public Dictionary<string, RemoteCacheFile> MapRemoteCacheFiles()
@@ -135,6 +135,15 @@ public class RemoteCache
 	public void Save()
 	{
 		Console.WriteLine("Saving data to {0}", this.path);
+		try
+		{
+			Disk.EnsureParentFolderExists(this.path);
+		}
+		catch (Exception)
+		{
+			Console.WriteLine("Failed to create directory for remotecache file");
+		}
+		// We want to raise this exception to trigger potential failures
 		data.SaveToFile(this.path, false);
 	}
 
