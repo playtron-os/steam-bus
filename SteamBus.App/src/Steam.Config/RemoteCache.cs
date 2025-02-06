@@ -105,7 +105,7 @@ public class RemoteCache
 
 	public ulong? GetChangeNumber()
 	{
-		return this.data["ChangeNumber"].AsUnsignedLong();
+		return this.data["ChangeNumber"].Value != null ? this.data["ChangeNumber"].AsUnsignedLong() : null;
 	}
 
 	public Dictionary<string, RemoteCacheFile> MapRemoteCacheFiles()

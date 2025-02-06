@@ -11,7 +11,6 @@ using System.Text;
 using Xdg.Directories;
 using Steam.Config;
 using Steam.Cloud;
-using System.Text.RegularExpressions;
 
 namespace SteamBus.DBus;
 
@@ -755,8 +754,19 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task IPluginLibraryProvider.PostLaunchHookAsync(string appId)
   {
     Console.WriteLine($"Running post launch hook for appId:{appId}");
-
-    _ = Task.Run(async () => await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(8)));
+    _ = Task.Run(async () =>
+    {
+      if (ParseAppId(appId) is uint appIdVal)
+      {
+        // Wait for Steam to pick up game closing
+        await Task.Delay(500);
+        // Check if the sync operation has been started
+        await steamClientApp.WaitForSteamCloud(session.SteamUser.SteamID.AccountID, appIdVal, TimeSpan.FromSeconds(15));
+      }
+      // Send shutdown request
+      await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(8));
+    }
+    );
     return Task.CompletedTask;
   }
 
@@ -1594,7 +1604,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       return;
     }
 
-    if (!force && changeNumber != 0 && changelist.current_change_number != changeNumber && analysis.changedLocal.Count > 0)
+    if (!force && changeNumber != null && changelist.current_change_number != changeNumber && analysis.changedLocal.Count > 0)
     {
       var local = analysis.conflictDetails.local;
       var remote = analysis.conflictDetails.remote;
@@ -1712,6 +1722,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     if (ParseAppId(appid) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    while (steamClientApp.running)
+    {
+      await Task.Delay(500);
+    }
 
     if (this.session?.steamCloud == null)
     {
@@ -1758,12 +1772,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Begin upload
     List<string> filesToUpload = [];
     List<string> filesToDelete = [];
-
     foreach (var file in analysis.changedLocal)
     {
       filesToUpload.Add(file.GetRemotePath());
     }
-
     foreach (var file in analysis.missingLocal)
     {
       filesToDelete.Add(file.GetRemotePath());
@@ -1873,6 +1885,6 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (location.alias.Length == 0) continue;
       autocloud.SaveToFile(System.IO.Path.Join(location.path, "steam_autocloud.vdf"), false);
     }
-    Console.WriteLine("Download complete");
+    Console.WriteLine("Upload complete");
   }
 }

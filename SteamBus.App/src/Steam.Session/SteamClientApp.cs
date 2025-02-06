@@ -465,6 +465,33 @@ public class SteamClientApp
         return false; // Timeout reached
     }
 
+    public async Task<bool> WaitForSteamCloud(uint userid, uint appid, TimeSpan timeout)
+    {
+        bool steamRunning = Process.GetProcessesByName("steam").Any();
+        if (!steamRunning)
+        {
+            return true;
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < timeout)
+        {
+            try
+            {
+                var cacheFile = new RemoteCache(userid, appid);
+                bool isSyncing = cacheFile.MapRemoteCacheFiles().Any(file => file.Value.SyncState == ERemoteStorageSyncState.inprogress);
+                if (!isSyncing) return true;
+            }
+            catch (IOException)
+            {
+                Console.WriteLine("Remotecache file is in use");
+            }
+
+            await Task.Delay(500);
+        }
+        return false;
+    }
+
     public bool RunSteamShutdown()
     {
         if (!running || !Process.GetProcessesByName("steam").Any())

@@ -19,7 +19,7 @@ public class LocalFile : IRemoteFile
   public LocalFile(string path, string relpath, string root, ERemoteStoragePlatform platform)
   {
     this.filePath = path;
-    this.RelativePath = relpath;
+    this.RelativePath = relpath.Trim('/', '\\');
     this.SearchRoot = root;
     // Calculate timestamp
     FileInfo stat = new(path);
