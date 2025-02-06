@@ -35,6 +35,10 @@ public class GlobalConfig
     public const string KEY_STEAM = "Steam";
     public const string KEY_ACCOUNTS = "Accounts";
     public const string KEY_STEAM_ID = "SteamID";
+    public const string KEY_COMPAT_TOOL_MAPPING = "CompatToolMapping";
+    public const string KEY_COMPAT_TOOL_MAPPING_NAME = "name";
+    public const string KEY_COMPAT_TOOL_MAPPING_CONFIG = "config";
+    public const string KEY_COMPAT_TOOL_MAPPING_PRIORITY = "priority";
 
     private KeyValue? data;
     public string path;
@@ -85,6 +89,47 @@ public class GlobalConfig
     // Add the given steam username and ID to the config file
     public void SetSteamUser(string username, string steamID)
     {
+        EnsureRootKeysExist();
+
+        if (String.IsNullOrEmpty(this.data![KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS].Name))
+        {
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS] = new KeyValue(KEY_ACCOUNTS);
+        }
+        if (String.IsNullOrEmpty(this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS][username].Name))
+        {
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS][username] = new KeyValue(username);
+        }
+
+        // Save the key/value pair
+        if (this.data != null)
+        {
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS][username][KEY_STEAM_ID] = new KeyValue(KEY_STEAM_ID, steamID);
+        }
+    }
+
+    // Sets proton 9 as compat tool for an app id
+    public void SetProton9CompatForApp(uint appId)
+    {
+        EnsureRootKeysExist();
+
+        var appIdStr = appId.ToString();
+
+        if (String.IsNullOrEmpty(this.data![KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING].Name))
+        {
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING] = new KeyValue(KEY_COMPAT_TOOL_MAPPING);
+        }
+        if (String.IsNullOrEmpty(this.data![KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr].Name))
+        {
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr] = new KeyValue(appIdStr);
+        }
+
+        this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_NAME] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_NAME, "proton_9");
+        this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_CONFIG] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_CONFIG, "");
+        this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_PRIORITY] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_PRIORITY, "250");
+    }
+
+    void EnsureRootKeysExist()
+    {
         // Ensure all keys exist
         if (this.data == null)
         {
@@ -102,20 +147,6 @@ public class GlobalConfig
         if (String.IsNullOrEmpty(this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM].Name))
         {
             this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM] = new KeyValue(KEY_STEAM);
-        }
-        if (String.IsNullOrEmpty(this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS].Name))
-        {
-            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS] = new KeyValue(KEY_ACCOUNTS);
-        }
-        if (String.IsNullOrEmpty(this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS][username].Name))
-        {
-            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS][username] = new KeyValue(username);
-        }
-
-        // Save the key/value pair
-        if (this.data != null)
-        {
-            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_ACCOUNTS][username][KEY_STEAM_ID] = new KeyValue(KEY_STEAM_ID, steamID);
         }
     }
 }
