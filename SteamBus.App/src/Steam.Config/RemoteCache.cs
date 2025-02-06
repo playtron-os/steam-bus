@@ -137,11 +137,7 @@ public class RemoteCache
 		Console.WriteLine("Saving data to {0}", this.path);
 		try
 		{
-			var dirname = Path.GetDirectoryName(this.path);
-			if (dirname != null)
-			{
-				Directory.CreateDirectory(this.path);
-			}
+			Disk.EnsureParentFolderExists(this.path);
 		}
 		catch (Exception)
 		{
