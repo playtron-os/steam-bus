@@ -135,6 +135,19 @@ public class RemoteCache
 	public void Save()
 	{
 		Console.WriteLine("Saving data to {0}", this.path);
+		try
+		{
+			var dirname = Path.GetDirectoryName(this.path);
+			if (dirname != null)
+			{
+				Directory.CreateDirectory(this.path);
+			}
+		}
+		catch (Exception)
+		{
+			Console.WriteLine("Failed to create directory for remotecache file");
+		}
+		// We want to raise this exception to trigger potential failures
 		data.SaveToFile(this.path, false);
 	}
 
