@@ -23,10 +23,6 @@ using Steam.Config;
 
 namespace Steam.Content;
 
-class ContentDownloaderException(string value) : Exception(value)
-{
-}
-
 class ContentDownloader
 {
   public const uint INVALID_DEPOT_ID = uint.MaxValue;
@@ -315,10 +311,9 @@ class ContentDownloader
         }
         else
         {
-          onInstallFailed?.Invoke((appId.ToString(), DbusErrors.AppNotOwned));
-
           var contentName = GetAppName(appId);
-          throw new ContentDownloaderException(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
+          Console.Error.WriteLine(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
+          throw DbusExceptionHelper.ThrowAppNotOwned();
         }
       }
 
@@ -412,14 +407,14 @@ class ContentDownloader
         if (depotManifestIds.Count == 0 && !hasSpecificDepots)
         {
           Console.WriteLine(string.Format("Couldn't find any depots to download for app {0}", appId));
-          throw new ContentDownloaderException(string.Format("Couldn't find any depots to download for app {0}", appId));
+          throw DbusExceptionHelper.ThrowContentNotFound();
         }
 
         if (depotIdsFound.Count < depotIdsExpected.Count)
         {
           var remainingDepotIds = depotIdsExpected.Except(depotIdsFound);
           Console.WriteLine(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
-          throw new ContentDownloaderException(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
+          throw DbusExceptionHelper.ThrowAppNotOwned();
         }
       }
 
@@ -1193,7 +1188,8 @@ class ContentDownloader
       }
       catch (IOException ex)
       {
-        throw new ContentDownloaderException(string.Format("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message));
+        Console.Error.WriteLine(string.Format("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message));
+        throw DbusExceptionHelper.ThrowNotEnoughSpace();
       }
 
       neededChunks = new List<DepotManifest.ChunkData>(file.Chunks);
@@ -1264,7 +1260,8 @@ class ContentDownloader
               }
               catch (IOException ex)
               {
-                throw new ContentDownloaderException(string.Format("Failed to resize file to expected size {0}: {1}", fileFinalPath, ex.Message));
+                Console.Error.WriteLine(string.Format("Failed to resize file to expected size {0}: {1}", fileFinalPath, ex.Message));
+                throw DbusExceptionHelper.ThrowNotEnoughSpace();
               }
 
               foreach (var match in copyChunks)
@@ -1296,7 +1293,8 @@ class ContentDownloader
           }
           catch (IOException ex)
           {
-            throw new ContentDownloaderException(string.Format("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message));
+            Console.Error.WriteLine(string.Format("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message));
+            throw DbusExceptionHelper.ThrowNotEnoughSpace();
           }
         }
 

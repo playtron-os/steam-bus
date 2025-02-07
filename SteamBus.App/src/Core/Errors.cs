@@ -25,6 +25,7 @@ public static class DbusErrors
     public const string CloudFileUpload = "one.playtron.Error.CloudFileUpload";
     public const string AppNotOwned = "one.playtron.Error.AppNotOwned";
     public const string PlayingBlocked = "one.playtron.Error.PlayingBlocked";
+    public const string NotEnoughSpace = "one.playtron.Error.NotEnoughSpace";
 }
 
 public static class DbusExceptionHelper
@@ -82,5 +83,15 @@ public static class DbusExceptionHelper
     public static DBusException ThrowPlayingBlocked(string message = "Library is currently in use")
     {
         return new DBusException(DbusErrors.PlayingBlocked, message);
+    }
+
+    public static DBusException ThrowAppNotOwned(string message = "App not owned by current user")
+    {
+        return new DBusException(DbusErrors.AppNotOwned, message);
+    }
+
+    public static DBusException ThrowNotEnoughSpace(string message = "Not enough space to install this app")
+    {
+        return new DBusException(DbusErrors.NotEnoughSpace, message);
     }
 }
