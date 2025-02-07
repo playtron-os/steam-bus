@@ -248,7 +248,6 @@ public class RemoteCacheFile : IRemoteFile
 
 	public static ERemoteStorageFileRoot GetRemoteRootEnum(string root)
 	{
-		Console.WriteLine($"#### TEEST: {root}");
 		return root.ToLower() switch
 		{
 			"" => ERemoteStorageFileRoot.k_ERemoteStorageFileRootDefault,
