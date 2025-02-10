@@ -615,9 +615,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return JsonSerializer.Serialize(installScript.scripts, options);
   }
 
-  Task<InstalledAppDescription[]> IPluginLibraryProvider.GetInstalledAppsAsync()
+  async Task<InstalledAppDescription[]> IPluginLibraryProvider.GetInstalledAppsAsync()
   {
-    return Task.FromResult(depotConfigStore.GetInstalledAppInfo());
+    if (this.session != null) await this.session.WaitForLibrary();
+    return depotConfigStore.GetInstalledAppInfo();
   }
 
   async Task<int> IPluginLibraryProvider.InstallAsync(string appIdString, string disk, InstallOptions options)
@@ -1115,6 +1116,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Invoked when the Steam client tries to log in
   void OnLoggedOn(SteamUser.LoggedOnCallback callback)
   {
+    depotConfigStore.SetSteamAccountID(session?.GetLogonDetails().AccountID);
+
     if (callback.Result != EResult.OK)
     {
       Console.WriteLine("Unable to logon to Steam: {0} / {1}", callback.Result, callback.ExtendedResult);
@@ -1240,6 +1243,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
   {
+    depotConfigStore.SetSteamAccountID(null);
     Console.WriteLine("Logged off of Steam: {0}", callback.Result);
   }
 
@@ -1714,7 +1718,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     foreach (var location in paths)
     {
       if (location.alias.Length == 0) continue;
-      autocloud.SaveToFile(System.IO.Path.Join(location.path, "steam_autocloud.vdf"), false);
+      var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
+      Disk.EnsureParentFolderExists(path);
+      autocloud.SaveToFile(path, false);
     }
     Console.WriteLine("Download complete");
   }
@@ -1883,7 +1889,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     foreach (var location in paths)
     {
       if (location.alias.Length == 0) continue;
-      autocloud.SaveToFile(System.IO.Path.Join(location.path, "steam_autocloud.vdf"), false);
+      var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
+      Disk.EnsureParentFolderExists(path);
+      autocloud.SaveToFile(System.IO.Path.Join(path, "steam_autocloud.vdf"), false);
     }
     Console.WriteLine("Upload complete");
   }

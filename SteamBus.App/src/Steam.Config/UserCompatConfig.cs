@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Steam.Content;
 using SteamKit2;
 
 
@@ -83,6 +84,15 @@ public class UserCompatConfig
         config["dest"] = new KeyValue("dest", destPlatform);
         config["src"] = new KeyValue("src", srcPlatform);
         data![appId.ToString()] = config;
+    }
+
+    // Gets platform for an app
+    public string GetAppPlatform(uint appId)
+    {
+        if (data == null)
+            Reload();
+
+        return data![appId.ToString()]["src"]?.AsString() ?? AppDownloadOptions.GetSteamOS();
     }
 }
 

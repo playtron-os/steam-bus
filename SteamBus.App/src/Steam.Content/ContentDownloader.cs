@@ -442,7 +442,7 @@ class ContentDownloader
         var steamId = session.GetLogonDetails().AccountID;
 
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
-        depotConfigStore.SetNewVersion(appId, version, branch, os, language ?? "", steamId.ToString());
+        depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", steamId.ToString());
 
         await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());
@@ -771,6 +771,45 @@ class ContentDownloader
         TotalDownloadSize = downloadCounter.completeDownloadSize,
         Progress = progress,
       });
+    }
+
+    // Clean up old depots
+    var oldBranch = depotConfigStore.GetBranch(appId);
+    var oldDepots = depotConfigStore.GetDepots(appId);
+    foreach (var (oldDepotId, oldManifestId) in oldDepots)
+    {
+      var info = await GetDepotInfo(oldDepotId, appId, oldManifestId, oldBranch, installStartedData.InstallDirectory);
+      if (info != null)
+      {
+        var depotFileData = await ProcessDepotManifestAndFiles(appId, cts, info, downloadCounter);
+
+        if (depotFileData != null)
+        {
+          Console.WriteLine($"Cleaning up files for old depot {oldDepotId} with manifest {oldManifestId}");
+
+          foreach (var fileName in depotFileData.allFileNames)
+          {
+            if (!allFileNamesAllDepots.Contains(fileName))
+            {
+              var fullPath = Path.Join(installStartedData.InstallDirectory, fileName);
+
+              try
+              {
+                if (Directory.Exists(fullPath))
+                  Directory.Delete(fullPath, true);
+                else if (File.Exists(fullPath))
+                  File.Delete(fullPath);
+              }
+              catch (Exception err)
+              {
+                Console.Error.WriteLine($"Error deleting file/directory at {fullPath} when removing old depot {oldDepotId}, err:{err}");
+              }
+            }
+          }
+        }
+      }
+
+      depotConfigStore.RemoveDepot(appId, oldDepotId);
     }
 
     foreach (var depotFileData in depotsToDownload)
