@@ -9,6 +9,9 @@ public class SteamClientApp
 {
     public const uint STEAM_CLIENT_APP_ID = 769;
 
+    // TODO: Support switching steam client universe
+    public const Universe UNIVERSE = Universe.Public;
+
     private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(60);
 
