@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using Playtron.Plugin;
 using Steam.Config;
@@ -121,15 +122,15 @@ public class DepotConfigStore
 
     private List<string>? folders;
 
-    private Dictionary<uint, string> manifestPathMap = [];
-    private Dictionary<uint, KeyValue> manifestMap = [];
+    private ConcurrentDictionary<uint, string> manifestPathMap = [];
+    private ConcurrentDictionary<uint, KeyValue> manifestMap = [];
 
     // Path to manifest file specific to SteamBus, if this file is present it means the app has been imported to SteamBus
-    private Dictionary<uint, string> manifestExtraPathMap = [];
-    private Dictionary<uint, KeyValue> manifestExtraMap = [];
+    private ConcurrentDictionary<uint, string> manifestExtraPathMap = [];
+    private ConcurrentDictionary<uint, KeyValue> manifestExtraMap = [];
 
-    private Dictionary<uint, UserCompatConfig> accountIdToUserCompatConfig = new();
-    private Dictionary<uint, string> appIdToOsMap = new();
+    private ConcurrentDictionary<uint, UserCompatConfig> accountIdToUserCompatConfig = new();
+    private ConcurrentDictionary<uint, string> appIdToOsMap = new();
     private AppInfoCache appInfoCache;
     private uint? currentAccountId;
 
@@ -200,7 +201,7 @@ public class DepotConfigStore
 
     public async Task<bool> ImportApp(string manifestPath)
     {
-        if (manifestPathMap.ContainsValue(manifestPath))
+        if (manifestPathMap.Any((pair) => pair.Value == manifestPath))
             return false;
 
         var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
@@ -216,6 +217,19 @@ public class DepotConfigStore
         var appId = data["appid"].AsUnsignedInteger();
         if (appId == 0)
             return false;
+
+        // Check if install dir exists, and if not, delete dangling manifest files
+        var installDir = GetInstallDirectory(appId);
+        if (!Directory.Exists(installDir))
+        {
+            if (File.Exists(manifestPath))
+                File.Delete(manifestPath);
+
+            if (File.Exists(manifestExtraPath))
+                File.Delete(manifestExtraPath);
+
+            return false;
+        }
 
         if (File.Exists(manifestExtraPath))
         {
@@ -589,13 +603,13 @@ public class DepotConfigStore
         var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
 
         if (!manifestPathMap.ContainsKey(appId))
-            manifestPathMap.Add(appId, manifestPath);
+            manifestPathMap.TryAdd(appId, manifestPath);
         else
             manifestPathMap[appId] = manifestPath;
 
         if (!manifestMap.ContainsKey(appId))
         {
-            manifestMap.Add(appId, new KeyValue(KEY_APP_STATE));
+            manifestMap.TryAdd(appId, new KeyValue(KEY_APP_STATE));
             manifestMap[appId][KEY_APP_ID] = new KeyValue(KEY_APP_ID, appId.ToString());
         }
 
@@ -617,7 +631,7 @@ public class DepotConfigStore
         }
 
         if (!manifestExtraPathMap.ContainsKey(appId))
-            manifestExtraPathMap.Add(appId, manifestExtraPath);
+            manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
         else
             manifestExtraPathMap[appId] = manifestExtraPath;
     }
@@ -733,8 +747,8 @@ public class DepotConfigStore
             if (manifestExtraPathMap.TryGetValue(appId, out var manifestExtraPath) && File.Exists(manifestExtraPath))
                 File.Delete(manifestExtraPath);
 
-            manifestPathMap.Remove(appId);
-            manifestMap.Remove(appId);
+            manifestPathMap.Remove(appId, out var _);
+            manifestMap.Remove(appId, out var _);
         }
     }
 

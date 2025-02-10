@@ -1186,7 +1186,7 @@ public class SteamSession
     return !string.IsNullOrEmpty(config["Offline"]?["Ticket"]?.Value);
   }
 
-  private async Task ImportSteamClientApps()
+  public async Task ImportSteamClientApps()
   {
     var installedAppIds = depotConfigStore.GetInstalledAppInfo().Select((info) => info.AppId).ToHashSet();
 
