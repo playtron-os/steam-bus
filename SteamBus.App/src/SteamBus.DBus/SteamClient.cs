@@ -1476,6 +1476,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       }
       var root = location["root"].AsString()!;
       var path = location["path"].AsString()!;
+      // Remove . characters from the path
+      path = string.Join('/', path.Split(['/', '\\']).Where(path => path.Length != 1 && path[0] != '.'));
       var pattern = location["pattern"].AsString()!;
       var recursive = location["recursive"].AsBoolean(defaultValue: false);
       path = path.Replace("{64BitSteamID}", this.session.SteamUser.SteamID.ConvertToUInt64().ToString());
