@@ -196,7 +196,7 @@ public interface IPluginLibraryProvider : IDBusObject
   // method.
   Task<int> InstallAsync(string appId, string disk, InstallOptions options);
   Task UninstallAsync(string appId);
-  Task<string> MoveItemAsync(string appId, string disk);
+  Task MoveItemAsync(string appId, string disk);
 
   Task<EulaEntry[]> GetEulasAsync(string appId, string country, string locale);
 
@@ -236,6 +236,8 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
   Task<IDisposable> WatchAppNewVersionFoundAsync(Action<(string appId, string version)> reply);
   Task<IDisposable> WatchMoveItemProgressedAsync(Action<(string appId, double progress)> reply);
+  Task<IDisposable> WatchMoveItemCompletedAsync(Action<(string appId, string installFolder)> reply);
+  Task<IDisposable> WatchMoveItemFailedAsync(Action<(string appId, string error)> reply);
   Task<IDisposable> WatchInstalledAppsUpdatedAsync(Action reply);
   Task<IDisposable> WatchLaunchReadyAsync(Action<string> reply);
   Task<IDisposable> WatchLaunchErrorAsync(Action<(string appId, string error)> reply);
