@@ -203,6 +203,9 @@ public interface IPluginLibraryProvider : IDBusObject
   // Gets information about installed apps
   Task<InstalledAppDescription[]> GetInstalledAppsAsync();
 
+  // Syncs installed apps by reading the library folders again
+  Task SyncInstalledAppsAsync();
+
   // Pauses the current install that is in progress
   Task PauseInstallAsync();
 

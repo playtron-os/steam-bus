@@ -69,6 +69,11 @@ class SteamBus
       await pluginManager.WatchOnDriveAddedAsync(async (driveInfo) =>
       {
         Console.WriteLine($"Drive:{driveInfo.Name} at Path:{driveInfo.Path} added");
+
+        var libraryConfig = await LibraryFoldersConfig.CreateAsync();
+        libraryConfig.AddDiskEntry(Regex.Unescape(driveInfo.Path));
+        libraryConfig.Save();
+
         await depotConfigStore.Reload();
         client.EmitInstalledAppsUpdated();
       });

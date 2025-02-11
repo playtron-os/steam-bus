@@ -621,6 +621,19 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return depotConfigStore.GetInstalledAppInfo();
   }
 
+  async Task IPluginLibraryProvider.SyncInstalledAppsAsync()
+  {
+    if (session != null)
+    {
+      await session.WaitForLibrary();
+      await session.ImportSteamClientApps();
+    }
+    else
+    {
+      await depotConfigStore.Reload();
+    }
+  }
+
   async Task<int> IPluginLibraryProvider.InstallAsync(string appIdString, string disk, InstallOptions options)
   {
     Console.WriteLine($"Installing app: {appIdString}");
