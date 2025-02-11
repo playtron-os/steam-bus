@@ -219,7 +219,7 @@ public class DepotConfigStore
             return false;
 
         // Check if install dir exists, and if not, delete dangling manifest files
-        var installDir = GetInstallDirectory(appId);
+        var installDir = GetInstallDirectory(manifestPath, data);
         if (!Directory.Exists(installDir))
         {
             if (File.Exists(manifestPath))
@@ -295,6 +295,16 @@ public class DepotConfigStore
         if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
         if (!manifestPathMap.TryGetValue(appId, out var manifestPath)) return null;
 
+        return GetInstallDirectory(manifestPath, manifest);
+    }
+
+    /// <summary>
+    /// Returns the install directory for an app
+    /// </summary>
+    /// <param name="data"></param>
+    /// <returns></returns>
+    public string? GetInstallDirectory(string manifestPath, KeyValue manifest)
+    {
         return Path.Join(Directory.GetParent(manifestPath)?.FullName, "common", manifest[KEY_INSTALL_DIR].Value);
     }
 
