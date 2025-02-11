@@ -5,6 +5,7 @@ using Steam.Config;
 using Steam.Content;
 using Steam.Session;
 using SteamKit2;
+using Tmds.DBus;
 
 public enum Universe
 {
@@ -206,55 +207,63 @@ public class DepotConfigStore
 
         var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
 
-        var manifestData = await File.ReadAllTextAsync(manifestPath);
-        if (string.IsNullOrEmpty(manifestData))
-            return false;
-
-        var data = KeyValue.LoadFromString(manifestData);
-        if (data == null)
-            return false;
-
-        var appId = data["appid"].AsUnsignedInteger();
-        if (appId == 0)
-            return false;
-
-        // Check if install dir exists, and if not, delete dangling manifest files
-        var installDir = GetInstallDirectory(manifestPath, data);
-        if (!Directory.Exists(installDir))
+        try
         {
-            if (File.Exists(manifestPath))
-                File.Delete(manifestPath);
+            var manifestData = await File.ReadAllTextAsync(manifestPath);
+            if (string.IsNullOrEmpty(manifestData))
+                return false;
+
+            var data = KeyValue.LoadFromString(manifestData);
+            if (data == null)
+                return false;
+
+            var appId = data["appid"].AsUnsignedInteger();
+            if (appId == 0)
+                return false;
+
+            // Check if install dir exists, and if not, delete dangling manifest files
+            var installDir = GetInstallDirectory(manifestPath, data);
+            if (!Directory.Exists(installDir))
+            {
+                if (File.Exists(manifestPath))
+                    File.Delete(manifestPath);
+
+                if (File.Exists(manifestExtraPath))
+                    File.Delete(manifestExtraPath);
+
+                return false;
+            }
 
             if (File.Exists(manifestExtraPath))
-                File.Delete(manifestExtraPath);
+            {
+                var manifestExtraData = await File.ReadAllTextAsync(manifestExtraPath);
+                if (string.IsNullOrEmpty(manifestExtraData))
+                    return false;
 
+                var extraData = KeyValue.LoadFromString(manifestExtraData);
+                if (extraData == null)
+                    return false;
+
+                manifestExtraMap.TryAdd(appId, extraData);
+            }
+            else
+            {
+                var extraData = new KeyValue(KEY_APP_STATE);
+                extraData.SaveToFile(manifestExtraPath, false);
+                manifestExtraMap.TryAdd(appId, extraData);
+            }
+
+            manifestMap.TryAdd(appId, data);
+            manifestPathMap.TryAdd(appId, manifestPath);
+            manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
+
+            return true;
+        }
+        catch (Exception err)
+        {
+            Console.Error.WriteLine($"Error when importing app, err:{err}");
             return false;
         }
-
-        if (File.Exists(manifestExtraPath))
-        {
-            var manifestExtraData = await File.ReadAllTextAsync(manifestExtraPath);
-            if (string.IsNullOrEmpty(manifestExtraData))
-                return false;
-
-            var extraData = KeyValue.LoadFromString(manifestExtraData);
-            if (extraData == null)
-                return false;
-
-            manifestExtraMap.TryAdd(appId, extraData);
-        }
-        else
-        {
-            var extraData = new KeyValue(KEY_APP_STATE);
-            extraData.SaveToFile(manifestExtraPath, false);
-            manifestExtraMap.TryAdd(appId, extraData);
-        }
-
-        manifestMap.TryAdd(appId, data);
-        manifestPathMap.TryAdd(appId, manifestPath);
-        manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
-
-        return true;
     }
 
     /// <summary>
@@ -767,75 +776,93 @@ public class DepotConfigStore
     /// </summary>
     /// <param name="appId"></param>
     /// <param name="newInstallDirectory"></param>
-    public async Task<string> MoveInstalledApp(uint appId, string newInstallDirectory, Action<(string appId, double progress)>? OnMoveItemProgressed)
+    /// <param name="OnMoveItemProgressed"></param>
+    /// <param name="OnMoveItemCompleted"></param>
+    /// <param name="OnMoveItemFailed"></param>
+    public async Task MoveInstalledApp(uint appId, string newInstallDirectory, Action<(string appId, double progress)>? OnMoveItemProgressed,
+        Action<(string appId, string installFolder)>? OnMoveItemCompleted, Action<(string appId, string error)>? OnMoveItemFailed)
     {
-        if (!manifestPathMap.TryGetValue(appId, out var currentManifestPath) || !manifestExtraPathMap.TryGetValue(appId, out var currentExtraManifestPath))
-            throw DbusExceptionHelper.ThrowAppNotInstalled();
-
-        var currentInstallDirectory = GetInstallDirectory(appId);
-        if (currentInstallDirectory == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
-
-        // Ensure the destination directory exists
-        Directory.CreateDirectory(newInstallDirectory);
-
-        // Get all files and subdirectories
-        var files = Directory.GetFiles(currentInstallDirectory, "*", SearchOption.AllDirectories);
-        var directories = Directory.GetDirectories(currentInstallDirectory, "*", SearchOption.AllDirectories);
-        var totalItems = files.Length + directories.Length;
-        int processedItems = 0;
-
-        // Move all files
-        foreach (var file in files)
+        try
         {
-            // Calculate relative path
-            string relativePath = Path.GetRelativePath(currentInstallDirectory, file);
-            string destinationFile = Path.Combine(newInstallDirectory, relativePath);
+            if (!manifestPathMap.TryGetValue(appId, out var currentManifestPath) || !manifestExtraPathMap.TryGetValue(appId, out var currentExtraManifestPath))
+                throw DbusExceptionHelper.ThrowAppNotInstalled();
+
+            var currentInstallDirectory = GetInstallDirectory(appId);
+            if (currentInstallDirectory == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
 
             // Ensure the destination directory exists
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
+            Directory.CreateDirectory(newInstallDirectory);
 
-            // Move the file
-            await Task.Run(() => File.Move(file, destinationFile));
+            // Get all files and subdirectories
+            var files = Directory.GetFiles(currentInstallDirectory, "*", SearchOption.AllDirectories);
+            var directories = Directory.GetDirectories(currentInstallDirectory, "*", SearchOption.AllDirectories);
+            var totalItems = files.Length + directories.Length;
+            int processedItems = 0;
 
-            // Update progress
-            processedItems++;
-            int progress = (int)((double)processedItems / totalItems * 100);
-            OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
+            // Move all files
+            foreach (var file in files)
+            {
+                // Calculate relative path
+                string relativePath = Path.GetRelativePath(currentInstallDirectory, file);
+                string destinationFile = Path.Combine(newInstallDirectory, relativePath);
+
+                // Ensure the destination directory exists
+                Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
+
+                // Move the file
+                await Task.Run(() => File.Move(file, destinationFile));
+
+                // Update progress
+                processedItems++;
+                int progress = (int)((double)processedItems / totalItems * 100);
+                OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
+            }
+
+            // Move all directories
+            foreach (var directory in directories)
+            {
+                // Calculate relative path
+                string relativePath = Path.GetRelativePath(currentInstallDirectory, directory);
+                string destinationDir = Path.Combine(newInstallDirectory, relativePath);
+
+                // Create the directory in the destination
+                Directory.CreateDirectory(destinationDir);
+
+                // Update progress
+                processedItems++;
+                int progress = (int)((double)processedItems / totalItems * 100);
+                OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
+            }
+
+            // Delete the source directory after moving
+            Directory.Delete(currentInstallDirectory, true);
+            File.Delete(currentManifestPath);
+            File.Delete(currentExtraManifestPath);
+
+            // Update state
+            manifestPathMap[appId] = Path.Join(Directory.GetParent(Directory.GetParent(newInstallDirectory)!.FullName)!.FullName, $"appmanifest_{appId}.acf");
+            manifestExtraPathMap[appId] = manifestPathMap[appId].Replace(".acf", ".extra.acf");
+
+            // Save state
+            manifestMap[appId].SaveToFile(manifestPathMap[appId], false);
+            manifestExtraMap[appId].SaveToFile(manifestExtraPathMap[appId], false);
+
+            // Final progress update to 100%
+            OnMoveItemProgressed?.Invoke((appId.ToString(), 100));
+
+            // Send complete msg
+            OnMoveItemCompleted?.Invoke((appId.ToString(), newInstallDirectory));
         }
-
-        // Move all directories
-        foreach (var directory in directories)
+        catch (DBusException err)
         {
-            // Calculate relative path
-            string relativePath = Path.GetRelativePath(currentInstallDirectory, directory);
-            string destinationDir = Path.Combine(newInstallDirectory, relativePath);
-
-            // Create the directory in the destination
-            Directory.CreateDirectory(destinationDir);
-
-            // Update progress
-            processedItems++;
-            int progress = (int)((double)processedItems / totalItems * 100);
-            OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
+            Console.Error.WriteLine($"DBus exception when moving item: {err}");
+            OnMoveItemFailed?.Invoke((appId.ToString(), err.ErrorName));
         }
-
-        // Delete the source directory after moving
-        Directory.Delete(currentInstallDirectory, true);
-        File.Delete(currentManifestPath);
-        File.Delete(currentExtraManifestPath);
-
-        // Update state
-        manifestPathMap[appId] = Path.Join(Directory.GetParent(Directory.GetParent(newInstallDirectory)!.FullName)!.FullName, $"appmanifest_{appId}.acf");
-        manifestExtraPathMap[appId] = manifestPathMap[appId].Replace(".acf", ".extra.acf");
-
-        // Save state
-        manifestMap[appId].SaveToFile(manifestPathMap[appId], false);
-        manifestExtraMap[appId].SaveToFile(manifestExtraPathMap[appId], false);
-
-        // Final progress update to 100%
-        OnMoveItemProgressed?.Invoke((appId.ToString(), 100));
-
-        return newInstallDirectory;
+        catch (Exception err)
+        {
+            Console.Error.WriteLine($"Exception when moving item: {err}");
+            OnMoveItemFailed?.Invoke((appId.ToString(), ""));
+        }
     }
 
     public void SetSteamAccountID(uint? accountId)

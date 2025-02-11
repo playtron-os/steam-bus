@@ -84,6 +84,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(string appId, string error)>? OnInstallFailed;
   public event Action<(string appId, string version)>? OnAppNewVersionFound;
   public event Action<(string appId, double progress)>? OnMoveItemProgressed;
+  public event Action<(string appId, string installFolder)>? OnMoveItemCompleted;
+  public event Action<(string appId, string error)>? OnMoveItemFailed;
   public event Action? InstalledAppsUpdated;
   public event Action<PropertyChanges>? OnUserPropsChanged;
   public event Action<string>? OnAuthError;
@@ -671,7 +673,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Task.CompletedTask;
   }
 
-  async Task<string> IPluginLibraryProvider.MoveItemAsync(string appIdString, string disk)
+  async Task IPluginLibraryProvider.MoveItemAsync(string appIdString, string disk)
   {
     Console.WriteLine($"Uninstalling app: {appIdString}");
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
@@ -680,7 +682,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var installdir = await downloader.GetAppInstallDir(appId);
     var newInstallDirectory = await Disk.GetInstallRootFromDevice(disk, installdir);
 
-    return await depotConfigStore.MoveInstalledApp(appId, newInstallDirectory, OnMoveItemProgressed);
+    _ = Task.Run(() => depotConfigStore.MoveInstalledApp(appId, newInstallDirectory, OnMoveItemProgressed, OnMoveItemCompleted, OnMoveItemFailed));
   }
 
   async Task<EulaEntry[]> IPluginLibraryProvider.GetEulasAsync(string appIdString, string country, string locale)
@@ -823,6 +825,18 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   Task<IDisposable> IPluginLibraryProvider.WatchMoveItemProgressedAsync(Action<(string appId, double progress)> reply)
   {
     return SignalWatcher.AddAsync(this, nameof(OnMoveItemProgressed), reply);
+  }
+
+  // MoveItemCompleted Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchMoveItemCompletedAsync(Action<(string appId, string installFolder)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnMoveItemCompleted), reply);
+  }
+
+  // MoveItemFailed Signal
+  Task<IDisposable> IPluginLibraryProvider.WatchMoveItemFailedAsync(Action<(string appId, string error)> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnMoveItemFailed), reply);
   }
 
   // InstalledAppsUpdated Signal
