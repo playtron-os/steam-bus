@@ -60,17 +60,25 @@ public class AppInfoCache
     // Get the cached app info value
     public KeyValue? GetCached(uint appId)
     {
-        string content = "";
-        using (var stream = File.OpenText(GetFinalPath(appId)))
+        try
         {
-            string? line;
-            while ((line = stream.ReadLine()) != null)
+            string content = "";
+            using (var stream = File.OpenText(GetFinalPath(appId)))
             {
-                content += line;
+                string? line;
+                while ((line = stream.ReadLine()) != null)
+                {
+                    content += line;
+                }
             }
-        }
 
-        return KeyValue.LoadFromString(content);
+            return KeyValue.LoadFromString(content);
+        }
+        catch (Exception)
+        {
+            Console.WriteLine("Failed to read cache for {0}", appId);
+            return null;
+        }
     }
 
     private string GetFinalPath(uint appId) => Path.Join(path, $"{appId}.vdf");
