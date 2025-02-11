@@ -26,6 +26,7 @@ public static class DbusErrors
     public const string AppNotOwned = "one.playtron.Error.AppNotOwned";
     public const string PlayingBlocked = "one.playtron.Error.PlayingBlocked";
     public const string NotEnoughSpace = "one.playtron.Error.NotEnoughSpace";
+    public const string Permission = "one.playtron.Error.Permission";
 }
 
 public static class DbusExceptionHelper
@@ -93,5 +94,10 @@ public static class DbusExceptionHelper
     public static DBusException ThrowNotEnoughSpace(string message = "Not enough space to install this app")
     {
         return new DBusException(DbusErrors.NotEnoughSpace, message);
+    }
+
+    public static DBusException ThrowPermission(string message = "No permission")
+    {
+        return new DBusException(DbusErrors.Permission, message);
     }
 }
