@@ -82,7 +82,7 @@ static class Disk
                 string[] parts = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length < 6)
                     continue;
-                var path = parts[5];
+                var path = string.Join(" ", parts[5..]);
 
                 var condition = driveName == null ? IsMountPointMainDisk(path) : line.StartsWith(driveName);
 
