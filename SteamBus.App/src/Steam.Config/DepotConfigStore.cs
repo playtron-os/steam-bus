@@ -137,6 +137,8 @@ public class DepotConfigStore
 
     public SteamSession? steamSession;
 
+    private readonly SemaphoreSlim fileLock = new(1, 1);
+
     DepotConfigStore()
     {
         appInfoCache = new AppInfoCache(AppInfoCache.DefaultPath());
@@ -202,13 +204,15 @@ public class DepotConfigStore
 
     public async Task<bool> ImportApp(string manifestPath)
     {
-        if (manifestPathMap.Any((pair) => pair.Value == manifestPath))
-            return false;
-
-        var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
+        await fileLock.WaitAsync();
 
         try
         {
+            if (manifestPathMap.Any((pair) => pair.Value == manifestPath))
+                return false;
+
+            var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
+
             var manifestData = await File.ReadAllTextAsync(manifestPath);
             if (string.IsNullOrEmpty(manifestData))
                 return false;
@@ -263,6 +267,37 @@ public class DepotConfigStore
         {
             Console.Error.WriteLine($"Error when importing app, err:{err}");
             return false;
+        }
+        finally
+        {
+            fileLock.Release();
+        }
+    }
+
+    public void VerifyAppsOsConfig(uint accountId)
+    {
+        var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+        var userCompatConfig = accountId == 0 ? null : new UserCompatConfig(UserCompatConfig.DefaultPath(accountId));
+
+        foreach (var appId in manifestMap.Keys)
+            VerifyAppsOsConfig(globalConfig, userCompatConfig, appId);
+
+        globalConfig.Save();
+        userCompatConfig?.Save();
+    }
+
+    public void VerifyAppsOsConfig(GlobalConfig globalConfig, UserCompatConfig? userCompatConfig, uint appId)
+    {
+        var osFromDepots = TryGetOsFromDepots(appId);
+        var defaultOs = ContentDownloader.GetSteamOS();
+
+        if (osFromDepots != null && defaultOs != osFromDepots)
+        {
+            if (userCompatConfig != null)
+                userCompatConfig.SetPlatformOverride(appId, defaultOs, osFromDepots);
+
+            if (osFromDepots == "windows")
+                globalConfig.SetProton9CompatForApp(appId);
         }
     }
 
@@ -875,6 +910,13 @@ public class DepotConfigStore
     {
         if (appIdToOsMap.TryGetValue(appId, out var os)) return os;
 
+        var osFound = TryGetOsFromDepots(appId);
+        if (osFound != null)
+        {
+            appIdToOsMap[appId] = osFound;
+            return osFound;
+        }
+
         if (currentAccountId != null)
         {
             var userCompatConfig = GetUserCompatConfig((uint)currentAccountId);
@@ -885,14 +927,7 @@ public class DepotConfigStore
 
         var lastOwner = manifestMap[appId][KEY_LAST_OWNER]?.AsUnsignedLong();
         var accountId = lastOwner == null ? 0 : (uint)(lastOwner! & 0xFFFFFFFF);
-        if (accountId == 0)
-        {
-            var osFound = TryGetOsFromDepots(appId);
-            if (osFound == null) return null;
-
-            appIdToOsMap[appId] = osFound;
-            return osFound;
-        }
+        if (accountId == 0) return null;
 
         var lastOwnerConfig = GetUserCompatConfig(accountId);
         var lastOwnerOs = lastOwnerConfig.GetAppPlatform(appId);

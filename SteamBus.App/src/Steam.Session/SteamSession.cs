@@ -1189,6 +1189,7 @@ public class SteamSession
   public async Task ImportSteamClientApps()
   {
     var installedAppIds = depotConfigStore.GetInstalledAppInfo().Select((info) => info.AppId).ToHashSet();
+    var importedAppIds = new List<string>();
 
     var libraryFoldersConfig = await LibraryFoldersConfig.CreateAsync();
     var directories = libraryFoldersConfig.GetInstallDirectories();
@@ -1213,13 +1214,23 @@ public class SteamSession
         if (await depotConfigStore.ImportApp(file))
         {
           installedAppIds.Add(appId);
+          importedAppIds.Add(appId);
           hadImport = true;
         }
       }
     }
 
     if (hadImport)
+    {
+      var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+      var userCompatConfig = new UserCompatConfig(UserCompatConfig.DefaultPath(GetLogonDetails().AccountID));
+      foreach (var appId in importedAppIds)
+        depotConfigStore.VerifyAppsOsConfig(globalConfig, userCompatConfig, uint.Parse(appId));
+      globalConfig.Save();
+      userCompatConfig.Save();
+
       InstalledAppsUpdated?.Invoke();
+    }
   }
 
   public static async Task<ProviderItem?> GetProviderItemRequest(uint appId, bool force = false)

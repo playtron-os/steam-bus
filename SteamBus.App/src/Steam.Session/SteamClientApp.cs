@@ -61,7 +61,7 @@ public class SteamClientApp
         return $"{BaseDirectory.DataHome}/steambus/tools/steam";
     }
 
-    public async Task Start(string forAppId, string username, bool offlineMode)
+    public async Task Start(uint accountId, string forAppId, string username, bool offlineMode)
     {
         this.forAppId = forAppId;
 
@@ -87,6 +87,9 @@ public class SteamClientApp
         loginFailed = false;
         readyTask = new();
         steamuiLogs.Delete();
+
+        // Verify all installed apps have correct config so steam client does not set them to update pending
+        depotConfigStore.VerifyAppsOsConfig(accountId);
 
         var arguments = new List<string>(ARGUMENTS);
 
