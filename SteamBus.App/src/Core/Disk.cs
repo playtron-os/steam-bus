@@ -133,7 +133,7 @@ static class Disk
             installPath = libraryFoldersConfig.GetInstallDirectory(mountPoint);
         }
 
-        return Path.Join(installPath!, folderName);
+        return Regex.Unescape(Path.Join(installPath!, folderName));
     }
 
     public static async Task<ulong> GetFolderSizeWithDu(string folderPath)
