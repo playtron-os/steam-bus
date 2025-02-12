@@ -306,7 +306,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       {
         try
         {
-          await steamClientApp.Start("", this.session?.GetLogonDetails()?.Username ?? "", false);
+          await steamClientApp.Start(0, "", "", false);
 
           if (!steamClientApp.updating)
           {
@@ -625,14 +625,48 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task IPluginLibraryProvider.SyncInstalledAppsAsync()
   {
-    if (session != null)
+    var installedAppIds = depotConfigStore.GetInstalledAppInfo().Select((info) => info.AppId).ToHashSet();
+    var importedAppIds = new List<string>();
+
+    var libraryFoldersConfig = await LibraryFoldersConfig.CreateAsync();
+    var directories = libraryFoldersConfig.GetInstallDirectories();
+    var hadImport = false;
+
+    foreach (var dir in directories)
     {
-      await session.WaitForLibrary();
-      await session.ImportSteamClientApps();
+      var steamappsDir = Directory.GetParent(dir)?.FullName;
+      if (steamappsDir == null || !Directory.Exists(steamappsDir)) continue;
+
+      var files = Directory.EnumerateFiles(steamappsDir);
+
+      foreach (var file in files)
+      {
+        if (!file.EndsWith(".acf") || file.EndsWith(".extra.acf"))
+          continue;
+
+        var appId = file.Split("_").LastOrDefault()?.Split(".").FirstOrDefault();
+        if (appId == null || installedAppIds.Contains(appId))
+          continue;
+
+        if (await depotConfigStore.ImportApp(file))
+        {
+          installedAppIds.Add(appId);
+          importedAppIds.Add(appId);
+          hadImport = true;
+        }
+      }
     }
-    else
+
+    if (hadImport)
     {
-      await depotConfigStore.Reload();
+      var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+      var userCompatConfig = session == null ? null : new UserCompatConfig(UserCompatConfig.DefaultPath(session.GetLogonDetails().AccountID));
+      foreach (var appId in importedAppIds)
+        depotConfigStore.VerifyAppsOsConfig(globalConfig, userCompatConfig, uint.Parse(appId));
+      globalConfig.Save();
+      userCompatConfig?.Save();
+
+      InstalledAppsUpdated?.Invoke();
     }
   }
 
@@ -754,7 +788,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       if (!wantsOfflineMode && session.playingBlocked) throw DbusExceptionHelper.ThrowPlayingBlocked();
 
-      await steamClientApp.Start(appId, session!.GetLogonDetails().Username!, wantsOfflineMode);
+      var logonDetails = session!.GetLogonDetails();
+      await steamClientApp.Start(logonDetails.AccountID, appId, logonDetails.Username!, wantsOfflineMode);
     }
     catch (DBusException exception)
     {
@@ -1224,7 +1259,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         // Delete offline ticket so we can re-generated it and know when to quit the client
         session?.DeleteUserConfigOfflineTicket();
 
-        await steamClientApp.Start("", loginDetails.Username, false);
+        await steamClientApp.Start(loginDetails.AccountID, "", loginDetails.Username, false);
       }
       catch (Exception exception)
       {
