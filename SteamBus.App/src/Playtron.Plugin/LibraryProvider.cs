@@ -27,6 +27,7 @@ public struct InstalledAppDescription
   public string InstalledPath { get; set; }
   public ulong DownloadedBytes { get; set; }
   public ulong TotalDownloadSize { get; set; }
+  public ulong DiskSize { get; set; }
   public string Version { get; set; }
   public string LatestVersion { get; set; }
   public bool UpdatePending { get; set; }

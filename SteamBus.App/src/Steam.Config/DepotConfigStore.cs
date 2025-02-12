@@ -678,6 +678,7 @@ public class DepotConfigStore
                 InstalledPath = GetInstallDirectory(entry.Key)!,
                 DownloadedBytes = entry.Value[KEY_BYTES_DOWNLOADED].AsUnsignedLong(),
                 TotalDownloadSize = entry.Value[KEY_BYTES_TO_DOWNLOAD].AsUnsignedLong(),
+                DiskSize = entry.Value[KEY_SIZE_ON_DISK].AsUnsignedLong(),
                 Version = entry.Value[KEY_BUILD_ID].AsString() ?? "",
                 LatestVersion = manifestExtra[EXTRA_KEY_LATEST_BUILD_ID].AsString() ?? "",
                 UpdatePending = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
