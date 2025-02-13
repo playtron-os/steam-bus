@@ -90,6 +90,8 @@ public class SteamClientApp
 
         // Verify all installed apps have correct config so steam client does not set them to update pending
         depotConfigStore.VerifyAppsOsConfig(accountId);
+        if (!string.IsNullOrEmpty(forAppId))
+            depotConfigStore.VerifyAppsStateFlag(uint.Parse(forAppId));
 
         var arguments = new List<string>(ARGUMENTS);
 
@@ -362,6 +364,8 @@ public class SteamClientApp
 
     private void OnExited(object? sender, EventArgs e)
     {
+        depotConfigStore.VerifyAppsStateFlag();
+
         Console.WriteLine($"Steam client exited with code {process?.ExitCode}");
         process = null;
 

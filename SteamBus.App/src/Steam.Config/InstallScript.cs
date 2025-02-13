@@ -66,18 +66,23 @@ public class InstallScript
                 {
                     foreach (var nestedFolder in Directory.EnumerateDirectories(folder))
                     {
-                        var installScriptPath = Path.Combine(nestedFolder, "installscript.vdf");
-                        var installScript = await GetScriptForPathAsync(installScriptPath);
-                        if (installScript != null)
-                            scripts.Add((PostInstall)installScript);
+                        foreach (var file in Directory.EnumerateFiles(nestedFolder))
+                        {
+                            if (file?.EndsWith(".vdf") == true)
+                            {
+                                var installScript = await GetScriptForPathAsync(file);
+                                if (installScript != null)
+                                    scripts.Add((PostInstall)installScript);
+                            }
+                        }
                     }
                 }
             }
 
             // Look at the root install directory
-            foreach (var file in Directory.EnumerateDirectories(_installDirectory))
+            foreach (var file in Directory.EnumerateFiles(_installDirectory))
             {
-                if (file?.Contains("installscript") == true && file!.EndsWith(".vdf"))
+                if (file?.EndsWith(".vdf") == true)
                 {
                     var rootInstallScript = await GetScriptForPathAsync(file);
                     if (rootInstallScript != null)
@@ -96,25 +101,35 @@ public class InstallScript
 
     private async Task<PostInstall?> GetScriptForPathAsync(string path)
     {
-        if (File.Exists(path))
+        try
         {
-            var content = await File.ReadAllTextAsync(path);
-            var cleanedContent = SIGNATURE_REGEX.Replace(content ?? "", "");
-            var installScript = KeyValue.LoadFromString(cleanedContent);
-
-            if (installScript != null)
+            if (File.Exists(path))
             {
-                return new PostInstall
+                var content = await File.ReadAllTextAsync(path);
+                var cleanedContent = SIGNATURE_REGEX.Replace(content ?? "", "");
+                var installScript = KeyValue.LoadFromString(cleanedContent);
+
+                if (installScript != null)
                 {
-                    Path = path,
-                    Registry = GetRegistry(installScript),
-                    RunProcess = GetRunProcessList(installScript).ToArray(),
-                };
+                    if (installScript.Name?.ToLower() != "installscript")
+                        return null;
+
+                    return new PostInstall
+                    {
+                        Path = path,
+                        Registry = GetRegistry(installScript),
+                        RunProcess = GetRunProcessList(installScript).ToArray(),
+                    };
+                }
+            }
+            else
+            {
+                Console.WriteLine($"No install script file found at {path}");
             }
         }
-        else
+        catch (Exception err)
         {
-            Console.WriteLine($"No install script file found at {path}");
+            Console.Error.WriteLine($"Error reading install script from path:{path}, err:{err}");
         }
 
         return null;

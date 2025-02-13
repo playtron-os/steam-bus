@@ -261,6 +261,8 @@ public class DepotConfigStore
             manifestPathMap.TryAdd(appId, manifestPath);
             manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
 
+            VerifyAppsStateFlag(appId);
+
             return true;
         }
         catch (Exception err)
@@ -271,6 +273,40 @@ public class DepotConfigStore
         finally
         {
             fileLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Verifies the app state flags and make sure to normalize it if needed to avoid unwanted flags
+    /// </summary>
+    public void VerifyAppsStateFlag()
+    {
+        foreach (var pair in manifestMap)
+            VerifyAppsStateFlag(pair.Key, pair.Value);
+    }
+
+    /// <summary>
+    /// Verifies the app state flags and make sure to normalize it if needed to avoid unwanted flags
+    /// </summary>
+    public void VerifyAppsStateFlag(uint appId)
+    {
+        if (manifestMap.TryGetValue(appId, out var data))
+            VerifyAppsStateFlag(appId, data);
+    }
+
+    /// <summary>
+    /// Verifies the app state flags and make sure to normalize it if needed to avoid unwanted flags
+    /// </summary>
+    public void VerifyAppsStateFlag(uint appId, KeyValue data)
+    {
+        if (!manifestPathMap.ContainsKey(appId))
+            return;
+
+        var normalizedStateFlags = GetNormalizedStateFlags(appId);
+        if (data[KEY_STATE_FLAGS]?.AsUnsignedInteger() != normalizedStateFlags)
+        {
+            data[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, normalizedStateFlags.ToString());
+            data.SaveToFile(manifestPathMap[appId], false);
         }
     }
 
@@ -324,6 +360,9 @@ public class DepotConfigStore
         }
         else if (manifest != null && path != null && extraManifest != null && extraPath != null)
         {
+            var stateFlags = GetNormalizedStateFlags(appId);
+            manifest[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
+
             manifest.SaveToFile(path, false);
             extraManifest.SaveToFile(extraPath, false);
         }
@@ -599,25 +638,20 @@ public class DepotConfigStore
         manifestMap[appId][KEY_BUILD_ID] = new KeyValue(KEY_BUILD_ID, version.ToString());
         manifestMap[appId][KEY_TARGET_BUILD_ID] = new KeyValue(KEY_TARGET_BUILD_ID, version.ToString());
 
-        if (manifestExtraMap[appId][KEY_USER_CONFIG] == KeyValue.Invalid)
-            manifestExtraMap[appId][KEY_USER_CONFIG] = new KeyValue(KEY_USER_CONFIG);
-        manifestExtraMap[appId][KEY_USER_CONFIG][KEY_USER_CONFIG_LANGUAGE] = new KeyValue(KEY_USER_CONFIG_LANGUAGE, language);
+        if (manifestMap[appId][KEY_USER_CONFIG] == KeyValue.Invalid)
+            manifestMap[appId][KEY_USER_CONFIG] = new KeyValue(KEY_USER_CONFIG);
+        manifestMap[appId][KEY_USER_CONFIG][KEY_USER_CONFIG_LANGUAGE] = new KeyValue(KEY_USER_CONFIG_LANGUAGE, language);
 
-        if (manifestExtraMap[appId][KEY_MOUNTED_CONFIG] == KeyValue.Invalid)
-            manifestExtraMap[appId][KEY_MOUNTED_CONFIG] = new KeyValue(KEY_MOUNTED_CONFIG);
-        manifestExtraMap[appId][KEY_MOUNTED_CONFIG][KEY_MOUNTED_CONFIG_LANGUAGE] = new KeyValue(KEY_MOUNTED_CONFIG_LANGUAGE, language);
+        if (manifestMap[appId][KEY_MOUNTED_CONFIG] == KeyValue.Invalid)
+            manifestMap[appId][KEY_MOUNTED_CONFIG] = new KeyValue(KEY_MOUNTED_CONFIG);
+        manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_MOUNTED_CONFIG_LANGUAGE] = new KeyValue(KEY_MOUNTED_CONFIG_LANGUAGE, language);
 
         if (lastOwnedSteamId != null)
-            manifestExtraMap[appId][KEY_LAST_OWNER] = new KeyValue(KEY_LAST_OWNER, lastOwnedSteamId);
+            manifestMap[appId][KEY_LAST_OWNER] = new KeyValue(KEY_LAST_OWNER, lastOwnedSteamId);
 
         if (!string.IsNullOrEmpty(branch) && branch != AppDownloadOptions.DEFAULT_BRANCH)
         {
-            if (manifestMap[appId][KEY_MOUNTED_CONFIG] == KeyValue.Invalid)
-                manifestMap[appId][KEY_MOUNTED_CONFIG] = new KeyValue(KEY_MOUNTED_CONFIG);
             manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_MOUNTED_CONFIG_BETA_KEY] = new KeyValue(KEY_MOUNTED_CONFIG_BETA_KEY, branch);
-
-            if (manifestMap[appId][KEY_USER_CONFIG] == KeyValue.Invalid)
-                manifestMap[appId][KEY_USER_CONFIG] = new KeyValue(KEY_USER_CONFIG);
             manifestMap[appId][KEY_USER_CONFIG][KEY_USER_CONFIG_BETA_KEY] = new KeyValue(KEY_USER_CONFIG_BETA_KEY, branch);
         }
         else
@@ -963,5 +997,11 @@ public class DepotConfigStore
         var config = new UserCompatConfig(UserCompatConfig.DefaultPath(accountId));
         accountIdToUserCompatConfig[accountId] = config;
         return config;
+    }
+
+    private long GetNormalizedStateFlags(uint appId)
+    {
+        var operation = ~(StateFlags.UpdateStarted | StateFlags.UpdateRunning);
+        return (manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0) & (int)operation;
     }
 }
