@@ -291,8 +291,11 @@ public class SteamSession
   }
 
 
-  public async Task RequestPackageInfo(IEnumerable<uint> packageIds)
+  public async Task RequestPackageInfo(IEnumerable<uint> packageIds, bool force = true)
   {
+    if (!force && packageIds.Any((x) => !PackageInfo.ContainsKey(x)))
+      return;
+
     var packages = packageIds.ToList();
     packages.RemoveAll(PackageInfo.ContainsKey);
 
@@ -349,10 +352,7 @@ public class SteamSession
     Console.WriteLine("Got depot key for {0} result: {1}", depotKey.DepotID, depotKey.Result);
 
     if (depotKey.Result != EResult.OK)
-    {
-      Abort();
       return;
-    }
 
     DepotKeys[depotKey.DepotID] = depotKey.DepotKey;
   }
@@ -727,8 +727,6 @@ public class SteamSession
     // When recovering the connection, we want to reconnect even if the remote disconnects us
     if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
     {
-      Console.WriteLine("Disconnected from Steam");
-
       // Any operations outstanding need to be aborted
       bAborted = true;
     }
@@ -762,6 +760,9 @@ public class SteamSession
   // Invoked when the Steam client tries to log in
   private void OnLogIn(SteamUser.LoggedOnCallback loggedOn)
   {
+    // Make sure to save token first thing so we don't end up getting error "AlreadyLoggedInElsewhere" for having a used token locally
+    SaveToken();
+
     var isSteamGuard = loggedOn.Result == EResult.AccountLogonDenied;
     var is2FA = loggedOn.Result == EResult.AccountLoginDeniedNeedTwoFactor;
     var isAccessToken = this.RememberPassword && logonDetails.AccessToken != null &&
@@ -833,8 +834,6 @@ public class SteamSession
     this.seq++;
     IsLoggedOn = true;
     IsPendingLogin = false;
-
-    SaveToken();
   }
 
   public void SaveToken()
@@ -859,8 +858,6 @@ public class SteamSession
     if (licenseList.Result != EResult.OK)
     {
       Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
-      Abort();
-
       return;
     }
     isLoadingLibrary = true;
@@ -890,6 +887,7 @@ public class SteamSession
     ProviderItemMap.Clear();
 
     Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
+    PackageInfo.Clear();
     await RequestPackageInfo(packageIds);
     Console.WriteLine("Got packages");
 
@@ -980,6 +978,7 @@ public class SteamSession
       OnLibraryUpdated?.Invoke(updatedItems.ToArray());
     }
 
+    await VerifyDownloadedApps();
     await ImportSteamClientApps();
   }
 
@@ -1124,6 +1123,12 @@ public class SteamSession
     return common?["name"].Value?.ToString() ?? "";
   }
 
+  public List<uint> GetDLCs(uint appId)
+  {
+    var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
+    return extended?["listofdlc"]?.AsString()?.Split(",")?.Select(uint.Parse).ToList() ?? [];
+  }
+
   public KeyValue? GetSteam3AppSection(uint appId, EAppInfoSection section)
   {
     KeyValue appinfo;
@@ -1184,6 +1189,72 @@ public class SteamSession
 
     var (config, _) = loginUsersConfig.GetUserConfig(logonDetails.AccountID.ToString());
     return !string.IsNullOrEmpty(config["Offline"]?["Ticket"]?.Value);
+  }
+
+  /// <summary>
+  /// Verifies the downloaded apps to make sure they are not missing depots
+  /// </summary>
+  /// <returns></returns>
+  public async Task VerifyDownloadedApps()
+  {
+    Console.WriteLine("Verifying downloaded apps...");
+
+    var downloader = new ContentDownloader(this, depotConfigStore);
+    var installedAppOptions = depotConfigStore.GetInstalledAppOptions();
+    var hasChange = false;
+
+    foreach (var installedApp in installedAppOptions)
+    {
+      try
+      {
+        var requiredDepots = await downloader.GetAppRequiredDepots(installedApp.appId, new AppDownloadOptions(installedApp, installedApp.installDir), false, false);
+        var sharedDepotIds = depotConfigStore.GetSharedDepotIds(installedApp.appId);
+        requiredDepots = [.. requiredDepots.ExceptBy(sharedDepotIds, (x) => x.DepotId)];
+
+        var isMissingDepots = requiredDepots.Any((requiredDepot) => !installedApp.depotIds.Contains(requiredDepot));
+        if (isMissingDepots)
+        {
+          if (!installedApp.isUpdatePending)
+          {
+            var missingDepots = requiredDepots.Where((requiredDepot) => !installedApp.depotIds.Contains(requiredDepot));
+            Console.WriteLine($"AppId:{installedApp.appId} is missing depots! Missing Depots:{string.Join(",", missingDepots)}");
+            depotConfigStore.SetUpdatePending(installedApp.appId, GetSteam3AppBuildNumber(installedApp.appId, installedApp.branch).ToString());
+            depotConfigStore.Save(installedApp.appId);
+            hasChange = true;
+          }
+          continue;
+        }
+
+        var hasAdditionalDepots = installedApp.depotIds.Any((installedDepot) => !requiredDepots.Contains(installedDepot));
+        if (isMissingDepots)
+        {
+          if (!installedApp.isUpdatePending)
+          {
+            var additionalDepots = installedApp.depotIds.Where((installedDepot) => !requiredDepots.Contains(installedDepot));
+            Console.WriteLine($"AppId:{installedApp.appId} has additional depots! Additional Depots:{string.Join(",", additionalDepots)}");
+            depotConfigStore.SetUpdatePending(installedApp.appId, GetSteam3AppBuildNumber(installedApp.appId, installedApp.branch).ToString());
+            depotConfigStore.Save(installedApp.appId);
+            hasChange = true;
+          }
+          continue;
+        }
+
+        if (installedApp.isUpdatePending)
+        {
+          Console.WriteLine($"AppId:{installedApp.appId} has all depots downloaded, no update needed");
+          depotConfigStore.SetNotUpdatePending(installedApp.appId);
+          depotConfigStore.Save(installedApp.appId);
+          hasChange = true;
+        }
+      }
+      catch (Exception)
+      {
+        // Skip verifying this app
+      }
+    }
+
+    if (hasChange)
+      InstalledAppsUpdated?.Invoke();
   }
 
   public async Task ImportSteamClientApps()

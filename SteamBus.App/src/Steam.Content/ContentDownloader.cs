@@ -305,7 +305,6 @@ class ContentDownloader
       this.OnInstallCompleted = onInstallCompleted;
       this.OnInstallFailed = onInstallFailed;
 
-      var depotManifestIds = options.DepotManifestIds;
       var branch = options.Branch;
       var os = options.Os ?? currentOs;
       var arch = options.Arch;
@@ -332,106 +331,10 @@ class ContentDownloader
         }
       }
 
-      var hasSpecificDepots = depotManifestIds.Count > 0;
-      var depotIdsFound = new List<uint>();
-      var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
-      var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
-
-      if (depots == null)
-        throw DbusExceptionHelper.ThrowContentNotFound();
-
-      var version = session.GetSteam3AppBuildNumber(appId, branch);
-
-      Console.WriteLine($"Downloading version {version}");
-
+      var depotManifestIds = await GetAppRequiredDepots(appId, options);
       var requiresInternetConnection = session.GetSteam3AppRequiresInternetConnection(appId);
-
-      // Handle user generated content
-      if (isUgc)
-      {
-        var workshopDepot = depots!["workshopdepot"].AsUnsignedInteger();
-        if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
-        {
-          depotIdsExpected.Add(workshopDepot);
-          depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
-        }
-
-        depotIdsFound.AddRange(depotIdsExpected);
-      }
-      else
-      {
-        Console.WriteLine("Using app branch: '{0}'.", branch);
-
-        foreach (var depotSection in depots!.Children)
-        {
-          var id = INVALID_DEPOT_ID;
-          if (depotSection.Children.Count == 0)
-            continue;
-
-          if (!uint.TryParse(depotSection.Name, out id))
-            continue;
-
-          if (hasSpecificDepots && !depotIdsExpected.Contains(id))
-            continue;
-
-          if (!hasSpecificDepots)
-          {
-            var depotConfig = depotSection["config"];
-            if (depotConfig != KeyValue.Invalid)
-            {
-              if (!options.DownloadAllPlatforms &&
-                  depotConfig["oslist"] != KeyValue.Invalid &&
-                  !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
-              {
-                var oslist = depotConfig["oslist"].Value?.Split(',') ?? [];
-                if (Array.IndexOf(oslist, os) == -1)
-                  continue;
-              }
-
-              if (!options.DownloadAllArchs &&
-                  depotConfig["osarch"] != KeyValue.Invalid &&
-                  !string.IsNullOrWhiteSpace(depotConfig["osarch"].Value))
-              {
-                var depotArch = depotConfig["osarch"].Value;
-                if (depotArch != (arch ?? GetSteamArch()))
-                  continue;
-              }
-
-              if (!options.DownloadAllLanguages &&
-                  depotConfig["language"] != KeyValue.Invalid &&
-                  !string.IsNullOrWhiteSpace(depotConfig["language"].Value))
-              {
-                var depotLang = depotConfig["language"].Value;
-                if (depotLang != (language ?? "english"))
-                  continue;
-              }
-
-              if (!lv &&
-                  depotConfig["lowviolence"] != KeyValue.Invalid &&
-                  depotConfig["lowviolence"].AsBoolean())
-                continue;
-            }
-          }
-
-          depotIdsFound.Add(id);
-
-          if (!hasSpecificDepots)
-            depotManifestIds.Add((id, INVALID_MANIFEST_ID));
-        }
-
-        if (depotManifestIds.Count == 0 && !hasSpecificDepots)
-        {
-          Console.WriteLine(string.Format("Couldn't find any depots to download for app {0}", appId));
-          throw DbusExceptionHelper.ThrowContentNotFound();
-        }
-
-        if (depotIdsFound.Count < depotIdsExpected.Count)
-        {
-          var remainingDepotIds = depotIdsExpected.Except(depotIdsFound);
-          Console.WriteLine(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
-          throw DbusExceptionHelper.ThrowAppNotOwned();
-        }
-      }
+      var version = session.GetSteam3AppBuildNumber(appId, options.Branch);
+      Console.WriteLine($"Downloading version {version}");
 
       var infos = new List<DepotDownloadInfo>();
 
@@ -440,6 +343,7 @@ class ContentDownloader
         var info = await GetDepotInfo(depotId, appId, manifestId, branch, options.InstallDirectory);
         if (info != null)
         {
+          Console.WriteLine($"Downloading depotId:{depotId}, manifestId:{manifestId}");
           infos.Add(info);
         }
       }
@@ -502,6 +406,163 @@ class ContentDownloader
     }
   }
 
+  public async Task<List<(uint DepotId, ulong ManifestId)>> GetAppRequiredDepots(uint appId, AppDownloadOptions options, bool forceRefreshDepots = true, bool log = true)
+  {
+    await this.session.RequestAppInfo(appId);
+
+    var os = options.Os ?? GetSteamOS();
+    var arch = options.Arch;
+    var language = options.Language;
+    var lv = options.LowViolence;
+
+    var depotManifestIds = options.DepotManifestIds;
+    var hasSpecificDepots = depotManifestIds.Count > 0;
+    var depotIdsFound = new List<uint>();
+    var depotIdsExpected = depotManifestIds.Select(x => x.depotId).ToList();
+    var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
+
+    if (depots == null)
+      throw DbusExceptionHelper.ThrowContentNotFound();
+
+    // If onlymountshareddepots is defined, this is a shared depot and we shouldn't be downloading from it directly
+    if (depots["onlymountshareddepots"]?.AsInteger() == 1)
+      return [];
+
+    // Handle user generated content
+    if (options.IsUgc)
+    {
+      var workshopDepot = depots!["workshopdepot"].AsUnsignedInteger();
+      if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
+      {
+        depotIdsExpected.Add(workshopDepot);
+        depotManifestIds = depotManifestIds.Select(pair => (workshopDepot, pair.manifestId)).ToList();
+      }
+
+      depotIdsFound.AddRange(depotIdsExpected);
+    }
+    else
+    {
+      if (log)
+        Console.WriteLine("Using app branch: '{0}'.", options.Branch);
+
+      foreach (var depotSection in depots!.Children)
+      {
+        var id = INVALID_DEPOT_ID;
+        if (depotSection.Children.Count == 0)
+          continue;
+
+        if (!uint.TryParse(depotSection.Name, out id))
+          continue;
+
+        if (hasSpecificDepots && !depotIdsExpected.Contains(id))
+          continue;
+
+        if (!hasSpecificDepots)
+        {
+          var depotConfig = depotSection["config"];
+          if (depotConfig != KeyValue.Invalid)
+          {
+            if (!options.DownloadAllPlatforms &&
+                depotConfig["oslist"] != KeyValue.Invalid &&
+                !string.IsNullOrWhiteSpace(depotConfig["oslist"].Value))
+            {
+              var oslist = depotConfig["oslist"].Value?.Split(',') ?? [];
+              if (Array.IndexOf(oslist, os) == -1)
+                continue;
+            }
+
+            if (!options.DownloadAllArchs &&
+                depotConfig["osarch"] != KeyValue.Invalid &&
+                !string.IsNullOrWhiteSpace(depotConfig["osarch"].Value))
+            {
+              var depotArch = depotConfig["osarch"].Value;
+              if (depotArch != (arch ?? GetSteamArch()))
+                continue;
+            }
+
+            if (!options.DownloadAllLanguages &&
+                depotConfig["language"] != KeyValue.Invalid &&
+                !string.IsNullOrWhiteSpace(depotConfig["language"].Value))
+            {
+              var depotLang = depotConfig["language"].Value;
+              if (depotLang != (language ?? "english"))
+                continue;
+            }
+
+            if (!lv &&
+                depotConfig["lowviolence"] != KeyValue.Invalid &&
+                depotConfig["lowviolence"].AsBoolean())
+              continue;
+          }
+        }
+
+        depotIdsFound.Add(id);
+
+        if (!hasSpecificDepots)
+          depotManifestIds.Add((id, INVALID_MANIFEST_ID));
+      }
+
+      if (depotManifestIds.Count == 0 && !hasSpecificDepots)
+      {
+        if (log)
+          Console.WriteLine(string.Format("Couldn't find any depots to download for app {0}", appId));
+        throw DbusExceptionHelper.ThrowContentNotFound();
+      }
+
+      if (depotIdsFound.Count < depotIdsExpected.Count)
+      {
+        var remainingDepotIds = depotIdsExpected.Except(depotIdsFound);
+        if (log)
+          Console.WriteLine(string.Format("Depot {0} not listed for app {1}", string.Join(", ", remainingDepotIds), appId));
+        throw DbusExceptionHelper.ThrowAppNotOwned();
+      }
+    }
+
+    // Handle DLCs
+    var dlcDepotIds = session.GetDLCs(appId);
+
+    if (dlcDepotIds.Count() > 0)
+    {
+      var disabledDlcDepotIds = depotConfigStore.GetDisabledDlcDepotIds(appId);
+      dlcDepotIds = dlcDepotIds.Except(disabledDlcDepotIds).ToList();
+
+      foreach (var dlcDepotId in dlcDepotIds)
+        depotManifestIds.Add((dlcDepotId, INVALID_MANIFEST_ID));
+    }
+
+    List<(uint, ulong)> validDepotManifestIds = [];
+
+    foreach (var (depotId, _) in depotManifestIds)
+    {
+      if (!await AccountHasAccess(depotId, forceRefreshDepots))
+      {
+        if (log)
+          Console.WriteLine("Depot {0} is not available from this account.", depotId);
+        continue;
+      }
+
+      var depotFromAppId = dlcDepotIds.Contains(depotId) ? depotId : appId;
+
+      var manifestId = await GetSteam3DepotManifest(depotId, depotFromAppId, options.Branch);
+      if (manifestId == INVALID_MANIFEST_ID && !string.Equals(options.Branch, AppDownloadOptions.DEFAULT_BRANCH, StringComparison.OrdinalIgnoreCase))
+      {
+        if (log)
+          Console.WriteLine("Warning: Depot {0} does not have branch named \"{1}\". Trying {2} branch.", depotId, options.Branch, AppDownloadOptions.DEFAULT_BRANCH);
+        manifestId = await GetSteam3DepotManifest(depotId, depotFromAppId, AppDownloadOptions.DEFAULT_BRANCH);
+      }
+
+      if (manifestId == INVALID_MANIFEST_ID)
+      {
+        if (log)
+          Console.WriteLine("Depot {0} missing public subsection or manifest section.", depotId);
+        continue;
+      }
+
+      validDepotManifestIds.Add((depotId, manifestId));
+    }
+
+    return validDepotManifestIds;
+  }
 
   string GetAppName(uint appId)
   {
@@ -520,7 +581,7 @@ class ContentDownloader
   }
 
 
-  async Task<bool> AccountHasAccess(uint depotId)
+  async Task<bool> AccountHasAccess(uint depotId, bool forceRefresh = false)
   {
     var steamUser = this.session.SteamClient.GetHandler<SteamUser>();
     if (steamUser == null || steamUser.SteamID == null || (this.session.PackageIDs == null && steamUser.SteamID.AccountType != EAccountType.AnonUser))
@@ -538,7 +599,7 @@ class ContentDownloader
       licenseQuery = this.session.PackageIDs?.Distinct() ?? [];
     }
 
-    await this.session.RequestPackageInfo(licenseQuery);
+    await this.session.RequestPackageInfo(licenseQuery, forceRefresh);
 
     foreach (var license in licenseQuery)
     {
@@ -558,43 +619,17 @@ class ContentDownloader
 
   async Task<DepotDownloadInfo?> GetDepotInfo(uint depotId, uint appId, ulong manifestId, string branch, string baseInstallPath)
   {
-    if (appId != SteamSession.INVALID_APP_ID)
-    {
-      await this.session.RequestAppInfo(appId);
-    }
+    var dlcDepotIds = session.GetDLCs(appId);
+    var depotFromAppId = dlcDepotIds.Contains(depotId) ? depotId : appId;
 
-    if (!await AccountHasAccess(depotId))
-    {
-      Console.WriteLine("Depot {0} is not available from this account.", depotId);
-
-      return null;
-    }
-
-    if (manifestId == INVALID_MANIFEST_ID)
-    {
-      manifestId = await GetSteam3DepotManifest(depotId, appId, branch);
-      if (manifestId == INVALID_MANIFEST_ID && !string.Equals(branch, AppDownloadOptions.DEFAULT_BRANCH, StringComparison.OrdinalIgnoreCase))
-      {
-        Console.WriteLine("Warning: Depot {0} does not have branch named \"{1}\". Trying {2} branch.", depotId, branch, AppDownloadOptions.DEFAULT_BRANCH);
-        branch = AppDownloadOptions.DEFAULT_BRANCH;
-        manifestId = await GetSteam3DepotManifest(depotId, appId, branch);
-      }
-
-      if (manifestId == INVALID_MANIFEST_ID)
-      {
-        Console.WriteLine("Depot {0} missing public subsection or manifest section.", depotId);
-        return null;
-      }
-    }
-
-    await this.session.RequestDepotKey(depotId, appId);
+    await this.session.RequestDepotKey(depotId, depotFromAppId);
     if (!this.session.DepotKeys.TryGetValue(depotId, out var depotKey))
     {
       Console.WriteLine("No valid depot key for {0}, unable to download.", depotId);
       return null;
     }
 
-    var uVersion = session.GetSteam3AppBuildNumber(appId, branch);
+    var uVersion = session.GetSteam3AppBuildNumber(depotFromAppId, branch);
 
     if (!CreateDirectories(depotId, uVersion, out var installDir, baseInstallPath))
     {
@@ -602,7 +637,7 @@ class ContentDownloader
       return null;
     }
 
-    return new DepotDownloadInfo(depotId, appId, manifestId, branch, installDir, depotKey);
+    return new DepotDownloadInfo(depotId, depotFromAppId, manifestId, branch, installDir, depotKey);
   }
 
 
@@ -798,6 +833,10 @@ class ContentDownloader
     var oldDepots = depotConfigStore.GetDepots(appId);
     foreach (var (oldDepotId, oldManifestId) in oldDepots)
     {
+      // If it is a depot to download, skip clean up
+      if (depots.Any((d) => d.DepotId == oldDepotId && d.ManifestId == oldManifestId))
+        continue;
+
       var info = await GetDepotInfo(oldDepotId, appId, oldManifestId, oldBranch, installStartedData.InstallDirectory);
       if (info != null)
       {
@@ -920,6 +959,7 @@ class ContentDownloader
               {
                 Console.WriteLine("No manifest request code was returned for {0} {1}", depot.DepotId, depot.ManifestId);
                 cts.Cancel();
+                OnInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
               }
             }
 
@@ -995,6 +1035,7 @@ class ContentDownloader
         {
           Console.WriteLine("\nUnable to download manifest {0} for depot {1}", depot.ManifestId, depot.DepotId);
           cts.Cancel();
+          OnInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
         }
 
         // Throw the cancellation exception if requested so that this task is marked failed
@@ -1548,6 +1589,7 @@ class ContentDownloader
       {
         Console.WriteLine("Failed to find any server with chunk {0} for depot {1}. Aborting.", chunkID, depot.DepotId);
         cts.Cancel();
+        OnInstallFailed?.Invoke((depot.AppId.ToString(), DbusErrors.ContentNotFound));
       }
 
       // Throw the cancellation exception if requested so that this task is marked failed

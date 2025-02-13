@@ -200,4 +200,29 @@ static class Disk
         if (parent == null) return;
         Directory.CreateDirectory(parent);
     }
+
+    public static string ReadFileWithRetry(string filePath, int maxRetries = 10, int delayMilliseconds = 10)
+    {
+        int attempt = 0;
+        while (attempt < maxRetries)
+        {
+            try
+            {
+                return File.ReadAllText(filePath);
+            }
+            catch (IOException e) when (IsFileLocked(e))
+            {
+                attempt++;
+                Console.WriteLine($"File is locked, retrying {attempt}/{maxRetries}...");
+                Thread.Sleep(delayMilliseconds);
+            }
+        }
+
+        throw new IOException($"File '{filePath}' is still locked after {maxRetries} attempts.");
+    }
+
+    private static bool IsFileLocked(IOException e)
+    {
+        return e.Message.Contains("because it is being used by another process");
+    }
 }

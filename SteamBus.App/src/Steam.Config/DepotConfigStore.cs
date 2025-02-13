@@ -7,6 +7,14 @@ using Steam.Session;
 using SteamKit2;
 using Tmds.DBus;
 
+public class InstallOptionsExtended : InstallOptions
+{
+    public uint appId = 0;
+    public string installDir = "";
+    public (uint DepotId, ulong ManifestId)[] depotIds = [];
+    public bool isUpdatePending = false;
+}
+
 public enum Universe
 {
     Individual = 0,
@@ -112,11 +120,10 @@ public class DepotConfigStore
     public const string KEY_INSTALLED_DEPOTS_MANIFEST = "manifest";
     public const string KEY_INSTALLED_DEPOTS_SIZE = "size";
     public const string KEY_USER_CONFIG = "UserConfig";
-    public const string KEY_USER_CONFIG_LANGUAGE = "language";
-    public const string KEY_USER_CONFIG_BETA_KEY = "BetaKey";
     public const string KEY_MOUNTED_CONFIG = "MountedConfig";
-    public const string KEY_MOUNTED_CONFIG_LANGUAGE = "language";
-    public const string KEY_MOUNTED_CONFIG_BETA_KEY = "BetaKey";
+    public const string KEY_CONFIG_LANGUAGE = "language";
+    public const string KEY_CONFIG_BETA_KEY = "BetaKey";
+    public const string KEY_CONFIG_DISABLED_DLC = "DisabledDLC";
     public const string KEY_SHARED_DEPOTS = "SharedDepots";
 
     public const string EXTRA_KEY_LATEST_BUILD_ID = "LatestBuildID";
@@ -429,6 +436,17 @@ public class DepotConfigStore
     }
 
     /// <summary>
+    /// Get all depots for an app
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public List<uint> GetSharedDepotIds(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return [];
+        return (manifest[KEY_SHARED_DEPOTS]?.Children ?? []).Where((x) => !string.IsNullOrEmpty(x.Name)).Select((x) => uint.Parse(x.Name!)).ToList();
+    }
+
+    /// <summary>
     /// Gets the size in bytes downloaded by an app id
     /// </summary>
     /// <param name="appId"></param>
@@ -490,6 +508,8 @@ public class DepotConfigStore
     public void RemoveDepot(uint appId, uint depotId)
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return;
+
+        Console.WriteLine($"Removing depotId:{depotId} from appId:{appId}");
 
         var depotIdKey = depotId.ToString();
         var depots = manifest[KEY_INSTALLED_DEPOTS];
@@ -640,26 +660,26 @@ public class DepotConfigStore
 
         if (manifestMap[appId][KEY_USER_CONFIG] == KeyValue.Invalid)
             manifestMap[appId][KEY_USER_CONFIG] = new KeyValue(KEY_USER_CONFIG);
-        manifestMap[appId][KEY_USER_CONFIG][KEY_USER_CONFIG_LANGUAGE] = new KeyValue(KEY_USER_CONFIG_LANGUAGE, language);
+        manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE] = new KeyValue(KEY_CONFIG_LANGUAGE, language);
 
         if (manifestMap[appId][KEY_MOUNTED_CONFIG] == KeyValue.Invalid)
             manifestMap[appId][KEY_MOUNTED_CONFIG] = new KeyValue(KEY_MOUNTED_CONFIG);
-        manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_MOUNTED_CONFIG_LANGUAGE] = new KeyValue(KEY_MOUNTED_CONFIG_LANGUAGE, language);
+        manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_LANGUAGE] = new KeyValue(KEY_CONFIG_LANGUAGE, language);
 
         if (lastOwnedSteamId != null)
             manifestMap[appId][KEY_LAST_OWNER] = new KeyValue(KEY_LAST_OWNER, lastOwnedSteamId);
 
         if (!string.IsNullOrEmpty(branch) && branch != AppDownloadOptions.DEFAULT_BRANCH)
         {
-            manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_MOUNTED_CONFIG_BETA_KEY] = new KeyValue(KEY_MOUNTED_CONFIG_BETA_KEY, branch);
-            manifestMap[appId][KEY_USER_CONFIG][KEY_USER_CONFIG_BETA_KEY] = new KeyValue(KEY_USER_CONFIG_BETA_KEY, branch);
+            manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_BETA_KEY] = new KeyValue(KEY_CONFIG_BETA_KEY, branch);
+            manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_BETA_KEY] = new KeyValue(KEY_CONFIG_BETA_KEY, branch);
         }
         else
         {
-            var mountedChild = manifestMap[appId][KEY_MOUNTED_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_MOUNTED_CONFIG_BETA_KEY);
+            var mountedChild = manifestMap[appId][KEY_MOUNTED_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
             if (mountedChild != null) manifestMap[appId][KEY_MOUNTED_CONFIG].Children.Remove(mountedChild);
 
-            var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_USER_CONFIG_BETA_KEY);
+            var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
             if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
         }
     }
@@ -676,6 +696,16 @@ public class DepotConfigStore
         var currentStateFlags = manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
         manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, (currentStateFlags | (int)StateFlags.UpdateRequired).ToString());
         manifestExtraMap[appId][EXTRA_KEY_LATEST_BUILD_ID] = new KeyValue(EXTRA_KEY_LATEST_BUILD_ID, latestVersion);
+    }
+
+    /// <summary>
+    /// Sets the app as not update pending
+    /// </summary>
+    /// <param name="appId"></param>
+    public void SetNotUpdatePending(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var value)) return;
+        value[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)StateFlags.FullyInstalled).ToString());
     }
 
     /// <summary>
@@ -725,6 +755,44 @@ public class DepotConfigStore
     }
 
     /// <summary>
+    /// List of installed app options
+    /// </summary>
+    /// <returns></returns>
+    public InstallOptionsExtended[] GetInstalledAppOptions()
+    {
+        var manifests = manifestMap.Where((entry) => manifestPathMap.ContainsKey(entry.Key));
+        var infos = new List<InstallOptionsExtended>();
+
+        foreach (var entry in manifests)
+        {
+            var installDir = GetInstallDirectory(entry.Key);
+            if (installDir == null) continue;
+
+            var appId = entry.Key;
+            var os = GetOS(appId);
+            if (os == null) continue;
+
+            var branch = GetBranch(appId);
+            var depots = GetDepots(appId);
+
+            infos.Add(new InstallOptionsExtended
+            {
+                appId = appId,
+                installDir = installDir,
+                branch = branch,
+                language = entry.Value[KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE]?.AsString() ?? "english",
+                version = entry.Value[KEY_BUILD_ID].AsString() ?? "",
+                os = os,
+                architecture = "",
+                depotIds = depots.ToArray(),
+                isUpdatePending = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
+            });
+        }
+
+        return infos.ToArray();
+    }
+
+    /// <summary>
     /// List of installed apps with their install information
     /// </summary>
     /// <returns></returns>
@@ -769,7 +837,7 @@ public class DepotConfigStore
         if (manifest == null || installDirectory == null) return null;
         if (!manifestExtraMap.TryGetValue(appId, out var manifestExtra)) return null;
 
-        var branch = manifest[KEY_MOUNTED_CONFIG]?[KEY_MOUNTED_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
+        var branch = manifest[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
         var os = GetOS(appId);
         if (os == null) return null;
 
@@ -798,7 +866,7 @@ public class DepotConfigStore
         {
             var version = entry.Value[KEY_BUILD_ID]?.AsString();
             var needsUpdate = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0;
-            var branch = entry.Value[KEY_MOUNTED_CONFIG]?[KEY_MOUNTED_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
+            var branch = entry.Value[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
 
             if (version != null && branch != null && (!ignoreUpdatePending || !needsUpdate))
                 map.Add(entry.Key.ToString(), (version, branch));
@@ -814,7 +882,7 @@ public class DepotConfigStore
     /// <returns></returns>
     public string GetBranch(uint appId)
     {
-        return manifestMap[appId]?[KEY_MOUNTED_CONFIG]?[KEY_MOUNTED_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
+        return manifestMap[appId]?[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
     }
 
     /// <summary>
@@ -938,6 +1006,12 @@ public class DepotConfigStore
     public void SetSteamAccountID(uint? accountId)
     {
         currentAccountId = accountId;
+    }
+
+    public List<uint> GetDisabledDlcDepotIds(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var data)) return [];
+        return data[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString()?.Split(",").Select(uint.Parse).ToList() ?? [];
     }
 
     private string? GetOS(uint appId)
