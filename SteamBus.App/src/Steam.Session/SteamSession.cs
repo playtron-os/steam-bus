@@ -1226,7 +1226,7 @@ public class SteamSession
         }
 
         var hasAdditionalDepots = installedApp.depotIds.Any((installedDepot) => !requiredDepots.Contains(installedDepot));
-        if (isMissingDepots)
+        if (hasAdditionalDepots)
         {
           if (!installedApp.isUpdatePending)
           {
