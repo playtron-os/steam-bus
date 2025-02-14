@@ -1184,8 +1184,13 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     if (callback.Result != EResult.OK)
     {
-      Console.WriteLine("Unable to logon to Steam: {0} / {1}", callback.Result, callback.ExtendedResult);
-      OnUserPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("Identifier", ""), new KeyValuePair<string, object>("Status", 0)], ["Avatar", "Username", "Identifier", "Status"]));
+      if (callback.Result != EResult.AlreadyLoggedInElsewhere)
+      {
+        Console.WriteLine("Unable to logon to Steam: {0} / {1}", callback.Result, callback.ExtendedResult);
+        OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+        OnUserPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("Identifier", ""), new KeyValuePair<string, object>("Status", 0)], ["Avatar", "Username", "Identifier", "Status"]));
+      }
+
       return;
     }
 
@@ -1435,10 +1440,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       Console.WriteLine($"Got 2FA code: {code}");
       tfaCodeTask.TrySetResult(code);
+      tfaCodeTask = null;
     }
     else
     {
       Console.WriteLine("No login session in progress");
+      OnAuthError?.Invoke(DbusErrors.AuthenticationError);
     }
 
     return Task.CompletedTask;
