@@ -62,21 +62,12 @@ public class AppInfoCache
     {
         try
         {
-            string content = "";
-            using (var stream = File.OpenText(GetFinalPath(appId)))
-            {
-                string? line;
-                while ((line = stream.ReadLine()) != null)
-                {
-                    content += line;
-                }
-            }
-
+            var content = Disk.ReadFileWithRetry(GetFinalPath(appId));
             return KeyValue.LoadFromString(content);
         }
-        catch (Exception)
+        catch (Exception err)
         {
-            Console.WriteLine("Failed to read cache for {0}", appId);
+            Console.WriteLine($"Failed to read cache for {appId}, err:{err}");
             return null;
         }
     }

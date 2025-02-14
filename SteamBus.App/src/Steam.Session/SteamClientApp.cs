@@ -364,7 +364,8 @@ public class SteamClientApp
 
     private void OnExited(object? sender, EventArgs e)
     {
-        depotConfigStore.VerifyAppsStateFlag();
+        // Reload depot config store in case steam client changed the manifests
+        _ = depotConfigStore.Reload();
 
         Console.WriteLine($"Steam client exited with code {process?.ExitCode}");
         process = null;
