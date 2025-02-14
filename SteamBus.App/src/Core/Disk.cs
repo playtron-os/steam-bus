@@ -203,12 +203,37 @@ static class Disk
 
     public static string ReadFileWithRetry(string filePath, int maxRetries = 10, int delayMilliseconds = 10)
     {
+        return ExecuteFileOpWithRetry(() => File.ReadAllText(filePath), filePath, maxRetries, delayMilliseconds);
+    }
+
+    public static T ExecuteFileOpWithRetry<T>(Func<T> Callback, string filePath, int maxRetries = 10, int delayMilliseconds = 10)
+    {
         int attempt = 0;
         while (attempt < maxRetries)
         {
             try
             {
-                return File.ReadAllText(filePath);
+                return Callback();
+            }
+            catch (IOException e) when (IsFileLocked(e))
+            {
+                attempt++;
+                Console.WriteLine($"File is locked, retrying {attempt}/{maxRetries}...");
+                Thread.Sleep(delayMilliseconds);
+            }
+        }
+
+        throw new IOException($"File '{filePath}' is still locked after {maxRetries} attempts.");
+    }
+
+    public static Task<T> ExecuteFileOpWithRetry<T>(Func<Task<T>> Callback, string filePath, int maxRetries = 10, int delayMilliseconds = 10)
+    {
+        int attempt = 0;
+        while (attempt < maxRetries)
+        {
+            try
+            {
+                return Callback();
             }
             catch (IOException e) when (IsFileLocked(e))
             {

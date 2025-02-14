@@ -804,7 +804,7 @@ public class SteamSession
       return;
     }
 
-    if (loggedOn.Result == EResult.TryAnotherCM)
+    if (loggedOn.Result == EResult.TryAnotherCM || loggedOn.Result == EResult.AlreadyLoggedInElsewhere)
     {
       Console.Write("Retrying Steam3 connection (TryAnotherCM)...");
 
@@ -1210,6 +1210,10 @@ public class SteamSession
         var requiredDepots = await downloader.GetAppRequiredDepots(installedApp.appId, new AppDownloadOptions(installedApp, installedApp.installDir), false, false);
         var sharedDepotIds = depotConfigStore.GetSharedDepotIds(installedApp.appId);
         requiredDepots = [.. requiredDepots.ExceptBy(sharedDepotIds, (x) => x.DepotId)];
+
+        // 0 depots required means the user doesn't own this app
+        if (requiredDepots.Count == 0)
+          continue;
 
         var isMissingDepots = requiredDepots.Any((requiredDepot) => !installedApp.depotIds.Contains(requiredDepot));
         if (isMissingDepots)

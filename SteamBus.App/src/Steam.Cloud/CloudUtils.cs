@@ -126,8 +126,12 @@ public class CloudUtils
                 else if (fileData != null)
                 {
                     Console.WriteLine("Got uncompressed file");
-                    using FileStream fileH = File.Open(fspath, FileMode.Create);
-                    await fileData.CopyToAsync(fileH);
+                    await Disk.ExecuteFileOpWithRetry(async () =>
+                    {
+                        using FileStream fileH = File.Open(fspath, FileMode.Create);
+                        await fileData.CopyToAsync(fileH);
+                        return Task.CompletedTask;
+                    }, fspath);
                 }
             }
             File.SetLastWriteTimeUtc(fspath, DateTime.UnixEpoch.AddSeconds(file.RemoteTime));
