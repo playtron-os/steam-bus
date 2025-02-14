@@ -140,7 +140,7 @@ public class DepotConfigStore
     private ConcurrentDictionary<uint, UserCompatConfig> accountIdToUserCompatConfig = new();
     private ConcurrentDictionary<uint, string> appIdToOsMap = new();
     private AppInfoCache appInfoCache;
-    private uint? currentAccountId;
+    private ulong? currentAccountId;
 
     public SteamSession? steamSession;
 
@@ -770,7 +770,6 @@ public class DepotConfigStore
 
             var appId = entry.Key;
             var os = GetOS(appId);
-            if (os == null) continue;
 
             var branch = GetBranch(appId);
             var depots = GetDepots(appId);
@@ -807,7 +806,6 @@ public class DepotConfigStore
 
             var appId = entry.Key;
             var os = GetOS(appId);
-            if (os == null) continue;
 
             infos.Add(new InstalledAppDescription
             {
@@ -839,7 +837,6 @@ public class DepotConfigStore
 
         var branch = manifest[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
         var os = GetOS(appId);
-        if (os == null) return null;
 
         return (new InstalledAppDescription
         {
@@ -1003,7 +1000,7 @@ public class DepotConfigStore
         }
     }
 
-    public void SetSteamAccountID(uint? accountId)
+    public void SetSteamAccountID(ulong? accountId)
     {
         currentAccountId = accountId;
     }
@@ -1014,9 +1011,9 @@ public class DepotConfigStore
         return data[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString()?.Split(",").Select(uint.Parse).ToList() ?? [];
     }
 
-    private string? GetOS(uint appId)
+    private string GetOS(uint appId)
     {
-        if (appIdToOsMap.TryGetValue(appId, out var os)) return os;
+        if (appIdToOsMap.TryGetValue(appId, out var os) && os != null) return os;
 
         var osFound = TryGetOsFromDepots(appId);
         if (osFound != null)
@@ -1035,12 +1032,12 @@ public class DepotConfigStore
 
         var lastOwner = manifestMap[appId][KEY_LAST_OWNER]?.AsUnsignedLong();
         var accountId = lastOwner == null ? 0 : (uint)(lastOwner! & 0xFFFFFFFF);
-        if (accountId == 0) return null;
+        if (accountId == 0) return "";
 
         var lastOwnerConfig = GetUserCompatConfig(accountId);
         var lastOwnerOs = lastOwnerConfig.GetAppPlatform(appId);
         appIdToOsMap[appId] = lastOwnerOs;
-        return lastOwnerOs;
+        return lastOwnerOs ?? "";
     }
 
     private string? TryGetOsFromDepots(uint appId)

@@ -1178,7 +1178,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Invoked when the Steam client tries to log in
   void OnLoggedOn(SteamUser.LoggedOnCallback callback)
   {
-    depotConfigStore.SetSteamAccountID(session?.GetLogonDetails().AccountID);
+    var steamId = session?.SteamUser?.SteamID?.ConvertToUInt64();
+    if (steamId != null)
+      depotConfigStore.SetSteamAccountID(steamId);
 
     if (callback.Result != EResult.OK)
     {
