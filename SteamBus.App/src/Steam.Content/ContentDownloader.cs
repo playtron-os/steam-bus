@@ -358,7 +358,7 @@ class ContentDownloader
           RequiresInternetConnection = requiresInternetConnection,
           Os = os,
         };
-        var steamId = session.GetLogonDetails().AccountID;
+        var steamId = session.SteamUser?.SteamID?.ConvertToUInt64();
 
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
         depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", steamId.ToString());

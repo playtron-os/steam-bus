@@ -140,7 +140,7 @@ public class DepotConfigStore
     private ConcurrentDictionary<uint, UserCompatConfig> accountIdToUserCompatConfig = new();
     private ConcurrentDictionary<uint, string> appIdToOsMap = new();
     private AppInfoCache appInfoCache;
-    private uint? currentAccountId;
+    private ulong? currentAccountId;
 
     public SteamSession? steamSession;
 
@@ -1000,7 +1000,7 @@ public class DepotConfigStore
         }
     }
 
-    public void SetSteamAccountID(uint? accountId)
+    public void SetSteamAccountID(ulong? accountId)
     {
         currentAccountId = accountId;
     }
