@@ -131,7 +131,7 @@ public class CloudUtils
                         using FileStream fileH = File.Open(fspath, FileMode.Create);
                         await fileData.CopyToAsync(fileH);
                         return Task.CompletedTask;
-                    }, fspath);
+                    }, fspath, 3, 500);
                 }
             }
             File.SetLastWriteTimeUtc(fspath, DateTime.UnixEpoch.AddSeconds(file.RemoteTime));
