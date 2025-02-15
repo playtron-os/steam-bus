@@ -190,7 +190,7 @@ public class DepotConfigStore
         }
     }
 
-    private async Task ReloadApps(string dir)
+    public async Task ReloadApps(string dir)
     {
         var commonDir = Path.Join(dir, "common");
         if (!Directory.Exists(dir) || !Directory.Exists(commonDir))

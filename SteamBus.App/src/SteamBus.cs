@@ -94,6 +94,10 @@ class SteamBus
       }
       libraryConfig.Save();
 
+      var directories = libraryConfig.GetInstallDirectories();
+      foreach (var dir in directories)
+        await depotConfigStore.ReloadApps(dir);
+
       await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
     }
     catch (Exception ex)
