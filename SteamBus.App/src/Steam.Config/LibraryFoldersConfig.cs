@@ -94,8 +94,8 @@ public class LibraryFoldersConfig
         else
             await CreateFile();
 
-        var mainMountPath = SteamConfig.GetConfigDirectory();
-        var hasMainMountPath = data?.Children.Any((c) => c["path"]?.AsString() == mainMountPath) ?? false;
+        var configDir = SteamConfig.GetConfigDirectory();
+        var hasMainMountPath = data?.Children.Any((c) => c["path"]?.AsString() == configDir) ?? false;
         if (!hasMainMountPath)
         {
             AddDiskEntry(await Disk.GetMountPath());
