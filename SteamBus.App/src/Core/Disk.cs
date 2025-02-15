@@ -10,7 +10,7 @@ static class Disk
 
     public static bool IsMountPointMainDisk(string mountPoint)
     {
-        return mountPoint == "/" || mountPoint == "/home" || mountPoint == "/var/home";
+        return mountPoint == "/" || mountPoint.StartsWith("/home") || mountPoint.StartsWith("/var/home");
     }
 
     static async Task<string> RunDf(string arg)
@@ -64,7 +64,7 @@ static class Disk
         return _homeDrive;
     }
 
-    static async Task<string> GetMountPath(string? driveName = null)
+    public static async Task<string> GetMountPath(string? driveName = null)
     {
         var homePath = Regex.Unescape(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
         if (driveName == null) return homePath;
