@@ -190,7 +190,7 @@ public class DepotConfigStore
         }
     }
 
-    private async Task ReloadApps(string dir)
+    public async Task ReloadApps(string dir)
     {
         var commonDir = Path.Join(dir, "common");
         if (!Directory.Exists(dir) || !Directory.Exists(commonDir))
@@ -1015,13 +1015,6 @@ public class DepotConfigStore
     {
         if (appIdToOsMap.TryGetValue(appId, out var os) && os != null) return os;
 
-        var osFound = TryGetOsFromDepots(appId);
-        if (osFound != null)
-        {
-            appIdToOsMap[appId] = osFound;
-            return osFound;
-        }
-
         if (currentAccountId != null)
         {
             var userCompatConfig = GetUserCompatConfig((uint)currentAccountId);
@@ -1032,12 +1025,19 @@ public class DepotConfigStore
 
         var lastOwner = manifestMap[appId][KEY_LAST_OWNER]?.AsUnsignedLong();
         var accountId = lastOwner == null ? 0 : (uint)(lastOwner! & 0xFFFFFFFF);
-        if (accountId == 0) return "";
 
-        var lastOwnerConfig = GetUserCompatConfig(accountId);
-        var lastOwnerOs = lastOwnerConfig.GetAppPlatform(appId);
-        appIdToOsMap[appId] = lastOwnerOs;
-        return lastOwnerOs ?? "";
+        if (accountId != 0)
+        {
+            var lastOwnerConfig = GetUserCompatConfig(accountId);
+            var lastOwnerOs = lastOwnerConfig.GetAppPlatform(appId);
+            appIdToOsMap[appId] = lastOwnerOs;
+            if (lastOwnerOs != null) return lastOwnerOs;
+        }
+
+        var osFound = TryGetOsFromDepots(appId);
+        if (osFound != null)
+            appIdToOsMap[appId] = osFound;
+        return osFound ?? "";
     }
 
     private string? TryGetOsFromDepots(uint appId)

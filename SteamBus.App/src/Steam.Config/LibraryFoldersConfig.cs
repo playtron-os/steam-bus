@@ -64,12 +64,7 @@ public class LibraryFoldersConfig
     public static async Task<LibraryFoldersConfig> CreateAsync()
     {
         var config = new LibraryFoldersConfig(DefaultPath());
-
-        if (File.Exists(config.path))
-            await config.Reload();
-        else
-            await config.CreateFile();
-
+        await config.Reload();
         return config;
     }
 
@@ -89,11 +84,23 @@ public class LibraryFoldersConfig
     /// <returns></returns>
     public async Task Reload()
     {
-        var stream = File.OpenText(this.path);
-        var content = await stream.ReadToEndAsync();
+        if (File.Exists(path))
+        {
+            var stream = File.OpenText(this.path);
+            var content = await stream.ReadToEndAsync();
+            this.data = KeyValue.LoadFromString(content);
+            stream.Close();
+        }
+        else
+            await CreateFile();
 
-        this.data = KeyValue.LoadFromString(content);
-        stream.Close();
+        var configDir = SteamConfig.GetConfigDirectory();
+        var hasMainMountPath = data?.Children.Any((c) => c["path"]?.AsString() == configDir) ?? false;
+        if (!hasMainMountPath)
+        {
+            AddDiskEntry(await Disk.GetMountPath());
+            Save();
+        }
     }
 
     /// <summary>
@@ -115,6 +122,9 @@ public class LibraryFoldersConfig
     {
         Disk.EnsureParentFolderExists(path);
         this.data?.SaveToFile(this.path, false);
+
+        var otherPath = Path.Join(SteamConfig.GetConfigDirectory(), "steamapps", FILENAME);
+        this.data?.SaveToFile(otherPath, false);
     }
 
     /// <summary>
@@ -150,17 +160,7 @@ public class LibraryFoldersConfig
         if (!Directory.Exists(steamappsFolder))
             Directory.CreateDirectory(steamappsFolder);
 
-        if (isMainDisk)
-        {
-            var steamappsFileLink = Path.Join(steamappsFolder, FILENAME);
-
-            if (File.Exists(steamappsFileLink) || Directory.Exists(steamappsFileLink))
-                File.Delete(steamappsFileLink);
-
-            Disk.EnsureParentFolderExists(steamappsFileLink);
-            File.CreateSymbolicLink(steamappsFileLink, path);
-        }
-        else
+        if (!isMainDisk)
         {
             var externalLibraryFoldersConfigFile = Path.Join(installPath, EXTERNAL_FILENAME);
 
