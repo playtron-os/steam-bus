@@ -1019,8 +1019,12 @@ public class DepotConfigStore
         {
             var userCompatConfig = GetUserCompatConfig((uint)currentAccountId);
             var userOs = userCompatConfig.GetAppPlatform(appId);
-            appIdToOsMap[appId] = userOs;
-            return userOs;
+
+            if (userOs != null)
+            {
+                appIdToOsMap[appId] = userOs;
+                return userOs;
+            }
         }
 
         var lastOwner = manifestMap[appId][KEY_LAST_OWNER]?.AsUnsignedLong();
@@ -1030,8 +1034,12 @@ public class DepotConfigStore
         {
             var lastOwnerConfig = GetUserCompatConfig(accountId);
             var lastOwnerOs = lastOwnerConfig.GetAppPlatform(appId);
-            appIdToOsMap[appId] = lastOwnerOs;
-            if (lastOwnerOs != null) return lastOwnerOs;
+
+            if (lastOwnerOs != null)
+            {
+                appIdToOsMap[appId] = lastOwnerOs;
+                return lastOwnerOs;
+            }
         }
 
         var osFound = TryGetOsFromDepots(appId);
