@@ -87,12 +87,12 @@ public class UserCompatConfig
     }
 
     // Gets platform for an app
-    public string GetAppPlatform(uint appId)
+    public string? GetAppPlatform(uint appId)
     {
         if (data == null)
             Reload();
 
-        return data![appId.ToString()]["src"]?.AsString() ?? AppDownloadOptions.GetSteamOS();
+        return data![appId.ToString()]["src"]?.AsString();
     }
 }
 
