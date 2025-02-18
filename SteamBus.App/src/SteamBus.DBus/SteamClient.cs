@@ -111,7 +111,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   private bool isOnline = false;
 
-  private TaskCompletionSource? fetchingSteamClientData;
+  public static TaskCompletionSource? fetchingSteamClientData;
 
 
   // Creates a new DBusSteamClient instance with the given DBus path

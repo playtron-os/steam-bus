@@ -18,6 +18,7 @@ using SteamKit2.Internal;
 using Playtron.Plugin;
 using Steam.Config;
 using Steam.Content;
+using SteamBus.DBus;
 
 namespace Steam.Session;
 
@@ -1197,6 +1198,7 @@ public class SteamSession
   /// <returns></returns>
   public async Task VerifyDownloadedApps()
   {
+    if (DBusSteamClient.fetchingSteamClientData != null) await DBusSteamClient.fetchingSteamClientData.Task;
     Console.WriteLine("Verifying downloaded apps...");
 
     var downloader = new ContentDownloader(this, depotConfigStore);
