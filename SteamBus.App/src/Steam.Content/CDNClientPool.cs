@@ -33,10 +33,13 @@ class CDNClientPool
   private readonly CancellationTokenSource shutdownToken = new();
   public CancellationTokenSource? ExhaustedToken { get; set; }
 
-  public CDNClientPool(SteamClient steamClient, uint appId)
+  private Action<(string appId, string error)>? onInstallFailed;
+
+  public CDNClientPool(SteamClient steamClient, uint appId, Action<(string appId, string error)>? onInstallFailed = null)
   {
     this.steamClient = steamClient;
     this.appId = appId;
+    this.onInstallFailed = onInstallFailed;
     CDNClient = new Client(steamClient);
 
     monitorTask = Task.Factory.StartNew(ConnectionPoolMonitorAsync).Unwrap();
@@ -87,6 +90,7 @@ class CDNClientPool
 
         if (servers == null || servers.Count == 0)
         {
+          onInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
           ExhaustedToken?.Cancel();
           return;
         }
@@ -113,6 +117,7 @@ class CDNClientPool
       }
       else if (availableServerEndpoints.Count == 0 && !this.steamClient.IsConnected && didPopulate)
       {
+        onInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
         ExhaustedToken?.Cancel();
         return;
       }

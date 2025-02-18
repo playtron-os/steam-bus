@@ -123,9 +123,14 @@ public class GlobalConfig
             this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr] = new KeyValue(appIdStr);
         }
 
-        this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_NAME] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_NAME, "proton_9");
-        this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_CONFIG] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_CONFIG, "");
-        this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_PRIORITY] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_PRIORITY, "250");
+        // Set proton_9 tool config so steam client identifies game as windows installation
+        var toolName = this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_NAME]?.AsString();
+        if (string.IsNullOrEmpty(toolName) || !toolName.Contains("proton"))
+        {
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_NAME] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_NAME, "proton_9");
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_CONFIG] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_CONFIG, "");
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_PRIORITY] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_PRIORITY, "250");
+        }
     }
 
     void EnsureRootKeysExist()

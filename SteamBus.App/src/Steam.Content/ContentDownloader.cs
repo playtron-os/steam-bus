@@ -293,7 +293,7 @@ class ContentDownloader
       {
         Console.WriteLine("Using LanCache server for downloads");
       }
-      cdnPool = new CDNClientPool(this.session.SteamClient, appId);
+      cdnPool = new CDNClientPool(this.session.SteamClient, appId, onInstallFailed);
       var cts = new CancellationTokenSource();
       cdnPool!.ExhaustedToken = cts;
 
@@ -361,7 +361,7 @@ class ContentDownloader
         var steamId = session.SteamUser?.SteamID?.ConvertToUInt64();
 
         depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
-        depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", steamId.ToString());
+        depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", os, steamId.ToString());
 
         await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
         onInstallCompleted?.Invoke(appId.ToString());

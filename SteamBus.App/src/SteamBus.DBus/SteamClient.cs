@@ -507,6 +507,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
 
     if (!session!.IsPendingLogin)
       await session!.RequestAppInfo(appId, false);
@@ -675,6 +676,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     Console.WriteLine($"Installing app: {appIdString}");
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
 
     // Create a content downloader for the given app
     var downloader = new ContentDownloader(session!, depotConfigStore);
@@ -1296,7 +1298,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
           if (!success) Console.Error.WriteLine($"Steam has not generated user files...");
 
-          await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(5));
+          await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(10));
           Console.WriteLine("Shut down steam client after fetching data");
         }
         catch (Exception err)

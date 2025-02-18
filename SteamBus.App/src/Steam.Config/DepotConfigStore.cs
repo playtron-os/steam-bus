@@ -127,6 +127,7 @@ public class DepotConfigStore
     public const string KEY_SHARED_DEPOTS = "SharedDepots";
 
     public const string EXTRA_KEY_LATEST_BUILD_ID = "LatestBuildID";
+    public const string EXTRA_KEY_OS = "os";
 
     private List<string>? folders;
 
@@ -331,15 +332,18 @@ public class DepotConfigStore
 
     public void VerifyAppsOsConfig(GlobalConfig globalConfig, UserCompatConfig? userCompatConfig, uint appId)
     {
-        var osFromDepots = TryGetOsFromDepots(appId);
+        var installedOs = TryGetOsFromDepots(appId);
+        if (installedOs == null && manifestExtraMap.TryGetValue(appId, out var extraData))
+            installedOs = extraData[EXTRA_KEY_OS].AsString();
+
         var defaultOs = ContentDownloader.GetSteamOS();
 
-        if (osFromDepots != null && defaultOs != osFromDepots)
+        if (installedOs != null && defaultOs != installedOs)
         {
             if (userCompatConfig != null)
-                userCompatConfig.SetPlatformOverride(appId, defaultOs, osFromDepots);
+                userCompatConfig.SetPlatformOverride(appId, defaultOs, installedOs);
 
-            if (osFromDepots == "windows")
+            if (installedOs == "windows")
                 globalConfig.SetProton9CompatForApp(appId);
         }
     }
@@ -649,8 +653,9 @@ public class DepotConfigStore
     /// <param name="version"></param>
     /// <param name="branch"></param>
     /// <param name="language"></param>
+    /// <param name="os"></param>
     /// <param name="lastOwnedSteamId"></param>
-    public void SetNewVersion(uint appId, uint version, string branch, string language, string? lastOwnedSteamId = null)
+    public void SetNewVersion(uint appId, uint version, string branch, string language, string os, string? lastOwnedSteamId = null)
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
@@ -682,6 +687,9 @@ public class DepotConfigStore
             var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
             if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
         }
+
+        manifestExtraMap[appId][EXTRA_KEY_OS] = new KeyValue(EXTRA_KEY_OS, os);
+        appIdToOsMap[appId] = os;
     }
 
     /// <summary>
@@ -1014,6 +1022,16 @@ public class DepotConfigStore
     private string GetOS(uint appId)
     {
         if (appIdToOsMap.TryGetValue(appId, out var os) && os != null) return os;
+
+        if (manifestExtraMap.TryGetValue(appId, out var extraData))
+        {
+            var installedOs = extraData[EXTRA_KEY_OS]?.AsString();
+            if (!string.IsNullOrEmpty(installedOs))
+            {
+                appIdToOsMap[appId] = installedOs;
+                return installedOs;
+            }
+        }
 
         if (currentAccountId != null)
         {
