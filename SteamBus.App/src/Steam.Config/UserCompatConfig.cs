@@ -71,7 +71,11 @@ public class UserCompatConfig
     public void Save()
     {
         Disk.EnsureParentFolderExists(path);
-        this.data?.SaveToFile(this.path, false);
+        Disk.ExecuteFileOpWithRetry(() =>
+        {
+            this.data?.SaveToFile(this.path, false);
+            return "";
+        }, this.path);
     }
 
     // Sets a platform override for an app

@@ -541,9 +541,17 @@ class ContentDownloader
         continue;
       }
 
-      var depotFromAppId = dlcDepotIds.Contains(depotId) ? depotId : appId;
+      var isDlc = dlcDepotIds.Contains(depotId);
+      var depotFromAppId = isDlc ? depotId : appId;
 
       var manifestId = await GetSteam3DepotManifest(depotId, depotFromAppId, options.Branch);
+
+      // If is dlc and manifest was not found in dlc app info, find in parent app
+      if (isDlc && manifestId == INVALID_MANIFEST_ID)
+      {
+        manifestId = await GetSteam3DepotManifest(depotId, appId, options.Branch);
+      }
+
       if (manifestId == INVALID_MANIFEST_ID && !string.Equals(options.Branch, AppDownloadOptions.DEFAULT_BRANCH, StringComparison.OrdinalIgnoreCase))
       {
         if (log)
