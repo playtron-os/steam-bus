@@ -738,12 +738,17 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     foreach (var child in eulas.Children)
     {
+      var allowedCountries = child["allowed_countries"];
+      if (allowedCountries == KeyValue.Invalid)
+        allowedCountries = child["countries"];
+
       if (country != string.Empty)
       {
-        var allowedCountries = child["allowed_countries"];
         if (allowedCountries != KeyValue.Invalid)
         {
-          var countries = allowedCountries.AsString()?.Split(" ") ?? [];
+          var countriesStr = allowedCountries.AsString();
+          var delimiter = countriesStr?.Contains(",") == true ? "," : " ";
+          var countries = countriesStr?.Split(delimiter) ?? [];
           if (!countries.Contains(country))
             continue;
         }
@@ -761,6 +766,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         Version = child["version"].AsInteger(),
         Url = url,
         Body = "",
+        Country = allowedCountries?.AsString() ?? "",
+        Language = "",
       });
     }
 
