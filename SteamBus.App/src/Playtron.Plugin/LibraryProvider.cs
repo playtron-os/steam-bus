@@ -18,6 +18,8 @@ public struct EulaEntry
   public int Version { get; set; }
   public string Url { get; set; }
   public string Body { get; set; }
+  public string Country { get; set; }
+  public string Language { get; set; }
 }
 
 [StructLayout(LayoutKind.Sequential)]
