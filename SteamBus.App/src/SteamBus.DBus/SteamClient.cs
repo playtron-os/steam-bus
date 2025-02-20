@@ -742,13 +742,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (allowedCountries == KeyValue.Invalid)
         allowedCountries = child["countries"];
 
-      if (country != string.Empty)
+      if (country != string.Empty && allowedCountries != KeyValue.Invalid)
       {
-        if (allowedCountries != KeyValue.Invalid)
+        var countriesStr = allowedCountries.AsString();
+
+        if (!string.IsNullOrEmpty(countriesStr))
         {
-          var countriesStr = allowedCountries.AsString();
-          var delimiter = countriesStr?.Contains(",") == true ? "," : " ";
-          var countries = countriesStr?.Split(delimiter) ?? [];
+          var delimiter = countriesStr.Contains(",") == true ? "," : " ";
+          var countries = countriesStr.Split(delimiter) ?? [];
           if (!countries.Contains(country))
             continue;
         }
