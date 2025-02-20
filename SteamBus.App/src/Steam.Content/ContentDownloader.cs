@@ -194,6 +194,8 @@ class ContentDownloader
           osOptions.Add(os);
       }
     }
+    if (osOptions.Count() == 0)
+      osOptions.Add("windows");
 
     // Get arch
     var osarch = common["osarch"];
