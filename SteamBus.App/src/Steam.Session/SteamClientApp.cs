@@ -93,6 +93,11 @@ public class SteamClientApp
         if (!string.IsNullOrEmpty(forAppId))
             depotConfigStore.VerifyAppsStateFlag(uint.Parse(forAppId));
 
+        // Make sure steam compatibility is enabled for all titles
+        var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+        globalConfig.SetProton9CompatForApp(0, 75);
+        globalConfig.Save();
+
         var arguments = new List<string>(ARGUMENTS);
 
         if (!offlineMode)

@@ -15,6 +15,8 @@ public class InstallScript
 
     private static readonly Regex SIGNATURE_REGEX = new Regex(@"""kvsignatures"".*", RegexOptions.Singleline);
 
+    private DepotConfigStore _depotConfigStore;
+    private uint _appId;
     private string _installDirectory;
     private string _appDataFolder;
     private string _myDocsFolder;
@@ -23,10 +25,13 @@ public class InstallScript
     private string _windowsFolder;
     private string _steamFolder;
 
+    private List<string> loadedScripts = [];
     public List<PostInstall> scripts = [];
 
-    private InstallScript(uint appId, string installDirectory)
+    private InstallScript(DepotConfigStore depotConfigStore, uint appId, string installDirectory)
     {
+        this._depotConfigStore = depotConfigStore;
+        this._appId = appId;
         this._installDirectory = installDirectory;
 
         var steamapps = Path.Join(SteamConfig.GetConfigDirectory(), "steamapps");
@@ -41,11 +46,38 @@ public class InstallScript
     /// <summary>
     /// Initializes the InstallScript
     /// </summary>
-    static public async Task<InstallScript> CreateAsync(uint appId, string installDirectory)
+    static public async Task<InstallScript> CreateAsync(DepotConfigStore depotConfigStore, uint appId, string installDirectory)
     {
-        var store = new InstallScript(appId, installDirectory);
+        var store = new InstallScript(depotConfigStore, appId, installDirectory);
         await store.Reload();
         return store;
+    }
+
+    /// <summary>
+    /// Checks if the file at the path is an install script
+    /// </summary>
+    /// <param name="path"></param>
+    /// <returns></returns>
+    static public bool IsInstallScript(string path)
+    {
+        try
+        {
+            if (path.EndsWith(".vdf") && File.Exists(path))
+            {
+                var content = File.ReadAllText(path);
+                var cleanedContent = SIGNATURE_REGEX.Replace(content ?? "", "");
+                var installScript = KeyValue.LoadFromString(cleanedContent);
+
+                if (installScript != null && installScript.Name?.ToLower() == "installscript")
+                    return true;
+            }
+        }
+        catch (Exception err)
+        {
+            Console.Error.WriteLine($"Error reading install script from path:{path}, err:{err}");
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -54,43 +86,34 @@ public class InstallScript
     /// <returns></returns>
     public async Task Reload()
     {
-        Console.WriteLine($"Reading install scripts at directory: {_installDirectory}");
+        Console.WriteLine($"Reading install scripts at appId:{_appId}");
 
         try
         {
-            // Look at the common redistributable folder
-            var commonRedistDir = Path.Combine(_installDirectory, COMMON_REDIST_FOLDER_NAME);
-            if (Directory.Exists(commonRedistDir))
+            loadedScripts.Clear();
+
+            foreach (var installScriptInfo in _depotConfigStore.GetInstallScripts(_appId))
             {
-                foreach (var folder in Directory.EnumerateDirectories(commonRedistDir))
-                {
-                    foreach (var nestedFolder in Directory.EnumerateDirectories(folder))
-                    {
-                        foreach (var file in Directory.EnumerateFiles(nestedFolder))
-                        {
-                            if (file?.EndsWith(".vdf") == true)
-                            {
-                                var installScript = await GetScriptForPathAsync(file);
-                                if (installScript != null)
-                                    scripts.Add((PostInstall)installScript);
-                            }
-                        }
-                    }
-                }
+                var installScript = await GetScriptForPathAsync(_installDirectory, installScriptInfo.Path);
+                if (installScript != null)
+                    scripts.Add((PostInstall)installScript);
             }
 
-            // Look at the root install directory
-            foreach (var file in Directory.EnumerateFiles(_installDirectory))
+            foreach (var depot in _depotConfigStore.GetSharedDepots(_appId))
             {
-                if (file?.EndsWith(".vdf") == true)
-                {
-                    var rootInstallScript = await GetScriptForPathAsync(file);
-                    if (rootInstallScript != null)
-                        scripts.Add((PostInstall)rootInstallScript);
-                }
+                var installDir = _depotConfigStore.GetInstallDirectory(depot.DepotAppId);
+                if (installDir == null) continue;
+
+                var installScriptPath = _depotConfigStore.GetInstallScripts(depot.DepotAppId).FirstOrDefault(x => x.DepotId == depot.DepotId).Path;
+                var installScript = await GetScriptForPathAsync(installDir, Path.Join(installDir, installScriptPath));
+                if (installScript != null)
+                    scripts.Add((PostInstall)installScript);
             }
 
-            Console.WriteLine($"Found {scripts.Count} scripts for directory: {_installDirectory}");
+            // Leave the code below for backward compatibility in case the appmanifest doesn't contain "IntallScripts" field
+            await LoadInstallScriptsForDir(_installDirectory);
+
+            Console.WriteLine($"Found {scripts.Count} scripts for appId:{_appId}");
         }
         catch (Exception exception)
         {
@@ -99,13 +122,52 @@ public class InstallScript
         }
     }
 
-    private async Task<PostInstall?> GetScriptForPathAsync(string path)
+    private async Task LoadInstallScriptsForDir(string dir)
+    {
+        // Look at the common redistributable folder
+        var commonRedistDir = Path.Combine(dir, COMMON_REDIST_FOLDER_NAME);
+        if (Directory.Exists(commonRedistDir))
+        {
+            foreach (var folder in Directory.EnumerateDirectories(commonRedistDir))
+            {
+                foreach (var nestedFolder in Directory.EnumerateDirectories(folder))
+                {
+                    foreach (var file in Directory.EnumerateFiles(nestedFolder))
+                    {
+                        if (file?.EndsWith(".vdf") == true)
+                        {
+                            var installScript = await GetScriptForPathAsync(dir, file);
+                            if (installScript != null)
+                                scripts.Add((PostInstall)installScript);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Look at the root install directory
+        foreach (var file in Directory.EnumerateFiles(dir))
+        {
+            if (file?.EndsWith(".vdf") == true)
+            {
+                var rootInstallScript = await GetScriptForPathAsync(dir, file);
+                if (rootInstallScript != null)
+                    scripts.Add((PostInstall)rootInstallScript);
+            }
+        }
+    }
+
+    private async Task<PostInstall?> GetScriptForPathAsync(string installDir, string path)
     {
         try
         {
             if (File.Exists(path))
             {
                 var content = await File.ReadAllTextAsync(path);
+                if (loadedScripts.Contains(content))
+                    return null;
+                loadedScripts.Add(content);
+
                 var cleanedContent = SIGNATURE_REGEX.Replace(content ?? "", "");
                 var installScript = KeyValue.LoadFromString(cleanedContent);
 
@@ -117,8 +179,8 @@ public class InstallScript
                     return new PostInstall
                     {
                         Path = path,
-                        Registry = GetRegistry(installScript),
-                        RunProcess = GetRunProcessList(installScript).ToArray(),
+                        Registry = GetRegistry(installDir, installScript),
+                        RunProcess = GetRunProcessList(installDir, installScript).ToArray(),
                     };
                 }
             }
@@ -135,7 +197,7 @@ public class InstallScript
         return null;
     }
 
-    private PostInstallRegistry GetRegistry(KeyValue installScript)
+    private PostInstallRegistry GetRegistry(string installDir, KeyValue installScript)
     {
         var registry = installScript.Children.Find((child) => child.Name?.ToLowerInvariant() == "registry");
         if (registry == null) return new PostInstallRegistry { };
@@ -168,7 +230,7 @@ public class InstallScript
                                     Language = keyOrLanguage.Name,
                                     Group = group.Name,
                                     Key = key.Name ?? "",
-                                    Value = ReplaceDynamicVariables(key.AsString() ?? "", true)!,
+                                    Value = ReplaceDynamicVariables(installDir, key.AsString() ?? "", true)!,
                                 });
                             }
                             else
@@ -178,7 +240,7 @@ public class InstallScript
                                     Language = keyOrLanguage.Name,
                                     Group = group.Name,
                                     Key = key.Name ?? "",
-                                    Value = ReplaceDynamicVariables(key.AsString() ?? "", true)!,
+                                    Value = ReplaceDynamicVariables(installDir, key.AsString() ?? "", true)!,
                                 });
                             }
                         }
@@ -190,7 +252,7 @@ public class InstallScript
                             Language = null,
                             Group = group.Name,
                             Key = keyOrLanguage.Name ?? "",
-                            Value = ReplaceDynamicVariables(value, true)!,
+                            Value = ReplaceDynamicVariables(installDir, value, true)!,
                         });
                     }
                     else
@@ -200,7 +262,7 @@ public class InstallScript
                             Language = keyOrLanguage.Name,
                             Group = group.Name,
                             Key = keyOrLanguage.Name ?? "",
-                            Value = ReplaceDynamicVariables(value, true)!,
+                            Value = ReplaceDynamicVariables(installDir, value, true)!,
                         });
                     }
                 }
@@ -214,7 +276,7 @@ public class InstallScript
         };
     }
 
-    private List<PostInstallRunProcess> GetRunProcessList(KeyValue installScript)
+    private List<PostInstallRunProcess> GetRunProcessList(string installDir, KeyValue installScript)
     {
         var runProcessParams = new List<PostInstallRunProcess>();
         var runProcess = installScript.Children.Find((child) => child.Name?.ToLowerInvariant() == "run process");
@@ -237,8 +299,8 @@ public class InstallScript
                 {
                     Name = processEntry.Name ?? "script",
                     HasRunKey = processEntry.Children.Find((child) => child.Name?.ToLowerInvariant() == "hasrunkey")?.AsString(),
-                    Process = ReplaceDynamicVariables(process, false)!,
-                    Command = ReplaceDynamicVariables(processEntry.Children.Find((child) => child.Name?.ToLowerInvariant() == "command 1")?.AsString(), false),
+                    Process = ReplaceDynamicVariables(installDir, process, false)!,
+                    Command = ReplaceDynamicVariables(installDir, processEntry.Children.Find((child) => child.Name?.ToLowerInvariant() == "command 1")?.AsString(), false),
                     NoCleanUp = processEntry.Children.Find((child) => child.Name?.ToLowerInvariant() == "nocleanup")?.AsString() == "1",
                     MinimumHasRunValue = processEntry.Children.Find((child) => child.Name?.ToLowerInvariant() == "minimumhasrunvalue")?.AsString(),
                     RequirementOs = new PostInstallRunProcessRequirementOS
@@ -255,14 +317,14 @@ public class InstallScript
         return runProcessParams;
     }
 
-    private string? ReplaceDynamicVariables(string? value, bool useWindowsPath)
+    private string? ReplaceDynamicVariables(string installDir, string? value, bool useWindowsPath)
     {
         if (value == null) return null;
 
         if (useWindowsPath)
         {
             return value
-                .Replace("%INSTALLDIR%", GetWindowsPath(_installDirectory))
+                .Replace("%INSTALLDIR%", GetWindowsPath(installDir))
                 .Replace("%ROOTDRIVE%", GetWindowsPath(ROOT_DRIVE))
                 .Replace("%APPDATA%", GetWindowsPath(_appDataFolder))
                 .Replace("%USER_MYDOCS%", GetWindowsPath(_myDocsFolder))
@@ -279,7 +341,7 @@ public class InstallScript
         }
 
         return value
-                .Replace("%INSTALLDIR%", _installDirectory)
+                .Replace("%INSTALLDIR%", installDir)
                 .Replace("%ROOTDRIVE%", ROOT_DRIVE)
                 .Replace("%APPDATA%", _appDataFolder)
                 .Replace("%USER_MYDOCS%", _myDocsFolder)

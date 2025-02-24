@@ -608,7 +608,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (installDirectory == null || !depotConfigStore.IsAppDownloaded(appId))
       throw DbusExceptionHelper.ThrowAppNotInstalled();
 
-    var installScript = await InstallScript.CreateAsync(appId, installDirectory!);
+    var installScript = await InstallScript.CreateAsync(depotConfigStore, appId, installDirectory!);
 
     var options = new JsonSerializerOptions
     {
@@ -781,16 +781,34 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     await ContentDownloader.PauseInstall();
   }
 
-  async Task<string[]> IPluginLibraryProvider.PreLaunchHookAsync(string appId, bool wantsOfflineMode)
+  async Task<string[]> IPluginLibraryProvider.PreLaunchHookAsync(string appIdString, bool wantsOfflineMode)
   {
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (steamClientApp.updating)
       return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
+
+    var installedApp = depotConfigStore.GetInstalledAppOptions(appId);
+    if (installedApp == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
 
     if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
 
     if (!wantsOfflineMode && !isOnline)
       wantsOfflineMode = true;
+
+    // Enforce apps being fully updated
+    if (!wantsOfflineMode)
+    {
+      await session!.VerifyDownloadedApp(new ContentDownloader(session, depotConfigStore), installedApp);
+
+      var installedAppInfo = depotConfigStore.GetInstalledAppInfo(appId);
+      if (installedAppInfo?.Info.UpdatePending == true)
+      {
+        var version = session.GetSteam3AppBuildNumber(appId, installedAppInfo?.Branch ?? AppDownloadOptions.DEFAULT_BRANCH);
+        OnAppNewVersionFound?.Invoke((appIdString, version.ToString()));
+        throw DbusExceptionHelper.ThrowAppUpdateRequired();
+      }
+    }
 
     session!.UpdateConfigFiles(wantsOfflineMode);
 
@@ -799,7 +817,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (!wantsOfflineMode && session.playingBlocked) throw DbusExceptionHelper.ThrowPlayingBlocked();
 
       var logonDetails = session!.GetLogonDetails();
-      await steamClientApp.Start(logonDetails.AccountID, appId, logonDetails.Username!, wantsOfflineMode);
+      await steamClientApp.Start(logonDetails.AccountID, appIdString, logonDetails.Username!, wantsOfflineMode);
     }
     catch (DBusException exception)
     {
@@ -1803,7 +1821,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (location.alias.Length == 0) continue;
       var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
       Disk.EnsureParentFolderExists(path);
-      autocloud.SaveToFile(path, false);
+      autocloud.SaveToFileWithAtomicRename(path);
     }
     Console.WriteLine("Download complete");
   }
@@ -1974,7 +1992,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (location.alias.Length == 0) continue;
       var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
       Disk.EnsureParentFolderExists(path);
-      autocloud.SaveToFile(System.IO.Path.Join(path, "steam_autocloud.vdf"), false);
+      autocloud.SaveToFileWithAtomicRename(path);
     }
     Console.WriteLine("Upload complete");
   }

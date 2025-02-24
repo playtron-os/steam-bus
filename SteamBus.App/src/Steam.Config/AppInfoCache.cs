@@ -47,7 +47,7 @@ public class AppInfoCache
                 else
                 {
                     Directory.CreateDirectory(path);
-                    data.SaveToFile(finalPath, false);
+                    data.SaveToFileWithAtomicRename(finalPath);
                 }
             }
             catch (Exception exception)

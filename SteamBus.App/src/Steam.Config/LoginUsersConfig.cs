@@ -63,7 +63,7 @@ public class LoginUsersConfig
     public void Save()
     {
         Disk.EnsureParentFolderExists(path);
-        this.data?.SaveToFile(this.path, false);
+        this.data?.SaveToFileWithAtomicRename(this.path);
     }
 
     // Add the given user to the loginusers config
@@ -129,7 +129,7 @@ public class LoginUsersConfig
             Directory.CreateDirectory(parent);
             return (new KeyValue("users"), userConfigPath);
         }
-        
+
         return (KeyValue.LoadAsText(userConfigPath) ?? new KeyValue("users"), userConfigPath);
     }
 
@@ -138,7 +138,7 @@ public class LoginUsersConfig
         var (userData, path) = GetUserConfig(accountId);
         userData = UpdateUserConfig(userData);
         Disk.EnsureParentFolderExists(path);
-        userData.SaveToFile(path, false);
+        userData.SaveToFileWithAtomicRename(path);
     }
 
     private KeyValue UpdateUserConfig(KeyValue data)
@@ -172,7 +172,7 @@ public class LoginUsersConfig
         if (!File.Exists(userSharedConfigPath))
         {
             var newSharedConfigData = UpdateUserSharedConfig(new KeyValue("UserRoamingConfigStore"));
-            newSharedConfigData.SaveToFile(userSharedConfigPath, false);
+            newSharedConfigData.SaveToFileWithAtomicRename(userSharedConfigPath);
             return;
         }
 
@@ -181,7 +181,7 @@ public class LoginUsersConfig
         var userSharedConfigData = KeyValue.LoadFromString(content)!;
         stream.Close();
         userSharedConfigData = UpdateUserSharedConfig(userSharedConfigData);
-        userSharedConfigData.SaveToFile(userSharedConfigPath, false);
+        userSharedConfigData.SaveToFileWithAtomicRename(userSharedConfigPath);
     }
 
     private KeyValue UpdateUserSharedConfig(KeyValue data)

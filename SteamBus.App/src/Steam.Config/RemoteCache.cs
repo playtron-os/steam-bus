@@ -144,7 +144,7 @@ public class RemoteCache
 			Console.WriteLine("Failed to create directory for remotecache file");
 		}
 		// We want to raise this exception to trigger potential failures
-		data.SaveToFile(this.path, false);
+		data.SaveToFileWithAtomicRename(this.path);
 	}
 
 	public static string GetRemoteCachePath(uint userid, uint appid)

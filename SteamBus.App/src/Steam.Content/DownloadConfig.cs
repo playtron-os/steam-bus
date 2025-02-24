@@ -8,7 +8,7 @@ using Playtron.Plugin;
 
 namespace Steam.Content;
 
-class AppDownloadOptions
+public class AppDownloadOptions
 {
   public const string DEFAULT_BRANCH = "public";
 
