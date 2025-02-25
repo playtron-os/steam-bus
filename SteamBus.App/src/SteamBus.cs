@@ -68,6 +68,12 @@ class SteamBus
 
       await pluginManager.WatchOnDriveAddedAsync(async (driveInfo) =>
       {
+        if (driveInfo.NeedsFormatting)
+        {
+          Console.WriteLine($"Ignoring Drive:{driveInfo.Name} because it has incorrect format");
+          return;
+        }
+
         Console.WriteLine($"Drive:{driveInfo.Name} at Path:{driveInfo.Path} added");
 
         var libraryConfig = await LibraryFoldersConfig.CreateAsync();
@@ -89,6 +95,8 @@ class SteamBus
       var libraryConfig = await LibraryFoldersConfig.CreateAsync();
       foreach (var drive in drives)
       {
+        if (drive.NeedsFormatting) continue;
+
         Console.WriteLine($"Verifying drive {drive.Name} is in library config");
         libraryConfig.AddDiskEntry(Regex.Unescape(drive.Path));
       }
