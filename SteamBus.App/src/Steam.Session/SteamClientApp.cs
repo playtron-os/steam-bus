@@ -91,7 +91,7 @@ public class SteamClientApp
         steamuiLogs.Delete();
 
         // Verify all installed apps have correct config so steam client does not set them to update pending
-        appsDepotConfigStore.VerifyAppsOsConfigAsync(accountId);
+        appsDepotConfigStore.VerifyAppsOsConfig(accountId);
         if (!string.IsNullOrEmpty(forAppId))
             appsDepotConfigStore.VerifyAppsStateFlag(uint.Parse(forAppId));
 
@@ -249,7 +249,7 @@ public class SteamClientApp
                     }
                     else
                     {
-                        await Task.Delay(1000);
+                        await Task.Delay(2000);
 
                         readyTask.TrySetResult();
                         readyTask = null;

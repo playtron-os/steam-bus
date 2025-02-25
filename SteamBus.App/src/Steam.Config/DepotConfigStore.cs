@@ -319,7 +319,7 @@ public class DepotConfigStore
         }
     }
 
-    public void VerifyAppsOsConfigAsync(uint accountId)
+    public void VerifyAppsOsConfig(uint accountId)
     {
         var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
         var userCompatConfig = accountId == 0 ? null : new UserCompatConfig(UserCompatConfig.DefaultPath(accountId));
