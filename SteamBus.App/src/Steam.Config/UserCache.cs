@@ -53,7 +53,7 @@ public class UserCache
     public void Save()
     {
         Disk.EnsureParentFolderExists(path);
-        this.data?.SaveToFile(this.path, false);
+        this.data?.SaveToFileWithAtomicRename(this.path);
     }
 
     // Add the value to the cache

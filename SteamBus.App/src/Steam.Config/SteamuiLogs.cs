@@ -9,7 +9,6 @@ namespace Steam.Config;
 
 public class SteamuiLogs
 {
-    private KeyValue? data;
     public string path;
     public const string filename = "steamui_login.txt";
 

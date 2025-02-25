@@ -69,7 +69,7 @@ public class LocalConfig
   public void Save()
   {
     Disk.EnsureParentFolderExists(path);
-    this.data?.SaveToFile(this.path, false);
+    this.data?.SaveToFileWithAtomicRename(this.path);
   }
 
   // Add the given refresh token to the 'ConnectCache' section of the 'MachineUserConfigStore'

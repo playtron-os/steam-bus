@@ -57,7 +57,7 @@ public class LibraryCache
     public void Save()
     {
         Disk.EnsureParentFolderExists(path);
-        this.data?.SaveToFile(this.path, false);
+        this.data?.SaveToFileWithAtomicRename(this.path);
     }
 
     // Adds the list of package ids to the cache
@@ -88,7 +88,7 @@ public class LibraryCache
     }
 
     // Adds the list of apps to the cache
-    public void SetApps(uint identifier, IEnumerable<ProviderItem> providerItems)
+    public void SetApps(uint identifier, List<ProviderItem> providerItems)
     {
         var identifierStr = identifier.ToString();
 

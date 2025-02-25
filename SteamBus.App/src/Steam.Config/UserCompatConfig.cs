@@ -73,7 +73,7 @@ public class UserCompatConfig
         Disk.EnsureParentFolderExists(path);
         Disk.ExecuteFileOpWithRetry(() =>
         {
-            this.data?.SaveToFile(this.path, false);
+            this.data?.SaveToFileWithAtomicRename(this.path);
             return "";
         }, this.path);
     }

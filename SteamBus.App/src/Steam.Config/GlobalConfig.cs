@@ -83,7 +83,7 @@ public class GlobalConfig
     public void Save()
     {
         Disk.EnsureParentFolderExists(path);
-        this.data?.SaveToFile(this.path, false);
+        this.data?.SaveToFileWithAtomicRename(this.path);
     }
 
     // Add the given steam username and ID to the config file
@@ -108,7 +108,7 @@ public class GlobalConfig
     }
 
     // Sets proton 9 as compat tool for an app id
-    public void SetProton9CompatForApp(uint appId)
+    public void SetProton9CompatForApp(uint appId, uint priority = 250)
     {
         EnsureRootKeysExist();
 
@@ -125,11 +125,13 @@ public class GlobalConfig
 
         // Set proton_9 tool config so steam client identifies game as windows installation
         var toolName = this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_NAME]?.AsString();
-        if (string.IsNullOrEmpty(toolName) || !toolName.Contains("proton"))
+
+        // Override if tool is not proton already or if appId is 0, meaning it applies to all titles
+        if (string.IsNullOrEmpty(toolName) || !toolName.Contains("proton") || appId == 0)
         {
             this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_NAME] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_NAME, "proton_9");
             this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_CONFIG] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_CONFIG, "");
-            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_PRIORITY] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_PRIORITY, "250");
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_PRIORITY] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_PRIORITY, priority.ToString());
         }
     }
 

@@ -35,14 +35,14 @@ public class SteamSession
     get;
     private set;
   }
-  public Dictionary<uint, ulong> AppTokens { get; } = [];
-  public Dictionary<uint, ulong> PackageTokens { get; } = [];
-  public Dictionary<uint, byte[]> DepotKeys { get; } = [];
+  public ConcurrentDictionary<uint, ulong> AppTokens { get; } = [];
+  public ConcurrentDictionary<uint, ulong> PackageTokens { get; } = [];
+  public ConcurrentDictionary<uint, byte[]> DepotKeys { get; } = [];
   public ConcurrentDictionary<(uint, string), TaskCompletionSource<SteamContent.CDNAuthToken>> CDNAuthTokens { get; } = [];
-  public Dictionary<uint, KeyValue> AppInfo { get; } = [];
-  public Dictionary<uint, ProviderItem> ProviderItemMap { get; } = [];
-  public Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> PackageInfo { get; } = [];
-  public Dictionary<string, byte[]> AppBetaPasswords { get; } = [];
+  public ConcurrentDictionary<uint, KeyValue> AppInfo { get; } = [];
+  public ConcurrentDictionary<uint, ProviderItem> ProviderItemMap { get; } = [];
+  public ConcurrentDictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> PackageInfo { get; } = [];
+  public ConcurrentDictionary<string, byte[]> AppBetaPasswords { get; } = [];
 
   public SteamClient SteamClient;
   public SteamUser? SteamUser;
@@ -110,7 +110,7 @@ public class SteamSession
       PersonaName = userCache.GetKey(UserCache.PERSONA_NAME, details.AccountID) ?? "";
 
       PackageIDs = new ReadOnlyCollection<uint>(libraryCache.GetPackageIDs(details.AccountID));
-      ProviderItemMap = libraryCache.GetApps(details.AccountID).ToDictionary((x) => uint.Parse(x.id));
+      ProviderItemMap = new ConcurrentDictionary<uint, ProviderItem>(libraryCache.GetApps(details.AccountID).ToDictionary((x) => uint.Parse(x.id)));
     }
     else
     {
@@ -277,15 +277,15 @@ public class SteamSession
 
         foreach (var app in appInfo.UnknownApps)
         {
-          AppInfo.Remove(app);
-          ProviderItemMap.Remove(app);
+          AppInfo.Remove(app, out _);
+          ProviderItemMap.Remove(app, out _);
           appInfoCache.Save(app, null);
         }
       }
 
       if (SteamUser?.SteamID?.AccountID != null)
       {
-        libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values);
+        libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values.ToList());
         libraryCache.Save();
       }
     }
@@ -954,7 +954,7 @@ public class SteamSession
 
         if (SteamUser?.SteamID?.AccountID != null)
         {
-          libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values);
+          libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values.ToList());
           libraryCache.Save();
         }
       }
@@ -1124,7 +1124,7 @@ public class SteamSession
     return common?["name"].Value?.ToString() ?? "";
   }
 
-  public List<uint> GetDLCs(uint appId)
+  public List<uint> GetExtendedDLCs(uint appId)
   {
     var extended = GetSteam3AppSection(appId, EAppInfoSection.Extended);
     return extended?["listofdlc"]?.AsString()?.Split(",")?.Select(uint.Parse).ToList() ?? [];
@@ -1181,7 +1181,7 @@ public class SteamSession
     var child = config.Children.Find((c) => c.Name == "Offline");
     if (child != null) config.Children.Remove(child);
 
-    config.SaveToFile(path, false);
+    config.SaveToFileWithAtomicRename(path);
   }
 
   public bool IsUserConfigReady()
@@ -1207,60 +1207,85 @@ public class SteamSession
 
     foreach (var installedApp in installedAppOptions)
     {
-      try
-      {
-        var requiredDepots = await downloader.GetAppRequiredDepots(installedApp.appId, new AppDownloadOptions(installedApp, installedApp.installDir), false, false);
-        var sharedDepotIds = depotConfigStore.GetSharedDepotIds(installedApp.appId);
-        requiredDepots = [.. requiredDepots.ExceptBy(sharedDepotIds, (x) => x.DepotId)];
-
-        // 0 depots required means the user doesn't own this app
-        if (requiredDepots.Count == 0)
-          continue;
-
-        var isMissingDepots = requiredDepots.Any((requiredDepot) => !installedApp.depotIds.Contains(requiredDepot));
-        if (isMissingDepots)
-        {
-          if (!installedApp.isUpdatePending)
-          {
-            var missingDepots = requiredDepots.Where((requiredDepot) => !installedApp.depotIds.Contains(requiredDepot));
-            Console.WriteLine($"AppId:{installedApp.appId} is missing depots! Missing Depots:{string.Join(",", missingDepots)}");
-            depotConfigStore.SetUpdatePending(installedApp.appId, GetSteam3AppBuildNumber(installedApp.appId, installedApp.branch).ToString());
-            depotConfigStore.Save(installedApp.appId);
-            hasChange = true;
-          }
-          continue;
-        }
-
-        var hasAdditionalDepots = installedApp.depotIds.Any((installedDepot) => !requiredDepots.Contains(installedDepot));
-        if (hasAdditionalDepots)
-        {
-          if (!installedApp.isUpdatePending)
-          {
-            var additionalDepots = installedApp.depotIds.Where((installedDepot) => !requiredDepots.Contains(installedDepot));
-            Console.WriteLine($"AppId:{installedApp.appId} has additional depots! Additional Depots:{string.Join(",", additionalDepots)}");
-            depotConfigStore.SetUpdatePending(installedApp.appId, GetSteam3AppBuildNumber(installedApp.appId, installedApp.branch).ToString());
-            depotConfigStore.Save(installedApp.appId);
-            hasChange = true;
-          }
-          continue;
-        }
-
-        if (installedApp.isUpdatePending)
-        {
-          Console.WriteLine($"AppId:{installedApp.appId} has all depots downloaded, no update needed");
-          depotConfigStore.SetNotUpdatePending(installedApp.appId);
-          depotConfigStore.Save(installedApp.appId);
-          hasChange = true;
-        }
-      }
-      catch (Exception)
-      {
-        // Skip verifying this app
-      }
+      var appHasChange = await VerifyDownloadedApp(downloader, installedApp);
+      hasChange |= appHasChange;
     }
 
     if (hasChange)
       InstalledAppsUpdated?.Invoke();
+  }
+
+  public async Task<bool> VerifyDownloadedApp(ContentDownloader downloader, InstallOptionsExtended installedApp)
+  {
+    try
+    {
+      var newestVersion = GetSteam3AppBuildNumber(installedApp.appId, installedApp.branch).ToString();
+      if (newestVersion != installedApp.version)
+      {
+        if (!installedApp.isUpdatePending)
+        {
+          Console.WriteLine($"AppId:{installedApp.appId} is needs a version update, newestVersion:{newestVersion}, oldVersion:{installedApp.version}");
+          depotConfigStore.SetUpdatePending(installedApp.appId, newestVersion);
+          depotConfigStore.Save(installedApp.appId);
+          return true;
+        }
+
+        return false;
+      }
+
+      var requiredDepots = (await downloader.GetAppRequiredDepots(installedApp.appId, new AppDownloadOptions(installedApp, installedApp.installDir), false, false))
+        .Select((x) => (x.DepotId, x.ManifestId));
+      var sharedDepotIds = depotConfigStore.GetSharedDepotIds(installedApp.appId);
+      requiredDepots = [.. requiredDepots.ExceptBy(sharedDepotIds, (x) => x.DepotId)];
+
+      // 0 depots required means the user doesn't own this app
+      if (requiredDepots.Count() == 0)
+        return false;
+
+      var isMissingDepots = requiredDepots.Any((requiredDepot) => !installedApp.depotIds.Contains(requiredDepot));
+      if (isMissingDepots)
+      {
+        if (!installedApp.isUpdatePending)
+        {
+          var missingDepots = requiredDepots.Where((requiredDepot) => !installedApp.depotIds.Contains(requiredDepot));
+          Console.WriteLine($"AppId:{installedApp.appId} is missing depots! Missing Depots:{string.Join(",", missingDepots)}");
+          depotConfigStore.SetUpdatePending(installedApp.appId, newestVersion);
+          depotConfigStore.Save(installedApp.appId);
+          return true;
+        }
+
+        return false;
+      }
+
+      var hasAdditionalDepots = installedApp.depotIds.Any((installedDepot) => !requiredDepots.Contains(installedDepot));
+      if (hasAdditionalDepots)
+      {
+        if (!installedApp.isUpdatePending)
+        {
+          var additionalDepots = installedApp.depotIds.Where((installedDepot) => !requiredDepots.Contains(installedDepot));
+          Console.WriteLine($"AppId:{installedApp.appId} has additional depots! Additional Depots:{string.Join(",", additionalDepots)}");
+          depotConfigStore.SetUpdatePending(installedApp.appId, newestVersion);
+          depotConfigStore.Save(installedApp.appId);
+          return true;
+        }
+
+        return false;
+      }
+
+      if (installedApp.isUpdatePending)
+      {
+        Console.WriteLine($"AppId:{installedApp.appId} has all depots downloaded, no update needed");
+        depotConfigStore.SetNotUpdatePending(installedApp.appId);
+        depotConfigStore.Save(installedApp.appId);
+        return true;
+      }
+    }
+    catch (Exception)
+    {
+      // Skip verifying this app
+    }
+
+    return false;
   }
 
   public async Task ImportSteamClientApps()

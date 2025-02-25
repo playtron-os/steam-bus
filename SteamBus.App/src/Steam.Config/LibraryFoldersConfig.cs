@@ -121,10 +121,10 @@ public class LibraryFoldersConfig
     public void Save()
     {
         Disk.EnsureParentFolderExists(path);
-        this.data?.SaveToFile(this.path, false);
+        this.data?.SaveToFileWithAtomicRename(this.path);
 
         var otherPath = Path.Join(SteamConfig.GetConfigDirectory(), "steamapps", FILENAME);
-        this.data?.SaveToFile(otherPath, false);
+        this.data?.SaveToFileWithAtomicRename(otherPath);
     }
 
     /// <summary>
@@ -168,7 +168,7 @@ public class LibraryFoldersConfig
             {
                 var singleEntry = KeyValue.LoadFromString(DEFAULT_EXTERNAL_LIBRARY_FOLDERS_CONTENT)!;
                 Disk.EnsureParentFolderExists(externalLibraryFoldersConfigFile);
-                singleEntry.SaveToFile(externalLibraryFoldersConfigFile, false);
+                singleEntry.SaveToFileWithAtomicRename(externalLibraryFoldersConfigFile);
             }
         }
 

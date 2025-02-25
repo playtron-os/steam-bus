@@ -119,12 +119,14 @@ public class DepotConfigStore
     public const string KEY_INSTALLED_DEPOTS = "InstalledDepots";
     public const string KEY_INSTALLED_DEPOTS_MANIFEST = "manifest";
     public const string KEY_INSTALLED_DEPOTS_SIZE = "size";
+    public const string KEY_INSTALLED_DEPOTS_DLC_APP_ID = "dlcappid";
     public const string KEY_USER_CONFIG = "UserConfig";
     public const string KEY_MOUNTED_CONFIG = "MountedConfig";
     public const string KEY_CONFIG_LANGUAGE = "language";
     public const string KEY_CONFIG_BETA_KEY = "BetaKey";
     public const string KEY_CONFIG_DISABLED_DLC = "DisabledDLC";
     public const string KEY_SHARED_DEPOTS = "SharedDepots";
+    public const string KEY_INSTALL_SCRIPTS = "InstallScripts";
 
     public const string EXTRA_KEY_LATEST_BUILD_ID = "LatestBuildID";
     public const string EXTRA_KEY_OS = "os";
@@ -261,7 +263,7 @@ public class DepotConfigStore
             else
             {
                 var extraData = new KeyValue(KEY_APP_STATE);
-                extraData.SaveToFile(manifestExtraPath, false);
+                extraData.SaveToFileWithAtomicRename(manifestExtraPath);
                 manifestExtraMap.TryAdd(appId, extraData);
             }
 
@@ -314,7 +316,7 @@ public class DepotConfigStore
         if (data[KEY_STATE_FLAGS]?.AsUnsignedInteger() != normalizedStateFlags)
         {
             data[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, normalizedStateFlags.ToString());
-            data.SaveToFile(manifestPathMap[appId], false);
+            data.SaveToFileWithAtomicRename(manifestPathMap[appId]);
         }
     }
 
@@ -374,8 +376,8 @@ public class DepotConfigStore
             var stateFlags = GetNormalizedStateFlags(appId);
             manifest[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
 
-            manifest.SaveToFile(path, false);
-            extraManifest.SaveToFile(extraPath, false);
+            manifest.SaveToFileWithAtomicRename(path);
+            extraManifest.SaveToFileWithAtomicRename(extraPath);
         }
     }
 
@@ -412,7 +414,8 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return null;
 
-        return manifest[KEY_INSTALLED_DEPOTS]?[depotId.ToString()]?[KEY_INSTALLED_DEPOTS_MANIFEST]?.AsUnsignedLong();
+        var manifestId = manifest[KEY_INSTALLED_DEPOTS]?[depotId.ToString()]?[KEY_INSTALLED_DEPOTS_MANIFEST]?.AsUnsignedLong();
+        return manifestId == 0 ? null : manifestId;
     }
 
     /// <summary>
@@ -420,11 +423,11 @@ public class DepotConfigStore
     /// </summary>
     /// <param name="appId"></param>
     /// <returns></returns>
-    public List<(uint, ulong)> GetDepots(uint appId)
+    public List<(uint DepotId, ulong ManifestId, ulong ManifestSize)> GetDepots(uint appId)
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return [];
 
-        var depots = new List<(uint, ulong)>();
+        var depots = new List<(uint, ulong, ulong)>();
 
         foreach (var child in manifest[KEY_INSTALLED_DEPOTS]?.Children ?? [])
         {
@@ -433,14 +436,17 @@ public class DepotConfigStore
             var manifestId = child[KEY_INSTALLED_DEPOTS_MANIFEST]?.AsUnsignedLong();
             if (manifestId == null) continue;
 
-            depots.Add((depotId, (ulong)manifestId));
+            var manifestSize = child[KEY_INSTALLED_DEPOTS_SIZE]?.AsUnsignedLong();
+            if (manifestSize == null) continue;
+
+            depots.Add((depotId, (ulong)manifestId, (ulong)manifestSize));
         }
 
         return depots;
     }
 
     /// <summary>
-    /// Get all depots for an app
+    /// Get all shared depot ids for an app
     /// </summary>
     /// <param name="appId"></param>
     /// <returns></returns>
@@ -448,6 +454,40 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return [];
         return (manifest[KEY_SHARED_DEPOTS]?.Children ?? []).Where((x) => !string.IsNullOrEmpty(x.Name)).Select((x) => uint.Parse(x.Name!)).ToList();
+    }
+
+    /// <summary>
+    /// Get all install scripts for an app
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public List<(uint DepotId, string Path)> GetInstallScripts(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return [];
+        return manifest[KEY_INSTALL_SCRIPTS].Children.Select(x => (uint.Parse(x.Name!), x.AsString()!)).ToList();
+    }
+
+    /// <summary>
+    /// Get all shared depots for an app
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public List<(uint DepotId, uint DepotAppId)> GetSharedDepots(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return [];
+        return (manifest[KEY_SHARED_DEPOTS]?.Children ?? []).Select((x) => (uint.Parse(x.Name!), x.AsUnsignedInteger())).ToList();
+    }
+
+
+    /// <summary>
+    /// Get all shared depot app ids for an app
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <returns></returns>
+    public List<uint> GetSharedDepotAppIds(uint appId)
+    {
+        if (!manifestMap.TryGetValue(appId, out var manifest)) return [];
+        return (manifest[KEY_SHARED_DEPOTS]?.Children ?? []).Select((x) => x.AsUnsignedInteger()).Where((x) => x != 0).ToList();
     }
 
     /// <summary>
@@ -532,13 +572,46 @@ public class DepotConfigStore
     }
 
     /// <summary>
+    /// Set install script for depot
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="depotId"></param>
+    /// <param name="path"></param>
+    public void SetInstallScript(uint appId, uint depotId, string path)
+    {
+        if (manifestMap.TryGetValue(appId, out var manifest))
+        {
+            var key = depotId.ToString();
+            if (manifest[KEY_INSTALL_SCRIPTS] == KeyValue.Invalid)
+                manifest[KEY_INSTALL_SCRIPTS] = new KeyValue(key);
+
+            manifest[KEY_INSTALL_SCRIPTS][key] = new KeyValue(key, path);
+        }
+    }
+
+    /// <summary>
+    /// Clear install script for depot id
+    /// </summary>
+    /// <param name="appId"></param>
+    /// <param name="depotId"></param>
+    public void RemoveInstallScript(uint appId, uint depotId)
+    {
+        if (manifestMap.TryGetValue(appId, out var manifest))
+        {
+            var key = depotId.ToString();
+            var child = manifest[KEY_INSTALL_SCRIPTS].Children.FirstOrDefault((child) => child.Name == key);
+            if (child != null) manifest[KEY_INSTALL_SCRIPTS].Children.Remove(child);
+        }
+    }
+
+    /// <summary>
     /// Sets the manifest ID for an app id and depot id
     /// </summary>
     /// <param name="appId"></param>
     /// <param name="depotId"></param>
     /// <param name="manifestId"></param>
     /// <param name="manifestSize"></param>
-    public void SetManifestID(uint appId, uint depotId, ulong manifestId, ulong manifestSize)
+    public void SetManifestID(uint appId, uint depotId, ulong manifestId, ulong manifestSize, uint? dlcAppId)
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
@@ -548,15 +621,24 @@ public class DepotConfigStore
 
         manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_MANIFEST] = new KeyValue(KEY_INSTALLED_DEPOTS_MANIFEST, manifestId.ToString());
         manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_SIZE] = new KeyValue(KEY_INSTALLED_DEPOTS_SIZE, manifestSize.ToString());
+
+        if (dlcAppId == null || dlcAppId == appId)
+        {
+            var child = manifestMap[appId][KEY_INSTALLED_DEPOTS][key].Children.FirstOrDefault((x) => x.Name == KEY_INSTALLED_DEPOTS_DLC_APP_ID);
+            if (child != null)
+                manifestMap[appId][KEY_INSTALLED_DEPOTS][key].Children.Remove(child);
+        }
+        else
+            manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_DLC_APP_ID] = new KeyValue(KEY_INSTALLED_DEPOTS_DLC_APP_ID, dlcAppId.ToString());
     }
 
     /// <summary>
     /// Sets the shared depot id
     /// </summary>
     /// <param name="appId"></param>
+    /// <param name="depotAppId"></param>
     /// <param name="depotId"></param>
-    /// <param name="manifestId"></param>
-    public void SetSharedDepot(uint appId, uint depotId, ulong manifestId)
+    public void SetSharedDepot(uint appId, uint depotAppId, uint depotId)
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
@@ -564,7 +646,7 @@ public class DepotConfigStore
             manifestMap[appId][KEY_SHARED_DEPOTS] = new KeyValue(KEY_SHARED_DEPOTS);
 
         var key = depotId.ToString();
-        manifestMap[appId][KEY_SHARED_DEPOTS][key] = new KeyValue(key, manifestId.ToString());
+        manifestMap[appId][KEY_SHARED_DEPOTS][key] = new KeyValue(key, depotAppId.ToString());
     }
 
     /// <summary>
@@ -773,30 +855,41 @@ public class DepotConfigStore
 
         foreach (var entry in manifests)
         {
-            var installDir = GetInstallDirectory(entry.Key);
-            if (installDir == null) continue;
-
-            var appId = entry.Key;
-            var os = GetOS(appId);
-
-            var branch = GetBranch(appId);
-            var depots = GetDepots(appId);
-
-            infos.Add(new InstallOptionsExtended
-            {
-                appId = appId,
-                installDir = installDir,
-                branch = branch,
-                language = entry.Value[KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE]?.AsString() ?? "english",
-                version = entry.Value[KEY_BUILD_ID].AsString() ?? "",
-                os = os,
-                architecture = "",
-                depotIds = depots.ToArray(),
-                isUpdatePending = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
-            });
+            var installedApp = GetInstalledAppOptions(entry.Key);
+            if (installedApp == null) continue;
+            infos.Add(installedApp);
         }
 
         return infos.ToArray();
+    }
+
+    /// <summary>
+    /// List of installed app options
+    /// </summary>
+    /// <returns></returns>
+    public InstallOptionsExtended? GetInstalledAppOptions(uint appId)
+    {
+        var installDir = GetInstallDirectory(appId);
+        if (installDir == null) return null;
+        if (!manifestMap.TryGetValue(appId, out var data)) return null;
+
+        var os = GetOS(appId);
+
+        var branch = GetBranch(appId);
+        var depots = GetDepots(appId);
+
+        return new InstallOptionsExtended
+        {
+            appId = appId,
+            installDir = installDir,
+            branch = branch,
+            language = data[KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE]?.AsString() ?? "english",
+            version = data[KEY_BUILD_ID].AsString() ?? "",
+            os = os,
+            architecture = "",
+            depotIds = depots.Select(x => (x.DepotId, x.ManifestId)).ToArray(),
+            isUpdatePending = (data[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
+        };
     }
 
     /// <summary>
@@ -987,8 +1080,8 @@ public class DepotConfigStore
             manifestExtraPathMap[appId] = manifestPathMap[appId].Replace(".acf", ".extra.acf");
 
             // Save state
-            manifestMap[appId].SaveToFile(manifestPathMap[appId], false);
-            manifestExtraMap[appId].SaveToFile(manifestExtraPathMap[appId], false);
+            manifestMap[appId].SaveToFileWithAtomicRename(manifestPathMap[appId]);
+            manifestExtraMap[appId].SaveToFileWithAtomicRename(manifestExtraPathMap[appId]);
 
             // Final progress update to 100%
             OnMoveItemProgressed?.Invoke((appId.ToString(), 100));
@@ -1076,7 +1169,7 @@ public class DepotConfigStore
 
         var depotsSection = appInfo["depots"];
 
-        foreach (var (depotId, _) in depots)
+        foreach (var (depotId, _, _) in depots)
         {
             var oslist = depotsSection[depotId.ToString()]["config"]["oslist"]?.AsString();
 
