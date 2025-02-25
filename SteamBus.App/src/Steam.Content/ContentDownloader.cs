@@ -917,6 +917,10 @@ public class ContentDownloader
       {
         downloadCounter.sizeDownloaded += oldDepot.ManifestSize;
         downloadCounter.completeDownloadSize += oldDepot.ManifestSize;
+
+        if (depot.IsSharedDepot)
+          depotConfigStore.SetSharedDepot(appId, depot.AppId, depot.DepotId);
+
         continue;
       }
 
