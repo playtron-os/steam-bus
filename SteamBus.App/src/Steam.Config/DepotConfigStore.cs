@@ -141,7 +141,6 @@ public class DepotConfigStore
     private ConcurrentDictionary<uint, KeyValue> manifestExtraMap = [];
 
     private ConcurrentDictionary<uint, UserCompatConfig> accountIdToUserCompatConfig = new();
-    private ConcurrentDictionary<uint, string> appIdToOsMap = new();
     private AppInfoCache appInfoCache;
     private ulong? currentAccountId;
 
@@ -320,7 +319,7 @@ public class DepotConfigStore
         }
     }
 
-    public void VerifyAppsOsConfig(uint accountId)
+    public void VerifyAppsOsConfigAsync(uint accountId)
     {
         var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
         var userCompatConfig = accountId == 0 ? null : new UserCompatConfig(UserCompatConfig.DefaultPath(accountId));
@@ -340,13 +339,23 @@ public class DepotConfigStore
 
         var defaultOs = ContentDownloader.GetSteamOS();
 
-        if (installedOs != null && defaultOs != installedOs)
+        if (installedOs != null)
         {
             if (userCompatConfig != null)
                 userCompatConfig.SetPlatformOverride(appId, defaultOs, installedOs);
 
-            if (installedOs == "windows")
+            if (installedOs == "windows" && defaultOs != installedOs)
                 globalConfig.SetProton9CompatForApp(appId);
+            else
+                globalConfig.RemoveCompatForApp(appId);
+
+            if (manifestExtraMap.TryGetValue(appId, out var data) && data[EXTRA_KEY_OS].AsString() != installedOs)
+            {
+                data[EXTRA_KEY_OS] = new KeyValue(EXTRA_KEY_OS, installedOs);
+
+                if (manifestExtraPathMap.TryGetValue(appId, out var extraPath))
+                    data.SaveToFileWithAtomicRename(extraPath);
+            }
         }
     }
 
@@ -771,7 +780,6 @@ public class DepotConfigStore
         }
 
         manifestExtraMap[appId][EXTRA_KEY_OS] = new KeyValue(EXTRA_KEY_OS, os);
-        appIdToOsMap[appId] = os;
     }
 
     /// <summary>
@@ -1114,49 +1122,21 @@ public class DepotConfigStore
 
     private string GetOS(uint appId)
     {
-        if (appIdToOsMap.TryGetValue(appId, out var os) && os != null) return os;
+        var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+        var compatTool = globalConfig.GetCompatForApp(appId).ToLower();
+        if (compatTool.Contains("proton") || compatTool.Contains("wine"))
+            return "windows";
 
-        if (manifestExtraMap.TryGetValue(appId, out var extraData))
+        var osFromDepot = TryGetOsFromDepots(appId);
+
+        // Only consider the extra manifest data if the depots are empty
+        if (osFromDepot == null && manifestExtraMap.TryGetValue(appId, out var extraData))
         {
             var installedOs = extraData[EXTRA_KEY_OS]?.AsString();
-            if (!string.IsNullOrEmpty(installedOs))
-            {
-                appIdToOsMap[appId] = installedOs;
-                return installedOs;
-            }
+            if (!string.IsNullOrEmpty(installedOs)) return installedOs;
         }
 
-        if (currentAccountId != null)
-        {
-            var userCompatConfig = GetUserCompatConfig((uint)currentAccountId);
-            var userOs = userCompatConfig.GetAppPlatform(appId);
-
-            if (userOs != null)
-            {
-                appIdToOsMap[appId] = userOs;
-                return userOs;
-            }
-        }
-
-        var lastOwner = manifestMap[appId][KEY_LAST_OWNER]?.AsUnsignedLong();
-        var accountId = lastOwner == null ? 0 : (uint)(lastOwner! & 0xFFFFFFFF);
-
-        if (accountId != 0)
-        {
-            var lastOwnerConfig = GetUserCompatConfig(accountId);
-            var lastOwnerOs = lastOwnerConfig.GetAppPlatform(appId);
-
-            if (lastOwnerOs != null)
-            {
-                appIdToOsMap[appId] = lastOwnerOs;
-                return lastOwnerOs;
-            }
-        }
-
-        var osFound = TryGetOsFromDepots(appId);
-        if (osFound != null)
-            appIdToOsMap[appId] = osFound;
-        return osFound ?? "";
+        return osFromDepot ?? "";
     }
 
     private string? TryGetOsFromDepots(uint appId)

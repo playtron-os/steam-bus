@@ -84,6 +84,12 @@ public class UserCompatConfig
         if (data == null)
             Reload();
 
+        if (destPlatform == srcPlatform)
+        {
+            data!.Children.Remove(data[appId.ToString()]);
+            return;
+        }
+
         var config = new KeyValue(appId.ToString());
         config["dest"] = new KeyValue("dest", destPlatform);
         config["src"] = new KeyValue("src", srcPlatform);

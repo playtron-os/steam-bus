@@ -326,23 +326,27 @@ public class ContentDownloader
 
     try
     {
+      if (string.IsNullOrEmpty(options.Os))
+      {
+        var installedApp = depotConfigStore.GetInstalledAppInfo(appId);
+        options.Os = installedApp?.Info.Os ?? "";
+      }
+
       var currentOs = GetSteamOS();
+      var os = options.Os ?? currentOs;
 
       // Set the platform override so steam client won't detect an update when analyzing the game
-      if (options.Os != null)
-      {
-        var userCompatConfig = new UserCompatConfig(UserCompatConfig.DefaultPath(this.session.SteamUser!.SteamID!.AccountID));
-        userCompatConfig.SetPlatformOverride(appId, currentOs, options.Os);
-        userCompatConfig.Save();
+      var userCompatConfig = new UserCompatConfig(UserCompatConfig.DefaultPath(this.session.SteamUser!.SteamID!.AccountID));
+      userCompatConfig.SetPlatformOverride(appId, currentOs, os);
+      userCompatConfig.Save();
 
-        // Force compat tool
-        if (options.Os == "windows" && options.Os != currentOs)
-        {
-          var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
-          globalConfig.SetProton9CompatForApp(appId);
-          globalConfig.Save();
-        }
-      }
+      // Force compat tool
+      var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+      if (os == "windows" && os != currentOs)
+        globalConfig.SetProton9CompatForApp(appId);
+      else
+        globalConfig.RemoveCompatForApp(appId);
+      globalConfig.Save();
 
       this.options = options;
       await Client.DetectLancacheServerAsync();
@@ -363,7 +367,6 @@ public class ContentDownloader
       this.OnInstallFailed = onInstallFailed;
 
       var branch = options.Branch;
-      var os = options.Os ?? currentOs;
       var arch = options.Arch;
       var language = options.Language;
       var lv = options.LowViolence;
