@@ -65,9 +65,8 @@ public class AppInfoCache
             var content = Disk.ReadFileWithRetry(GetFinalPath(appId));
             return KeyValue.LoadFromString(content);
         }
-        catch (Exception err)
+        catch (Exception)
         {
-            Console.WriteLine($"Failed to read cache for {appId}, err:{err}");
             return null;
         }
     }
