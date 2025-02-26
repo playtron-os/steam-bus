@@ -43,16 +43,18 @@ public class SteamClientApp
     private TaskCompletionSource? endingTask;
 
     private DisplayManager displayManager;
-    private DepotConfigStore depotConfigStore;
+    private DepotConfigStore appsDepotConfigStore;
+    private DepotConfigStore toolsDepotConfigStore;
 
     private SteamuiLogs steamuiLogs;
 
     private string forAppId = "";
 
-    public SteamClientApp(DisplayManager displayManager, DepotConfigStore depotConfigStore)
+    public SteamClientApp(DisplayManager displayManager, DepotConfigStore appsDepotConfigStore, DepotConfigStore toolsDepotConfigStore)
     {
         this.displayManager = displayManager;
-        this.depotConfigStore = depotConfigStore;
+        this.appsDepotConfigStore = appsDepotConfigStore;
+        this.toolsDepotConfigStore = toolsDepotConfigStore;
         this.steamuiLogs = new SteamuiLogs(SteamuiLogs.DefaultPath());
     }
 
@@ -89,9 +91,9 @@ public class SteamClientApp
         steamuiLogs.Delete();
 
         // Verify all installed apps have correct config so steam client does not set them to update pending
-        depotConfigStore.VerifyAppsOsConfig(accountId);
+        appsDepotConfigStore.VerifyAppsOsConfig(accountId);
         if (!string.IsNullOrEmpty(forAppId))
-            depotConfigStore.VerifyAppsStateFlag(uint.Parse(forAppId));
+            appsDepotConfigStore.VerifyAppsStateFlag(uint.Parse(forAppId));
 
         // Make sure steam compatibility is enabled for all titles
         var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
@@ -194,8 +196,8 @@ public class SteamClientApp
             // If an update was happening, mark it as complete
             if (updating)
             {
-                depotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
-                depotConfigStore.Save(STEAM_CLIENT_APP_ID);
+                toolsDepotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
+                toolsDepotConfigStore.Save(STEAM_CLIENT_APP_ID);
 
                 Console.WriteLine("Steam client update has completed");
                 updating = false;
@@ -247,6 +249,8 @@ public class SteamClientApp
                     }
                     else
                     {
+                        await Task.Delay(2000);
+
                         readyTask.TrySetResult();
                         readyTask = null;
                         Console.WriteLine("Steam client is ready");
@@ -306,10 +310,10 @@ public class SteamClientApp
             {
                 var manifestDir = GetManifestDirectory();
                 Directory.CreateDirectory(manifestDir);
-                depotConfigStore.EnsureEntryExists(manifestDir, STEAM_CLIENT_APP_ID, "Steam");
-                depotConfigStore.SetNewVersion(STEAM_CLIENT_APP_ID, uint.Parse(updatingToVersion), "public", "english", "linux");
-                depotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
-                depotConfigStore.Save(STEAM_CLIENT_APP_ID);
+                toolsDepotConfigStore.EnsureEntryExists(manifestDir, STEAM_CLIENT_APP_ID, "Steam");
+                toolsDepotConfigStore.SetNewVersion(STEAM_CLIENT_APP_ID, uint.Parse(updatingToVersion), "public", "english", "linux");
+                toolsDepotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
+                toolsDepotConfigStore.Save(STEAM_CLIENT_APP_ID);
 
                 Console.WriteLine("Steam client update has started");
                 updating = true;
@@ -317,10 +321,10 @@ public class SteamClientApp
             }
             else
             {
-                depotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, DownloadStage.Downloading);
-                depotConfigStore.SetCurrentSize(STEAM_CLIENT_APP_ID, currentBytesValue);
-                depotConfigStore.SetTotalSize(STEAM_CLIENT_APP_ID, totalBytesValue);
-                depotConfigStore.Save(STEAM_CLIENT_APP_ID);
+                toolsDepotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, DownloadStage.Downloading);
+                toolsDepotConfigStore.SetCurrentSize(STEAM_CLIENT_APP_ID, currentBytesValue);
+                toolsDepotConfigStore.SetTotalSize(STEAM_CLIENT_APP_ID, totalBytesValue);
+                toolsDepotConfigStore.Save(STEAM_CLIENT_APP_ID);
 
                 Console.WriteLine($"Current steam download at {progress:F2}% ({currentBytesValue} / {totalBytesValue} bytes)");
 
@@ -351,7 +355,7 @@ public class SteamClientApp
     {
         if (version == null || totalBytes == null)
         {
-            var info = depotConfigStore.GetInstalledAppInfo(STEAM_CLIENT_APP_ID)?.Info;
+            var info = toolsDepotConfigStore.GetInstalledAppInfo(STEAM_CLIENT_APP_ID)?.Info;
             version ??= info?.Version ?? "0";
             totalBytes ??= info?.TotalDownloadSize ?? 0;
 
@@ -370,7 +374,7 @@ public class SteamClientApp
     private void OnExited(object? sender, EventArgs e)
     {
         // Reload depot config store in case steam client changed the manifests
-        _ = depotConfigStore.Reload();
+        _ = toolsDepotConfigStore.Reload();
 
         Console.WriteLine($"Steam client exited with code {process?.ExitCode}");
         process = null;

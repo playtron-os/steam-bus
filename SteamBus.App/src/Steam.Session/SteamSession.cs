@@ -124,6 +124,7 @@ public class SteamSession
     this.steamApps = this.SteamClient.GetHandler<SteamApps>();
     this.steamFriends = this.SteamClient.GetHandler<SteamFriends>();
     this.steamCloudKit = this.SteamClient.GetHandler<SteamKit2.SteamCloud>();
+
     var steamUnifiedMessages = this.SteamClient.GetHandler<SteamUnifiedMessages>();
     if (steamUnifiedMessages == null)
     {

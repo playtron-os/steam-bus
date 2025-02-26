@@ -117,7 +117,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Creates a new DBusSteamClient instance with the given DBus path
   public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore, DepotConfigStore dependenciesStore, DisplayManager displayManager, INetworkManager networkManager)
   {
-    steamClientApp = new SteamClientApp(displayManager, dependenciesStore);
+    steamClientApp = new SteamClientApp(displayManager, depotConfigStore, dependenciesStore);
 
     // DBus path to this Steam Client instance
     this.Path = path;

@@ -135,6 +135,23 @@ public class GlobalConfig
         }
     }
 
+    // Removes compat tool for an app id
+    public void RemoveCompatForApp(uint appId)
+    {
+        EnsureRootKeysExist();
+
+        var appIdStr = appId.ToString();
+        var child = this.data![KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr];
+        if (child != KeyValue.Invalid)
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING].Children.Remove(child);
+    }
+
+    // Get compat config for an app id
+    public string GetCompatForApp(uint appId)
+    {
+        return this.data?[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appId.ToString()][KEY_COMPAT_TOOL_MAPPING_NAME].AsString() ?? "";
+    }
+
     void EnsureRootKeysExist()
     {
         // Ensure all keys exist
