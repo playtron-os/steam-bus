@@ -620,9 +620,13 @@ public class ContentDownloader
 
     // Handle DLCs
     var dlcAppIds = session.GetExtendedDLCs(appId);
-    if (dlcAppIds.Count() > 0)
+    var hasDepotsInDlc = depots["hasdepotsindlc"].AsString() == "1";
+    foreach (var dlcAppId in dlcAppIds)
     {
-      foreach (var dlcAppId in dlcAppIds)
+      if (requiredDepots.Any((depot) => depot.DepotAppId == dlcAppId || depot.DepotId == dlcAppId))
+        continue;
+
+      if (hasDepotsInDlc)
       {
         var dlcRequiredDepots = await GetAppRequiredDepots(dlcAppId, options, log);
 
@@ -630,6 +634,8 @@ public class ContentDownloader
           if (!disabledDlcIds.Contains(dlcDepot.DepotAppId) && !requiredDepots.Any((d) => d.DepotId == dlcDepot.DepotId))
             requiredDepots.Add(new RequiredDepot(dlcDepot.DepotId, dlcDepot.ManifestId, dlcDepot.DepotAppId, false, true));
       }
+      else if (!disabledDlcIds.Contains(dlcAppId))
+        requiredDepots.Add(new RequiredDepot(dlcAppId, INVALID_MANIFEST_ID, dlcAppId, false, true));
     }
 
     List<RequiredDepot> validDepotManifestIds = [];
