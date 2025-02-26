@@ -1162,7 +1162,8 @@ public class DepotConfigStore
             }
         }
 
-        return ContentDownloader.GetSteamOS();
+        var defaultOslist = appInfo["common"]["oslist"].AsString();
+        return defaultOslist?.Split(",").FirstOrDefault() ?? "windows";
     }
 
     private UserCompatConfig GetUserCompatConfig(uint accountId)
