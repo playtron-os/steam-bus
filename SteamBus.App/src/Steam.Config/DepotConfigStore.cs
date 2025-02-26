@@ -1154,7 +1154,12 @@ public class DepotConfigStore
             var oslist = depotsSection[depotId.ToString()]["config"]["oslist"]?.AsString();
 
             if (!string.IsNullOrEmpty(oslist))
-                return oslist.Split(",").FirstOrDefault();
+            {
+                var oslistSplit = oslist.Split(",");
+
+                if (oslistSplit.Count() == 1)
+                    return oslistSplit.FirstOrDefault();
+            }
         }
 
         return ContentDownloader.GetSteamOS();
