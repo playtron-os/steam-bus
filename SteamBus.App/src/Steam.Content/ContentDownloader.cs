@@ -501,7 +501,7 @@ public class ContentDownloader
     var depotIdsFound = new List<uint>();
     var depotIdsExpected = requiredDepots.Select(x => x.DepotId).ToList();
     var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
-    var disabledDlcDepotIds = depotConfigStore.GetDisabledDlcDepotIds(appId);
+    var disabledDlcIds = depotConfigStore.GetDisabledDlcIds(appId);
 
     if (depots == null)
       throw DbusExceptionHelper.ThrowContentNotFound();
@@ -578,9 +578,6 @@ public class ContentDownloader
           }
         }
 
-        if (disabledDlcDepotIds.Contains(id))
-          continue;
-
         depotIdsFound.Add(id);
 
         if (!hasSpecificDepots)
@@ -595,8 +592,12 @@ public class ContentDownloader
           else
           {
             var dlcAppId = depotSection["dlcappid"]?.AsUnsignedInteger() ?? 0;
-            var isDlc = dlcAppId != 0;
-            requiredDepots.Add(new RequiredDepot(id, INVALID_MANIFEST_ID, depotFromApp == 0 ? appId : depotFromApp, false, isDlc));
+
+            if (!disabledDlcIds.Contains(dlcAppId))
+            {
+              var isDlc = dlcAppId != 0;
+              requiredDepots.Add(new RequiredDepot(id, INVALID_MANIFEST_ID, depotFromApp == 0 ? appId : depotFromApp, false, isDlc));
+            }
           }
         }
       }
@@ -618,14 +619,17 @@ public class ContentDownloader
     }
 
     // Handle DLCs
-    var dlcDepotIds = session.GetExtendedDLCs(appId);
-    if (dlcDepotIds.Count() > 0)
+    var dlcAppIds = session.GetExtendedDLCs(appId);
+    if (dlcAppIds.Count() > 0)
     {
-      dlcDepotIds = dlcDepotIds.Except(disabledDlcDepotIds).ToList();
+      foreach (var dlcAppId in dlcAppIds)
+      {
+        var dlcRequiredDepots = await GetAppRequiredDepots(dlcAppId, options, log);
 
-      foreach (var dlcDepotId in dlcDepotIds)
-        if (dlcDepotId != 0 && !requiredDepots.Any((d) => d.DepotId == dlcDepotId))
-          requiredDepots.Add(new RequiredDepot(dlcDepotId, INVALID_MANIFEST_ID, dlcDepotId, false, true));
+        foreach (var dlcDepot in dlcRequiredDepots)
+          if (!disabledDlcIds.Contains(dlcDepot.DepotAppId) && !requiredDepots.Any((d) => d.DepotId == dlcDepot.DepotId))
+            requiredDepots.Add(new RequiredDepot(dlcDepot.DepotId, dlcDepot.ManifestId, dlcDepot.DepotAppId, false, true));
+      }
     }
 
     List<RequiredDepot> validDepotManifestIds = [];
@@ -639,13 +643,12 @@ public class ContentDownloader
         continue;
       }
 
-      var isDlc = dlcDepotIds.Contains(requiredDepot.DepotId);
-      var depotFromAppId = isDlc ? requiredDepot.DepotId : appId;
+      var depotFromAppId = requiredDepot.IsDlc ? requiredDepot.DepotAppId : appId;
 
       var manifestId = await GetSteam3DepotManifest(requiredDepot.DepotId, depotFromAppId, options.Branch);
 
       // If is dlc and manifest was not found in dlc app info, find in parent app
-      if (isDlc && manifestId == INVALID_MANIFEST_ID)
+      if (requiredDepot.IsDlc && manifestId == INVALID_MANIFEST_ID)
       {
         manifestId = await GetSteam3DepotManifest(requiredDepot.DepotId, appId, options.Branch);
       }

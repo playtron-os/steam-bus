@@ -1114,7 +1114,7 @@ public class DepotConfigStore
         currentAccountId = accountId;
     }
 
-    public List<uint> GetDisabledDlcDepotIds(uint appId)
+    public List<uint> GetDisabledDlcIds(uint appId)
     {
         if (!manifestMap.TryGetValue(appId, out var data)) return [];
         return data[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString()?.Split(",").Select(uint.Parse).ToList() ?? [];
