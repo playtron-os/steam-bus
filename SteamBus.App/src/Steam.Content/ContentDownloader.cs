@@ -326,14 +326,20 @@ public class ContentDownloader
 
     try
     {
-      if (string.IsNullOrEmpty(options.Os))
+      var installedApp = depotConfigStore.GetInstalledAppInfo(appId);
+
+      if (installedApp != null)
       {
-        var installedApp = depotConfigStore.GetInstalledAppInfo(appId);
-        options.Os = installedApp?.Info.Os ?? "";
+        options.InstallDirectory = installedApp.Value.Info.InstalledPath;
+
+        if (string.IsNullOrEmpty(options.Os))
+          options.Os = installedApp?.Info.Os ?? "";
       }
 
       var currentOs = GetSteamOS();
       var os = options.Os ?? currentOs;
+
+      Console.WriteLine($"Installing app to {options.InstallDirectory} with os: {os}");
 
       // Set the platform override so steam client won't detect an update when analyzing the game
       var userCompatConfig = new UserCompatConfig(UserCompatConfig.DefaultPath(this.session.SteamUser!.SteamID!.AccountID));
