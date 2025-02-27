@@ -94,7 +94,7 @@ public class InstallScript
 
             foreach (var installScriptInfo in _depotConfigStore.GetInstallScripts(_appId))
             {
-                var installScript = await GetScriptForPathAsync(_installDirectory, installScriptInfo.Path);
+                var installScript = await GetScriptForPathAsync(_installDirectory, installScriptInfo.Path.Replace("\\", "/"));
                 if (installScript != null)
                     scripts.Add((PostInstall)installScript);
             }
@@ -104,7 +104,10 @@ public class InstallScript
                 var installDir = _depotConfigStore.GetInstallDirectory(depot.DepotAppId);
                 if (installDir == null) continue;
 
-                var installScriptPath = _depotConfigStore.GetInstallScripts(depot.DepotAppId).FirstOrDefault(x => x.DepotId == depot.DepotId).Path;
+                var installScriptPath = _depotConfigStore.GetInstallScripts(depot.DepotAppId)
+                    .FirstOrDefault(x => x.DepotId == depot.DepotId)
+                    .Path
+                    .Replace("\\", "/");
                 var installScript = await GetScriptForPathAsync(installDir, Path.Join(installDir, installScriptPath));
                 if (installScript != null)
                     scripts.Add((PostInstall)installScript);
