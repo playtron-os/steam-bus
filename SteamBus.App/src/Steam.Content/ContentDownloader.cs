@@ -623,19 +623,34 @@ public class ContentDownloader
     var hasDepotsInDlc = depots["hasdepotsindlc"].AsString() == "1";
     foreach (var dlcAppId in dlcAppIds)
     {
-      if (requiredDepots.Any((depot) => depot.DepotAppId == dlcAppId || depot.DepotId == dlcAppId))
+      if (requiredDepots.Any((depot) => depot.DepotAppId == dlcAppId || depot.DepotId == dlcAppId) || disabledDlcIds.Contains(dlcAppId))
         continue;
 
       if (hasDepotsInDlc)
       {
-        var dlcRequiredDepots = await GetAppRequiredDepots(dlcAppId, options, log);
+        try
+        {
+          var dlcRequiredDepots = await GetAppRequiredDepots(dlcAppId, options, log);
 
-        foreach (var dlcDepot in dlcRequiredDepots)
-          if (!disabledDlcIds.Contains(dlcDepot.DepotAppId) && !requiredDepots.Any((d) => d.DepotId == dlcDepot.DepotId))
-            requiredDepots.Add(new RequiredDepot(dlcDepot.DepotId, dlcDepot.ManifestId, dlcDepot.DepotAppId, false, true));
+          foreach (var dlcDepot in dlcRequiredDepots)
+            if (!disabledDlcIds.Contains(dlcDepot.DepotAppId) && !requiredDepots.Any((d) => d.DepotId == dlcDepot.DepotId))
+              requiredDepots.Add(new RequiredDepot(dlcDepot.DepotId, dlcDepot.ManifestId, dlcDepot.DepotAppId, false, true));
+
+          continue;
+        }
+        catch (DBusException ex)
+        {
+          if (ex.ErrorName == DbusErrors.ContentNotFound)
+          {
+            // Dlc app does not have depots, so just ignore it
+            continue;
+          }
+
+          throw;
+        }
       }
-      else if (!disabledDlcIds.Contains(dlcAppId))
-        requiredDepots.Add(new RequiredDepot(dlcAppId, INVALID_MANIFEST_ID, dlcAppId, false, true));
+
+      requiredDepots.Add(new RequiredDepot(dlcAppId, INVALID_MANIFEST_ID, dlcAppId, false, true));
     }
 
     List<RequiredDepot> validDepotManifestIds = [];
