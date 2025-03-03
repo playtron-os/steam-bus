@@ -502,7 +502,10 @@ public class SteamSession
     // flush callbacks until our disconnected event
     while (!bDidDisconnect)
     {
-      Callbacks.RunWaitAllCallbacks(TimeSpan.FromMilliseconds(100));
+      lock (steamLock)
+      {
+        Callbacks.RunWaitAllCallbacks(TimeSpan.FromMilliseconds(100));
+      }
     }
   }
 
@@ -510,6 +513,7 @@ public class SteamSession
   private void Reconnect()
   {
     bIsConnectionRecovery = true;
+    bExpectingDisconnectRemote = true;
     SteamClient.Disconnect();
   }
 
@@ -640,8 +644,18 @@ public class SteamSession
       }
       catch (TaskCanceledException)
       {
-        Console.WriteLine("Login failure, task cancelled");
-        Abort(false);
+        // [TaskCanceledException] can be thrown from [PollingWaitForResultAsync] even when our token is not cancelled, probably something internal
+        if (abortedToken.IsCancellationRequested)
+        {
+          Console.WriteLine($"Login failure, task cancelled");
+          Abort(false);
+        }
+        else
+        {
+          Console.WriteLine("QR Code polling canceled, reconnect");
+          Reconnect();
+        }
+
         return;
       }
       catch (Exception ex)
@@ -739,7 +753,9 @@ public class SteamSession
     }
     else if (!bAborted)
     {
-      connectionBackoff += 1;
+      // We don't want to back off in case of reconnection
+      if (!bExpectingDisconnectRemote)
+        connectionBackoff += 1;
 
       if (bConnecting)
       {
@@ -747,10 +763,10 @@ public class SteamSession
       }
       else
       {
-        Console.WriteLine("Lost connection to Steam. Reconnecting");
+        Console.WriteLine($"Lost connection to Steam. Reconnecting (#{connectionBackoff})");
       }
 
-      Thread.Sleep(1000 * connectionBackoff);
+      Thread.Sleep(1000);
 
       // Any connection related flags need to be reset here to match the state after Connect
       ResetConnectionFlags();
@@ -800,7 +816,7 @@ public class SteamSession
         Console.Write("Email two-factor code required");
       }
 
-      Console.Write("Retrying Steam3 connection...");
+      Console.WriteLine("Retrying Steam3 connection...");
       Connect();
 
       return;
@@ -808,7 +824,7 @@ public class SteamSession
 
     if (loggedOn.Result == EResult.TryAnotherCM || loggedOn.Result == EResult.AlreadyLoggedInElsewhere)
     {
-      Console.Write("Retrying Steam3 connection (TryAnotherCM)...");
+      Console.WriteLine("Retrying Steam3 connection (TryAnotherCM)...");
 
       Reconnect();
 

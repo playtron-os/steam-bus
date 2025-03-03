@@ -1212,7 +1212,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     if (callback.Result != EResult.OK)
     {
-      if (callback.Result != EResult.AlreadyLoggedInElsewhere)
+      if (!new List<EResult>([EResult.AlreadyLoggedInElsewhere, EResult.TryAnotherCM]).Contains(callback.Result))
       {
         Console.WriteLine("Unable to logon to Steam: {0} / {1}", callback.Result, callback.ExtendedResult);
         OnAuthError?.Invoke(DbusErrors.AuthenticationError);
