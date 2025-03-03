@@ -630,7 +630,7 @@ public class ContentDownloader
       {
         try
         {
-          var dlcRequiredDepots = await GetAppRequiredDepots(dlcAppId, options, log);
+          var dlcRequiredDepots = await GetAppRequiredDepots(dlcAppId, options, forceRefreshDepots, log);
 
           foreach (var dlcDepot in dlcRequiredDepots)
             if (!disabledDlcIds.Contains(dlcDepot.DepotAppId) && !requiredDepots.Any((d) => d.DepotId == dlcDepot.DepotId))
