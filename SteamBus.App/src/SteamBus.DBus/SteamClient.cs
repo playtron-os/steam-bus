@@ -1714,7 +1714,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       var local = analysis.conflictDetails.local;
       var remote = analysis.conflictDetails.remote;
       OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
-      return;
+      throw DbusExceptionHelper.ThrowCloudConflict();
     }
 
     // Collect files that need to be downloaded/restored
@@ -1860,7 +1860,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         var local = analysis.conflictDetails.local;
         var remote = analysis.conflictDetails.remote;
         OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
-        return;
+        throw DbusExceptionHelper.ThrowCloudConflict();
       }
       Console.WriteLine("Focefully uploading files");
     }
