@@ -100,4 +100,9 @@ public static class DbusExceptionHelper
     {
         return new DBusException(DbusErrors.Permission, message);
     }
+
+    public static DBusException ThrowCloudConflict(string message = "Cloud save conflict")
+    {
+        return new DBusException(DbusErrors.CloudConflict, message);
+    }
 }
