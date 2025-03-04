@@ -50,6 +50,9 @@ public class CloudUtils
         }
         foreach (var file in localFiles)
         {
+            if (file.Key.Contains("steam_autocloud.vdf"))
+                continue;
+
             if (!remoteFiles.TryGetValue(file.Key, out var remoteFile))
                 res.changedLocal.Add(file.Value);
             else if (remoteFile.Time < file.Value.UpdateTime)
