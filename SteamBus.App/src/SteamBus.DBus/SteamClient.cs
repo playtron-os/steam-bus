@@ -1668,6 +1668,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     if (ParseAppId(appIdString) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!isOnline) throw DbusExceptionHelper.ThrowNotOnline();
     if (this.session?.steamCloud == null)
     {
       Console.WriteLine("Steam Cloud not initialized");
@@ -1825,10 +1826,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     Console.WriteLine("Download complete");
   }
+
   async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, string platform, bool force, CloudPathObject[] paths)
   {
     if (ParseAppId(appid) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!isOnline) throw DbusExceptionHelper.ThrowNotOnline();
     while (steamClientApp.running)
     {
       await Task.Delay(500);
