@@ -116,6 +116,7 @@ public class InstallOptions
   public string version = "";
   public string os = "";
   public string architecture = "";
+  public bool verify = false;
 }
 
 public enum AppType

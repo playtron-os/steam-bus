@@ -69,6 +69,7 @@ public class AppDownloadOptions
     this.Os = string.IsNullOrEmpty(options.os) ? GetSteamOS() : options.os;
     this.Arch = string.IsNullOrEmpty(options.architecture) ? GetSteamArch() : options.architecture;
     this.Language = string.IsNullOrEmpty(options.language) ? "english" : options.language;
+    this.VerifyAll = options.verify;
     this.LowViolence = false;
     this.IsUgc = false;
     this.InstallDirectory = installDirectory;
