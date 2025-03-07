@@ -873,132 +873,139 @@ public class SteamSession
   // Invoked on login to list the game/app licenses associated with the user.
   private async void OnLicenseList(SteamApps.LicenseListCallback licenseList)
   {
-    bool firstCallback = AppInfo.Count == 0;
-    if (licenseList.Result != EResult.OK)
-    {
-      Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
-      return;
-    }
-    isLoadingLibrary = true;
-    var installedAppIdsToVersion = depotConfigStore.GetAppIdToVersionBranchMap(true);
-
-    Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
-
-    List<uint> packageIds = [];
-    // Parse licenses and associate their access tokens
-    foreach (var license in licenseList.LicenseList)
-    {
-      if ((license.LicenseFlags & ELicenseFlags.Expired) != 0)
-        continue;
-
-      packageIds.Add(license.PackageID);
-      if (license.AccessToken > 0)
-        PackageTokens.TryAdd(license.PackageID, license.AccessToken);
-    }
-    PackageIDs = new ReadOnlyCollection<uint>(packageIds);
-
-    if (SteamUser?.SteamID?.AccountID != null)
-    {
-      libraryCache.SetPackageIDs(SteamUser.SteamID.AccountID, packageIds);
-      libraryCache.Save();
-    }
-
-    ProviderItemMap.Clear();
-
-    Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
-    PackageInfo.Clear();
-    await RequestPackageInfo(packageIds);
-    Console.WriteLine("Got packages");
-
-    var requests = new List<SteamApps.PICSRequest>();
-    var appids = new List<uint>();
-    foreach (var package in PackageInfo.Values)
-    {
-      ulong token = PackageTokens.GetValueOrDefault(package.ID);
-      foreach (var appid in package.KeyValues["appids"].Children)
-      {
-        var appidI = appid.AsUnsignedInteger();
-        if (appids.Contains(appidI)) continue;
-        var req = new SteamApps.PICSRequest(appidI, token);
-        requests.Add(req);
-        appids.Add(appidI);
-      }
-    }
-
-    Console.WriteLine("Making requests for {0} apps", requests.Count);
     try
     {
-      var result = await steamApps!.PICSGetProductInfo(requests, []);
-      if (result == null)
+      bool firstCallback = AppInfo.Count == 0;
+      if (licenseList.Result != EResult.OK)
       {
-        // TODO: Handle error
-        Console.WriteLine("Failed to get apps");
+        Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
         return;
       }
+      isLoadingLibrary = true;
+      var installedAppIdsToVersion = depotConfigStore.GetAppIdToVersionBranchMap(true);
 
-      if (result.Complete)
+      Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
+
+      List<uint> packageIds = [];
+      // Parse licenses and associate their access tokens
+      foreach (var license in licenseList.LicenseList)
       {
-        if (result.Results == null || result.Results.Count == 0)
+        if ((license.LicenseFlags & ELicenseFlags.Expired) != 0)
+          continue;
+
+        packageIds.Add(license.PackageID);
+        if (license.AccessToken > 0)
+          PackageTokens.TryAdd(license.PackageID, license.AccessToken);
+      }
+      PackageIDs = new ReadOnlyCollection<uint>(packageIds);
+
+      if (SteamUser?.SteamID?.AccountID != null)
+      {
+        libraryCache.SetPackageIDs(SteamUser.SteamID.AccountID, packageIds);
+        libraryCache.Save();
+      }
+
+      ProviderItemMap.Clear();
+
+      Console.WriteLine("Requesting info for {0} packages", packageIds.Count);
+      PackageInfo.Clear();
+      await RequestPackageInfo(packageIds);
+      Console.WriteLine("Got packages");
+
+      var requests = new List<SteamApps.PICSRequest>();
+      var appids = new List<uint>();
+      foreach (var package in PackageInfo.Values)
+      {
+        ulong token = PackageTokens.GetValueOrDefault(package.ID);
+        foreach (var appid in package.KeyValues["appids"].Children)
         {
-          Console.WriteLine("No results retrieved");
+          var appidI = appid.AsUnsignedInteger();
+          if (appids.Contains(appidI)) continue;
+          var req = new SteamApps.PICSRequest(appidI, token);
+          requests.Add(req);
+          appids.Add(appidI);
+        }
+      }
+
+      Console.WriteLine("Making requests for {0} apps", requests.Count);
+      try
+      {
+        var result = await steamApps!.PICSGetProductInfo(requests, []);
+        if (result == null)
+        {
+          // TODO: Handle error
+          Console.WriteLine("Failed to get apps");
           return;
         }
 
-        foreach (var productInfo in result.Results)
+        if (result.Complete)
         {
-          foreach (var entry in productInfo.Apps)
+          if (result.Results == null || result.Results.Count == 0)
           {
-            AppInfo[entry.Key] = entry.Value.KeyValues;
-            ProviderItemMap[entry.Key] = GetProviderItem(entry.Key.ToString(), entry.Value.KeyValues);
-            appInfoCache.Save(entry.Key, entry.Value.KeyValues);
+            Console.WriteLine("No results retrieved");
+            return;
+          }
 
-            if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
+          foreach (var productInfo in result.Results)
+          {
+            foreach (var entry in productInfo.Apps)
             {
-              var (version, branch) = item;
-              var newVersion = GetSteam3AppBuildNumber(entry.Key, branch);
+              AppInfo[entry.Key] = entry.Value.KeyValues;
+              ProviderItemMap[entry.Key] = GetProviderItem(entry.Key.ToString(), entry.Value.KeyValues);
+              appInfoCache.Save(entry.Key, entry.Value.KeyValues);
 
-              if (version != newVersion.ToString())
+              if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
               {
-                Console.WriteLine($"Found new version for appid:{entry.Key}, version:{newVersion}, installedVersion:{version}");
+                var (version, branch) = item;
+                var newVersion = GetSteam3AppBuildNumber(entry.Key, branch);
 
-                depotConfigStore.SetUpdatePending(entry.Key, newVersion.ToString());
-                depotConfigStore.Save(entry.Key);
+                if (version != newVersion.ToString())
+                {
+                  Console.WriteLine($"Found new version for appid:{entry.Key}, version:{newVersion}, installedVersion:{version}");
 
-                OnAppNewVersionFound?.Invoke((entry.Key.ToString(), newVersion.ToString()));
+                  depotConfigStore.SetUpdatePending(entry.Key, newVersion.ToString());
+                  depotConfigStore.Save(entry.Key);
+
+                  OnAppNewVersionFound?.Invoke((entry.Key.ToString(), newVersion.ToString()));
+                }
               }
             }
           }
-        }
 
-        if (SteamUser?.SteamID?.AccountID != null)
+          if (SteamUser?.SteamID?.AccountID != null)
+          {
+            libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values.ToList());
+            libraryCache.Save();
+          }
+        }
+        else if (result.Failed)
         {
-          libraryCache.SetApps(SteamUser.SteamID.AccountID, ProviderItemMap.Values.ToList());
-          libraryCache.Save();
+          Console.WriteLine("Some requests failed");
         }
       }
-      else if (result.Failed)
+      catch (Exception exception)
       {
-        Console.WriteLine("Some requests failed");
+        Console.Error.WriteLine($"Error when getting product list for licenses, ex: {exception.Message}", exception);
       }
-    }
-    catch (Exception exception)
-    {
-      Console.Error.WriteLine($"Error when getting product list for licenses, ex: {exception.Message}", exception);
-    }
-    Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
-    isLoadingLibrary = false;
+      Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
+      isLoadingLibrary = false;
 
-    if (!firstCallback)
-    {
-      List<ProviderItem> updatedItems = new(appids.Count);
-      foreach (var id in appids)
-        if (ProviderItemMap.TryGetValue(id, out var providerItem))
-          updatedItems.Add(providerItem);
-      OnLibraryUpdated?.Invoke(updatedItems.ToArray());
-    }
+      if (!firstCallback)
+      {
+        List<ProviderItem> updatedItems = new(appids.Count);
+        foreach (var id in appids)
+          if (ProviderItemMap.TryGetValue(id, out var providerItem))
+            updatedItems.Add(providerItem);
+        OnLibraryUpdated?.Invoke(updatedItems.ToArray());
+      }
 
-    await VerifyDownloadedApps();
-    await ImportSteamClientApps();
+      await VerifyDownloadedApps();
+      await ImportSteamClientApps();
+    }
+    catch (TaskCanceledException)
+    {
+      Console.Error.WriteLine("Task cancelled when loading library");
+    }
   }
 
   // Invoked shortly after login to provide account information
@@ -1231,6 +1238,8 @@ public class SteamSession
 
     if (hasChange)
       InstalledAppsUpdated?.Invoke();
+
+    Console.WriteLine("Verifed downloaded apps");
   }
 
   public async Task<bool> VerifyDownloadedApp(ContentDownloader downloader, InstallOptionsExtended installedApp)
