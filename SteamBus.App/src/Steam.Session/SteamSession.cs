@@ -868,6 +868,7 @@ public class SteamSession
     }
   }
 
+  public bool IsAppOwned(uint appId) => ProviderItemMap.ContainsKey(appId);
 
   // Invoked on login to list the game/app licenses associated with the user.
   private async void OnLicenseList(SteamApps.LicenseListCallback licenseList)
@@ -1234,6 +1235,9 @@ public class SteamSession
 
   public async Task<bool> VerifyDownloadedApp(ContentDownloader downloader, InstallOptionsExtended installedApp)
   {
+    if (DBusSteamClient.fetchingSteamClientData != null) await DBusSteamClient.fetchingSteamClientData.Task;
+    if (isLoadingLibrary) await WaitForLibrary();
+
     try
     {
       var newestVersion = GetSteam3AppBuildNumber(installedApp.appId, installedApp.branch).ToString();
