@@ -97,8 +97,15 @@ class SteamBus
       {
         if (drive.NeedsFormatting) continue;
 
-        Console.WriteLine($"Verifying drive {drive.Name} is in library config");
-        libraryConfig.AddDiskEntry(Regex.Unescape(drive.Path));
+        try
+        {
+          Console.WriteLine($"Verifying drive {drive.Name} is in library config");
+          libraryConfig.AddDiskEntry(Regex.Unescape(drive.Path));
+        }
+        catch (Exception err)
+        {
+          Console.Error.WriteLine($"Error adding drive to library, err:{err}");
+        }
       }
       libraryConfig.Save();
 

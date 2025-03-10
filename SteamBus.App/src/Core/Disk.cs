@@ -4,8 +4,11 @@ using System.Threading.Tasks;
 using Steam.Config;
 using SteamKit2;
 
-static class Disk
+static partial class Disk
 {
+    [GeneratedRegex(@"^(\/dev\/[\w\d]+p?\d*) on (\/[^\(]+) type")]
+    private static partial Regex MountDriveRegex();
+
     public static string _homeDrive = "";
 
     public static bool IsMountPointMainDisk(string mountPoint)
@@ -13,14 +16,14 @@ static class Disk
         return mountPoint == "/" || mountPoint.StartsWith("/home") || mountPoint.StartsWith("/var/home");
     }
 
-    static async Task<string> RunDf(string arg)
+    public static async Task<string> GetMountPath(string? driveName = null)
     {
         try
         {
             ProcessStartInfo psi = new ProcessStartInfo
             {
                 FileName = "/bin/bash",
-                Arguments = $"-c \"df {arg}\"",
+                Arguments = "-c \"mount\"",
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
@@ -33,72 +36,57 @@ static class Disk
             string output = await reader.ReadToEndAsync();
             await process.WaitForExitAsync();
 
-            return output;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error running df: {ex.Message}");
-        }
+            string[] lines = output.Split('\n');
 
-        return string.Empty;
-    }
-
-    static async Task<string> GetHomeDrive()
-    {
-        if (string.IsNullOrEmpty(_homeDrive))
-        {
-            var output = await RunDf(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
-            string[] lines = output.Split('\n').Skip(1).ToArray();
+            string bestMatch = string.Empty;
+            int bestScore = -1;
 
             foreach (string line in lines)
             {
-                string[] parts = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 6)
-                    continue;
+                Match match = MountDriveRegex().Match(line);
+                if (!match.Success) continue;
 
-                _homeDrive = parts[0];
-                break;
-            }
-        }
+                string device = match.Groups[1].Value;
+                string mountPoint = match.Groups[2].Value.Trim(); // Remove trailing spaces
 
-        return _homeDrive;
-    }
-
-    public static async Task<string> GetMountPath(string? driveName = null)
-    {
-        var homePath = Regex.Unescape(Environment.GetEnvironmentVariable("HOME") ?? string.Empty);
-        if (driveName == null) return homePath;
-
-        var homeDrive = await GetHomeDrive();
-        if (homeDrive == driveName) return homePath;
-
-        try
-        {
-            var output = await RunDf(driveName);
-            string[] lines = output.Split('\n').Skip(1).ToArray();
-
-            foreach (string line in lines)
-            {
-                string[] parts = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 6)
-                    continue;
-                var path = string.Join(" ", parts[5..]);
-
-                var condition = driveName == null ? IsMountPointMainDisk(path) : line.StartsWith(driveName);
-
-                if (condition)
+                if (driveName == null)
                 {
-                    if (IsMountPointMainDisk(path)) return homePath;
-                    return Regex.Unescape(path);
+                    // If no specific drive is requested, return the most relevant home-related mount
+                    if (IsMountPointMainDisk(mountPoint))
+                    {
+                        return mountPoint;
+                    }
+                }
+                else if (device == driveName)
+                {
+                    // Score the mount point based on priority
+                    int score = GetMountPointScore(mountPoint);
+
+                    // Pick the best match with the highest score
+                    if (score > bestScore)
+                    {
+                        bestMatch = mountPoint;
+                        bestScore = score;
+                    }
                 }
             }
+
+            return bestMatch;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error: {ex.Message}");
+            Console.WriteLine($"Error running mount: {ex.Message}");
         }
 
         return string.Empty;
+    }
+
+    private static int GetMountPointScore(string mountPoint)
+    {
+        if (mountPoint.StartsWith("/var/home")) return 3;
+        if (mountPoint.StartsWith("/home")) return 2;
+        if (mountPoint.StartsWith("/var")) return 1;
+        return 0;
     }
 
     public static async Task<string> GetInstallRootFromDevice(string device, string folderName)
@@ -106,7 +94,10 @@ static class Disk
         // Get mount point
         var mountPoint = await GetMountPath(device);
         if (string.IsNullOrEmpty(mountPoint))
+        {
+            Console.Error.WriteLine($"Mount path not found for drive:{device}");
             throw DbusExceptionHelper.ThrowDiskNotFound();
+        }
 
         return await GetInstallRoot(mountPoint, folderName);
     }
@@ -116,7 +107,10 @@ static class Disk
         // Get mount point
         var mountPoint = await GetMountPath();
         if (string.IsNullOrEmpty(mountPoint))
+        {
+            Console.Error.WriteLine($"Mount path not found for home drive");
             throw DbusExceptionHelper.ThrowDiskNotFound();
+        }
 
         return await GetInstallRoot(mountPoint, folderName);
     }
