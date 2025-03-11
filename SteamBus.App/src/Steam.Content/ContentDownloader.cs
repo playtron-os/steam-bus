@@ -55,6 +55,7 @@ public class ContentDownloader
   private DepotConfigStore depotConfigStore;
   private static CDNClientPool? cdnPool;
   private AppDownloadOptions? options;
+  private Task? currentDownloadTask;
 
   private event Action<InstallStartedDescription>? OnInstallStarted;
   private event Action<InstallProgressedDescription>? OnInstallProgressed;
@@ -183,6 +184,19 @@ public class ContentDownloader
   {
     this.session = steamSession;
     this.depotConfigStore = depotConfigStore;
+
+    AppDomain.CurrentDomain.ProcessExit += OnMainProcessExit;
+    Console.CancelKeyPress += (sender, e) =>
+    {
+      e.Cancel = true;
+      OnMainProcessExit(sender, e);
+    };
+  }
+
+  private void OnMainProcessExit(object? sender, EventArgs e)
+  {
+    cdnPool?.ExhaustedToken?.Cancel();
+    currentDownloadTask?.Wait();
   }
 
   public static async Task PauseInstall()
@@ -324,167 +338,181 @@ public class ContentDownloader
       return;
     }
 
-    try
+    currentDownloadTask = Task.Run(async () =>
     {
-      var installedApp = depotConfigStore.GetInstalledAppInfo(appId);
-
-      if (installedApp != null)
-      {
-        options.InstallDirectory = installedApp.Value.Info.InstalledPath;
-
-        if (string.IsNullOrEmpty(options.Os))
-          options.Os = installedApp?.Info.Os ?? "";
-      }
-
-      var currentOs = GetSteamOS();
-      var os = options.Os ?? currentOs;
-
-      Console.WriteLine($"Installing app to {options.InstallDirectory} with os: {os}");
-
-      // Set the platform override so steam client won't detect an update when analyzing the game
-      var userCompatConfig = new UserCompatConfig(UserCompatConfig.DefaultPath(this.session.SteamUser!.SteamID!.AccountID));
-      userCompatConfig.SetPlatformOverride(appId, currentOs, os);
-      userCompatConfig.Save();
-
-      // Force compat tool
-      var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
-      if (os == "windows" && os != currentOs)
-        globalConfig.SetProton9CompatForApp(appId);
-      else
-        globalConfig.RemoveCompatForApp(appId);
-      globalConfig.Save();
-
-      this.options = options;
-      await Client.DetectLancacheServerAsync();
-      if (Client.UseLancacheServer)
-      {
-        Console.WriteLine("Using LanCache server for downloads");
-      }
-      cdnPool = new CDNClientPool(this.session.SteamClient, appId, onInstallFailed);
-      var cts = new CancellationTokenSource();
-      cdnPool!.ExhaustedToken = cts;
-
-      currentDownload = new TaskCompletionSource();
-
-      // Keep track of signal handlers
-      this.OnInstallStarted = onInstallStarted;
-      this.OnInstallProgressed = onInstallProgressed;
-      this.OnInstallCompleted = onInstallCompleted;
-      this.OnInstallFailed = onInstallFailed;
-
-      var branch = options.Branch;
-      var arch = options.Arch;
-      var language = options.Language;
-      var lv = options.LowViolence;
-      var isUgc = options.IsUgc;
-
-      await this.session.RequestAppInfo(appId);
-
-      if (!await AccountHasAccess(appId))
-      {
-        if (await this.session.RequestFreeAppLicense(appId))
-        {
-          Console.WriteLine("Obtained FreeOnDemand license for app {0}", appId);
-
-          // Fetch app info again in case we didn't get it fully without a license.
-          await this.session.RequestAppInfo(appId, true);
-        }
-        else
-        {
-          var contentName = GetAppName(appId);
-          Console.Error.WriteLine(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
-          throw DbusExceptionHelper.ThrowAppNotOwned();
-        }
-      }
-
-      var requiredDepots = await GetAppRequiredDepots(appId, options);
-      var requiresInternetConnection = session.GetSteam3AppRequiresInternetConnection(appId);
-      var version = session.GetSteam3AppBuildNumber(appId, options.Branch);
-      Console.WriteLine($"Downloading version {version}");
-
-      var infos = new List<DepotDownloadInfo>();
-      var steamId = session.SteamUser?.SteamID?.ConvertToUInt64();
-      var sharedApps = new List<(uint AppId, string installDir)>();
-
-      foreach (var requiredDepot in requiredDepots)
-      {
-        Console.WriteLine($"Getting info for depotId:{requiredDepot.DepotId}, depotAppId:{requiredDepot.DepotAppId}");
-        var info = await GetDepotInfo(requiredDepot, branch, options.InstallDirectory);
-        if (info != null)
-        {
-          Console.WriteLine($"Downloading depotId:{requiredDepot.DepotId}, manifestId:{requiredDepot.ManifestId}");
-          infos.Add(info);
-
-          if (info.IsSharedDepot && !sharedApps.Any((s) => s.AppId == info.AppId))
-          {
-            sharedApps.Add((info.AppId, info.InstallDir));
-            depotConfigStore.EnsureEntryExists(info.InstallDir, info.AppId, GetAppName(info.AppId));
-            depotConfigStore.SetNewVersion(info.AppId, info.Version, info.Branch, language ?? "", "", steamId.ToString());
-          }
-        }
-      }
+      bool wasAppInstalled = false;
 
       try
       {
-        var installStartedData = new InstallStartedDescription
+        var installedApp = depotConfigStore.GetInstalledAppInfo(appId);
+
+        if (installedApp != null)
         {
-          AppId = appId.ToString(),
-          Version = version.ToString(),
-          InstallDirectory = options.InstallDirectory,
-          RequiresInternetConnection = requiresInternetConnection,
-          Os = os,
-        };
+          wasAppInstalled = !installedApp.Value.Info.UpdatePending &&
+            (string.IsNullOrEmpty(installedApp.Value.Info.LatestVersion) || installedApp.Value.Info.Version == installedApp.Value.Info.LatestVersion);
+          options.InstallDirectory = installedApp.Value.Info.InstalledPath;
 
-        depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
-        depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", os, steamId.ToString());
-
-        await DownloadSteam3Async(appId, infos, cts, installStartedData).ConfigureAwait(false);
-        onInstallCompleted?.Invoke(appId.ToString());
-
-        depotConfigStore.SetDownloadStage(appId, null);
-        depotConfigStore.UpdateAppSizeOnDisk(appId, await Disk.GetFolderSizeWithDu(installStartedData.InstallDirectory));
-        depotConfigStore.Save(appId);
-
-        foreach (var sharedApp in sharedApps)
-        {
-          depotConfigStore.UpdateAppSizeOnDisk(sharedApp.AppId, await Disk.GetFolderSizeWithDu(sharedApp.installDir));
-          depotConfigStore.Save(sharedApp.AppId);
+          if (string.IsNullOrEmpty(options.Os))
+            options.Os = installedApp?.Info.Os ?? "";
         }
+
+        var currentOs = GetSteamOS();
+        var os = options.Os ?? currentOs;
+
+        Console.WriteLine($"Installing app to {options.InstallDirectory} with os: {os}");
+
+        // Set the platform override so steam client won't detect an update when analyzing the game
+        var userCompatConfig = new UserCompatConfig(UserCompatConfig.DefaultPath(this.session.SteamUser!.SteamID!.AccountID));
+        userCompatConfig.SetPlatformOverride(appId, currentOs, os);
+        userCompatConfig.Save();
+
+        // Force compat tool
+        var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
+        if (os == "windows" && os != currentOs)
+          globalConfig.SetProton9CompatForApp(appId);
+        else
+          globalConfig.RemoveCompatForApp(appId);
+        globalConfig.Save();
+
+        this.options = options;
+        await Client.DetectLancacheServerAsync();
+        if (Client.UseLancacheServer)
+        {
+          Console.WriteLine("Using LanCache server for downloads");
+        }
+        cdnPool = new CDNClientPool(this.session.SteamClient, appId, onInstallFailed);
+        var cts = new CancellationTokenSource();
+        cdnPool!.ExhaustedToken = cts;
+
+        currentDownload = new TaskCompletionSource();
+
+        // Keep track of signal handlers
+        this.OnInstallStarted = onInstallStarted;
+        this.OnInstallProgressed = onInstallProgressed;
+        this.OnInstallCompleted = onInstallCompleted;
+        this.OnInstallFailed = onInstallFailed;
+
+        var branch = options.Branch;
+        var arch = options.Arch;
+        var language = options.Language;
+        var lv = options.LowViolence;
+        var isUgc = options.IsUgc;
+
+        await this.session.RequestAppInfo(appId);
+
+        if (!await AccountHasAccess(appId))
+        {
+          if (await this.session.RequestFreeAppLicense(appId))
+          {
+            Console.WriteLine("Obtained FreeOnDemand license for app {0}", appId);
+
+            // Fetch app info again in case we didn't get it fully without a license.
+            await this.session.RequestAppInfo(appId, true);
+          }
+          else
+          {
+            var contentName = GetAppName(appId);
+            Console.Error.WriteLine(string.Format("App {0} ({1}) is not available from this account.", appId, contentName));
+            throw DbusExceptionHelper.ThrowAppNotOwned();
+          }
+        }
+
+        var requiredDepots = await GetAppRequiredDepots(appId, options);
+        var requiresInternetConnection = session.GetSteam3AppRequiresInternetConnection(appId);
+        var version = session.GetSteam3AppBuildNumber(appId, options.Branch);
+        Console.WriteLine($"Downloading version {version}");
+
+        var infos = new List<DepotDownloadInfo>();
+        var steamId = session.SteamUser?.SteamID?.ConvertToUInt64();
+        var sharedApps = new List<(uint AppId, string installDir)>();
+
+        foreach (var requiredDepot in requiredDepots)
+        {
+          Console.WriteLine($"Getting info for depotId:{requiredDepot.DepotId}, depotAppId:{requiredDepot.DepotAppId}");
+          var info = await GetDepotInfo(requiredDepot, branch, options.InstallDirectory);
+          if (info != null)
+          {
+            Console.WriteLine($"Downloading depotId:{requiredDepot.DepotId}, manifestId:{requiredDepot.ManifestId}");
+            infos.Add(info);
+
+            if (info.IsSharedDepot && !sharedApps.Any((s) => s.AppId == info.AppId))
+            {
+              sharedApps.Add((info.AppId, info.InstallDir));
+              depotConfigStore.EnsureEntryExists(info.InstallDir, info.AppId, GetAppName(info.AppId));
+              depotConfigStore.SetNewVersion(info.AppId, info.Version, info.Branch, language ?? "", "", steamId.ToString());
+            }
+          }
+        }
+
+        try
+        {
+          var installStartedData = new InstallStartedDescription
+          {
+            AppId = appId.ToString(),
+            Version = version.ToString(),
+            InstallDirectory = options.InstallDirectory,
+            RequiresInternetConnection = requiresInternetConnection,
+            Os = os,
+          };
+
+          depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
+          depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", os, steamId.ToString());
+
+          await DownloadSteam3Async(appId, requiredDepots, infos, cts, installStartedData).ConfigureAwait(false);
+          await depotConfigStore.FininishDownloadAndSave(appId);
+
+          foreach (var sharedApp in sharedApps)
+          {
+            depotConfigStore.UpdateAppSizeOnDisk(sharedApp.AppId, await Disk.GetFolderSizeWithDu(sharedApp.installDir));
+            depotConfigStore.Save(sharedApp.AppId);
+          }
+
+          onInstallCompleted?.Invoke(appId.ToString());
+        }
+        catch (OperationCanceledException)
+        {
+          Console.WriteLine("App {0} download has been cancelled.", appId);
+          throw;
+        }
+
+        Console.WriteLine($"Finished download task for app: {appId}");
+
+        cdnPool = null;
+      }
+      catch (DBusException exception)
+      {
+        Console.WriteLine($"Finished download task for app: {appId} with DBUS exception: {exception}");
+        cdnPool = null;
+        onInstallFailed?.Invoke((appId.ToString(), exception.ErrorName));
+        throw;
       }
       catch (OperationCanceledException)
       {
-        Console.WriteLine("App {0} download has been cancelled.", appId);
+        cdnPool = null;
         throw;
       }
+      catch (Exception exception)
+      {
+        Console.WriteLine($"Finished download task for app: {appId} with exception: {exception}");
+        cdnPool = null;
+        onInstallFailed?.Invoke((appId.ToString(), DbusErrors.DownloadFailed));
+        throw;
+      }
+      finally
+      {
+        currentDownload?.TrySetResult();
+        currentDownload = null;
 
-      Console.WriteLine($"Finished download task for app: {appId}");
+        if (wasAppInstalled && options.VerifyAll)
+        {
+          Console.WriteLine("Reverting app status after verifying it");
+          await depotConfigStore.FininishDownloadAndSave(appId);
+          OnInstallCompleted?.Invoke(appId.ToString());
+        }
 
-      cdnPool = null;
-    }
-    catch (DBusException exception)
-    {
-      Console.WriteLine($"Finished download task for app: {appId} with DBUS exception: {exception}");
-      cdnPool = null;
-      onInstallFailed?.Invoke((appId.ToString(), exception.ErrorName));
-      throw;
-    }
-    catch (OperationCanceledException)
-    {
-      cdnPool = null;
-      throw;
-    }
-    catch (Exception exception)
-    {
-      Console.WriteLine($"Finished download task for app: {appId} with exception: {exception}");
-      cdnPool = null;
-      onInstallFailed?.Invoke((appId.ToString(), DbusErrors.DownloadFailed));
-      throw;
-    }
-    finally
-    {
-      currentDownload?.TrySetResult();
-      currentDownload = null;
-    }
+        currentDownloadTask = null;
+      }
+    });
   }
 
   public async Task<List<RequiredDepot>> GetAppRequiredDepots(uint appId, AppDownloadOptions options, bool forceRefreshDepots = true, bool log = true)
@@ -756,28 +784,46 @@ public class ContentDownloader
 
   async Task<DepotDownloadInfo?> GetDepotInfo(RequiredDepot requiredDepot, string branch, string baseInstallPath)
   {
-    if (requiredDepot.IsSharedDepot)
+    try
     {
-      var folderName = await GetAppInstallDir(requiredDepot.DepotAppId);
-      baseInstallPath = await Disk.GetInstallRoot(folderName);
-    }
+      if (requiredDepot.IsSharedDepot)
+      {
+        var folderName = await GetAppInstallDir(requiredDepot.DepotAppId);
+        baseInstallPath = await Disk.GetInstallRoot(folderName);
+      }
 
-    await this.session.RequestDepotKey(requiredDepot.DepotId, requiredDepot.DepotAppId);
-    if (!this.session.DepotKeys.TryGetValue(requiredDepot.DepotId, out var depotKey))
+      try
+      {
+        await this.session.RequestDepotKey(requiredDepot.DepotId, requiredDepot.DepotAppId);
+      }
+      catch (OperationCanceledException)
+      {
+        Console.WriteLine($"Retrying request of depot key for depotId:{requiredDepot.DepotId}");
+        // Try a second time in case it failed due to task cancelling
+        await this.session.RequestDepotKey(requiredDepot.DepotId, requiredDepot.DepotAppId);
+      }
+
+      if (!this.session.DepotKeys.TryGetValue(requiredDepot.DepotId, out var depotKey))
+      {
+        Console.WriteLine("No valid depot key for {0}, unable to download.", requiredDepot.DepotId);
+        return null;
+      }
+
+      var uVersion = session.GetSteam3AppBuildNumber(requiredDepot.DepotAppId, branch);
+
+      if (!CreateDirectories(requiredDepot.DepotId, uVersion, out var installDir, baseInstallPath))
+      {
+        Console.WriteLine("Error: Unable to create install directories!");
+        return null;
+      }
+
+      return new DepotDownloadInfo(requiredDepot, branch, uVersion, installDir, depotKey);
+    }
+    catch (Exception ex)
     {
-      Console.WriteLine("No valid depot key for {0}, unable to download.", requiredDepot.DepotId);
-      return null;
+      Console.Error.WriteLine($"Error during request of depot key for depot:{requiredDepot.DepotId}, appId:{requiredDepot.DepotAppId}, ex:{ex}");
+      throw;
     }
-
-    var uVersion = session.GetSteam3AppBuildNumber(requiredDepot.DepotAppId, branch);
-
-    if (!CreateDirectories(requiredDepot.DepotId, uVersion, out var installDir, baseInstallPath))
-    {
-      Console.WriteLine("Error: Unable to create install directories!");
-      return null;
-    }
-
-    return new DepotDownloadInfo(requiredDepot, branch, uVersion, installDir, depotKey);
   }
 
 
@@ -875,7 +921,7 @@ public class ContentDownloader
   }
 
 
-  private async Task DownloadSteam3Async(uint appId, List<DepotDownloadInfo> depots, CancellationTokenSource cts, InstallStartedDescription installStartedData)
+  private async Task DownloadSteam3Async(uint appId, List<RequiredDepot> allRequiredDepots, List<DepotDownloadInfo> depots, CancellationTokenSource cts, InstallStartedDescription installStartedData)
   {
     if (this.options is null || cdnPool is null)
     {
@@ -902,7 +948,7 @@ public class ContentDownloader
       if (args.PropertyName == nameof(GlobalDownloadCounter.sizeDownloaded))
         stage = DownloadStage.Downloading;
       else if (args.PropertyName == nameof(GlobalDownloadCounter.sizeAllocated) || args.PropertyName == nameof(GlobalDownloadCounter.completeDownloadSize))
-        stage = DownloadStage.Preallocating;
+        stage = options?.VerifyAll == true ? DownloadStage.Verifying : DownloadStage.Preallocating;
 
       if (stage != null)
       {
@@ -910,7 +956,7 @@ public class ContentDownloader
 
         if (counter.completeDownloadSize > 0)
         {
-          var size = stage == DownloadStage.Preallocating ? counter.sizeAllocated : counter.sizeDownloaded;
+          var size = stage == DownloadStage.Preallocating || stage == DownloadStage.Verifying ? counter.sizeAllocated : counter.sizeDownloaded;
           var progress = size / (float)counter.completeDownloadSize * 100.0f;
 
           this.OnInstallProgressed?.Invoke(new InstallProgressedDescription
@@ -949,7 +995,7 @@ public class ContentDownloader
     foreach (var depot in depots)
     {
       var oldDepot = oldDepots.FirstOrDefault((oldDepot) => oldDepot.DepotId == depot.DepotId && oldDepot.ManifestId == depot.ManifestId);
-      if (oldDepot.ManifestId != 0)
+      if (!this.options.VerifyAll && oldDepot.ManifestId != 0)
       {
         downloadCounter.sizeDownloaded += oldDepot.ManifestSize;
         downloadCounter.completeDownloadSize += oldDepot.ManifestSize;
@@ -995,7 +1041,7 @@ public class ContentDownloader
     foreach (var (oldDepotId, oldManifestId, _) in oldDepots)
     {
       // If it is a depot that should be downloaded, skip clean up
-      if (oldManifestId == INVALID_MANIFEST_ID || depots.Any((d) => d.DepotId == oldDepotId && d.ManifestId == oldManifestId))
+      if (oldManifestId == INVALID_MANIFEST_ID || allRequiredDepots.Any((d) => d.DepotId == oldDepotId && d.ManifestId == oldManifestId))
         continue;
 
       var requiredDepot = new RequiredDepot(oldDepotId, oldManifestId, appId);
@@ -2035,6 +2081,45 @@ public class ContentDownloader
     {
       return false; // Return false if an error occurs
     }
+  }
+
+  public static async Task<List<T>> InvokeAsync<T>(IEnumerable<Func<Task<T?>>> taskFactories, int maxDegreeOfParallelism)
+  {
+    ArgumentNullException.ThrowIfNull(taskFactories);
+    ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maxDegreeOfParallelism, 0);
+
+    var queue = taskFactories.ToArray();
+
+    if (queue.Length == 0)
+    {
+      return [];
+    }
+
+    var tasksInFlight = new List<Task<T?>>(maxDegreeOfParallelism);
+    var result = new List<T?>();
+    var index = 0;
+
+    do
+    {
+      while (tasksInFlight.Count < maxDegreeOfParallelism && index < queue.Length)
+      {
+        var taskFactory = queue[index++];
+
+        tasksInFlight.Add(taskFactory());
+      }
+
+      var completedTask = await Task.WhenAny(tasksInFlight).ConfigureAwait(false);
+
+      await completedTask.ConfigureAwait(false);
+
+      tasksInFlight.Remove(completedTask);
+
+      if (completedTask != null)
+        result.Add(completedTask.Result);
+
+    } while (index < queue.Length || tasksInFlight.Count != 0);
+
+    return result.Where((x) => x != null)!.ToList<T>();
   }
 
   public static async Task InvokeAsync(IEnumerable<Func<Task>> taskFactories, int maxDegreeOfParallelism)

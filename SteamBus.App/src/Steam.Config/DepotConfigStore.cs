@@ -1120,6 +1120,17 @@ public class DepotConfigStore
         return data[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString()?.Split(",").Select(uint.Parse).ToList() ?? [];
     }
 
+    public async Task FininishDownloadAndSave(uint appId)
+    {
+        var installDir = GetInstallDirectory(appId);
+        if (installDir == null) return;
+
+        SetNotUpdatePending(appId);
+        SetDownloadStage(appId, null);
+        UpdateAppSizeOnDisk(appId, await Disk.GetFolderSizeWithDu(installDir));
+        Save(appId);
+    }
+
     private string GetOS(uint appId)
     {
         var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
