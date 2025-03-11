@@ -489,6 +489,9 @@ public class ContentDownloader
 
   public async Task<List<RequiredDepot>> GetAppRequiredDepots(uint appId, AppDownloadOptions options, bool forceRefreshDepots = true, bool log = true)
   {
+    if (!session.IsAppOwned(appId))
+      return [];
+
     await this.session.RequestAppInfo(appId);
 
     var os = options.Os ?? GetSteamOS();
@@ -596,6 +599,9 @@ public class ContentDownloader
             if (!disabledDlcIds.Contains(dlcAppId))
             {
               var isDlc = dlcAppId != 0;
+              if (isDlc && !session.IsAppOwned(dlcAppId))
+                continue;
+
               requiredDepots.Add(new RequiredDepot(id, INVALID_MANIFEST_ID, depotFromApp == 0 ? appId : depotFromApp, false, isDlc));
             }
           }
