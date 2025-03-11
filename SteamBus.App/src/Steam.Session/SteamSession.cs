@@ -67,6 +67,7 @@ public class SteamSession
   QrAuthSession? qrAuthSession;
   public Action<string>? OnNewQrCode;
   public Action<ProviderItem[]>? OnLibraryUpdated;
+  public Action? OnTokensChanged;
   readonly CancellationTokenSource abortedToken = new();
 
   // input
@@ -509,8 +510,14 @@ public class SteamSession
     }
   }
 
+  public void Reconnect(string accessToken, string steamGuardToken)
+  {
+    logonDetails.AccessToken = accessToken;
+    this.SteamGuardData = steamGuardToken;
+    Reconnect();
+  }
 
-  private void Reconnect()
+  void Reconnect()
   {
     bIsConnectionRecovery = true;
     bExpectingDisconnectRemote = true;
@@ -865,6 +872,8 @@ public class SteamSession
       var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
       globalConfig.SetSteamUser(logonDetails.Username, SteamUser.SteamID.ConvertToUInt64().ToString());
       globalConfig.Save();
+
+      OnTokensChanged?.Invoke();
     }
   }
 

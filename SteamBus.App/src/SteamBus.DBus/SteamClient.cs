@@ -221,9 +221,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
       await this.session.Login();
       if (this.session.IsLoggedOn)
-      {
-        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
-      }
+        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status", "Tokens"]));
     }
   }
 
@@ -934,6 +932,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
     var session = new SteamSession(login, depotConfigStore, steamGuardData, this);
+    session.OnTokensChanged = OnTokensChanged;
     session.OnLibraryUpdated = OnLibraryUpdated;
     session.OnAppNewVersionFound = OnAppNewVersionFound;
     session.InstalledAppsUpdated = InstalledAppsUpdated;
@@ -1029,6 +1028,58 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return SignalWatcher.AddAsync(this, nameof(OnQrCodeUpdated), handler);
   }
 
+  void OnTokensChanged()
+  {
+    OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Tokens"]));
+  }
+
+  async Task<bool> IUser.ChangeUserFromTokensAsync(string userId, string accessToken, string refreshToken)
+  {
+    if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(accessToken) || Jwt.IsExpired(accessToken))
+      throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
+
+    if (this.session != null)
+    {
+      var currentDetails = this.session.GetLogonDetails();
+
+      if (this.session.IsLoggedOn && currentDetails.AccessToken != null && currentDetails.Username?.ToLower() == userId.ToLower())
+      {
+        Console.WriteLine("User already logged in");
+        return true;
+      }
+
+      session.Disconnect();
+    }
+
+    var res = GetCachedAuth(userId);
+    var login = res?.LoginDetails ?? new SteamUser.LogOnDetails();
+    login.Username = userId;
+    login.LoginID = this.loginId;
+    login.Password = null;
+    login.AccessToken = accessToken;
+    login.ShouldRememberPassword = true;
+    var steamID = new SteamID(ulong.Parse(Jwt.GetSub(accessToken)!));
+    login.AccountID = steamID.AccountID;
+
+    this.session = InitSession(login, refreshToken);
+
+    if (isOnline)
+    {
+      await this.session.Login();
+      if (this.session.IsLoggedOn)
+        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+
+      return this.session.IsLoggedOn;
+    }
+
+    Console.WriteLine("No internet connection when changing user, skipping login");
+    this.session.IsPendingLogin = true;
+    OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+
+    return true;
+  }
+
   async Task<bool> IUser.ChangeUserAsync(string user_id)
   {
     // If the same user is logged in just skip this.
@@ -1041,43 +1092,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       }
     }
     // Configure the user/pass for the session
-    var login = new SteamUser.LogOnDetails();
-    login.Username = user_id;
-    login.LoginID = this.loginId;
-    string? steamGuardData;
-    try
-    {
-      Console.WriteLine("Checking {0} for exisiting auth session", authFile);
-      string authFileJson = File.ReadAllText(authFile);
-      Dictionary<string, SteamAuthSession>? authSessions = JsonSerializer.Deserialize<Dictionary<string, SteamAuthSession>>(authFileJson);
+    var res = GetCachedAuth(user_id);
+    var login = res?.LoginDetails;
+    var steamGuardData = res?.SteamGuardData;
+    if (login == null) return false;
 
-      // If a session exists for this user, set the previously stored guard data from it
-      if (authSessions != null && authSessions!.ContainsKey(user_id.ToLower()))
-      {
-        Console.WriteLine("Found saved auth session for user: {0}", user_id);
-        // Get the session data
-        var authSession = authSessions![user_id.ToLower()];
-        //this.accountName = authSession.accountName;
-        //this.previouslyStoredGuardData = authSession.steamGuard;
-        //this.refreshToken = authSession.refreshToken;
-        //this.accessToken = authSession.accessToken;
-
-        login.Password = null;
-        login.AccessToken = authSession.refreshToken;
-        login.ShouldRememberPassword = true;
-        login.AccountID = authSession.accountId;
-        steamGuardData = authSession.steamGuard;
-      }
-      else
-      {
-        return false;
-      }
-    }
-    catch (Exception e)
-    {
-      Console.WriteLine("Failed to open auth.json for stored auth sessions: {0}", e);
-      return false;
-    }
     needsDeviceConfirmation = false;
     this.session?.Disconnect();
     this.session = InitSession(login, steamGuardData);
@@ -1086,7 +1105,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       await this.session.Login();
       if (this.session.IsLoggedOn)
-        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status", "Tokens"]));
 
       return this.session.IsLoggedOn;
     }
@@ -1131,11 +1150,13 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var properties = new UserProperties();
     if (this.session != null)
     {
-      var username = this.session.GetLogonDetails().Username;
+      var details = this.session.GetLogonDetails();
+      var username = details.Username;
       properties.Avatar = this.session.AvatarUrl;
       properties.Username = this.session.PersonaName;
       properties.Identifier = username is null ? "" : username;
       properties.Status = GetCurrentAuthStatus();
+      properties.Tokens = (details.AccessToken ?? "", this.session.GetSteamGuardData() ?? "");
     }
     return Task.FromResult(properties);
   }
@@ -1155,6 +1176,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         return Task.FromResult(user);
       case "Status":
         return Task.FromResult((object)GetCurrentAuthStatus());
+      case "Tokens":
+        return Task.FromResult((object)(this.session?.GetLogonDetails().AccessToken ?? "", this.session?.GetSteamGuardData() ?? ""));
       default:
         throw new NotImplementedException($"Invalid property: {prop}");
     }
@@ -1998,5 +2021,44 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       autocloud.SaveToFileWithAtomicRename(path);
     }
     Console.WriteLine("Upload complete");
+  }
+
+  private (SteamUser.LogOnDetails LoginDetails, string SteamGuardData)? GetCachedAuth(string userId)
+  {
+    var login = new SteamUser.LogOnDetails();
+    login.Username = userId;
+    login.LoginID = this.loginId;
+    string? steamGuardData;
+    try
+    {
+      Console.WriteLine("Checking {0} for exisiting auth session", authFile);
+      string authFileJson = File.ReadAllText(authFile);
+      Dictionary<string, SteamAuthSession>? authSessions = JsonSerializer.Deserialize<Dictionary<string, SteamAuthSession>>(authFileJson);
+
+      // If a session exists for this user, set the previously stored guard data from it
+      if (authSessions != null && authSessions!.ContainsKey(userId.ToLower()))
+      {
+        Console.WriteLine("Found saved auth session for user: {0}", userId);
+        // Get the session data
+        var authSession = authSessions![userId.ToLower()];
+
+        login.Password = null;
+        login.AccessToken = authSession.refreshToken;
+        login.ShouldRememberPassword = true;
+        login.AccountID = authSession.accountId;
+        steamGuardData = authSession.steamGuard;
+
+        return (login, steamGuardData) as (SteamUser.LogOnDetails, string)?;
+      }
+      else
+      {
+        return null;
+      }
+    }
+    catch (Exception e)
+    {
+      Console.WriteLine("Failed to open auth.json for stored auth sessions: {0}", e);
+      return null;
+    }
   }
 }

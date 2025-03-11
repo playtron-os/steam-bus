@@ -9,6 +9,7 @@ public class UserProperties : IEnumerable<KeyValuePair<string, object>>
   public string Avatar = "";
   public string Identifier = "";
   public int Status;
+  public (string, string) Tokens = ("", "");
 
   System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
   {
@@ -21,6 +22,7 @@ public class UserProperties : IEnumerable<KeyValuePair<string, object>>
     yield return new KeyValuePair<string, object>(nameof(Avatar), Avatar);
     yield return new KeyValuePair<string, object>(nameof(Identifier), Identifier);
     yield return new KeyValuePair<string, object>(nameof(Status), Status);
+    yield return new KeyValuePair<string, object>(nameof(Tokens), Tokens);
   }
 }
 
@@ -28,6 +30,7 @@ public class UserProperties : IEnumerable<KeyValuePair<string, object>>
 [DBusInterface("one.playtron.auth.User")]
 public interface IUser : IDBusObject
 {
+  Task<bool> ChangeUserFromTokensAsync(string userId, string accessToken, string refreshToken);
   Task<bool> ChangeUserAsync(string user_id);
   Task LogoutAsync(string user_id);
 
