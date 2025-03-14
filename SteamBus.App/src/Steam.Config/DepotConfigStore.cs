@@ -745,11 +745,14 @@ public class DepotConfigStore
     /// <param name="branch"></param>
     /// <param name="language"></param>
     /// <param name="os"></param>
+    /// <param name="disabledDlc"></param>
     /// <param name="lastOwnedSteamId"></param>
-    public void SetNewVersion(uint appId, uint version, string branch, string language, string os, string? lastOwnedSteamId = null)
+    public void SetNewVersion(uint appId, uint version, string branch, string language, string os, string[] disabledDlc, string? lastOwnedSteamId = null)
     {
+        // TODO: Consider separating MOUNTED_CONFIG changes to when the download completes
+        // USER_CONFIG should be a place for "staged" changes 
         if (!manifestMap.ContainsKey(appId)) return;
-
+        string disabledDlcStr = String.Join(',', disabledDlc);
         manifestMap[appId][KEY_UNIVERSE] = new KeyValue(KEY_UNIVERSE, ((int)SteamClientApp.UNIVERSE).ToString());
         manifestMap[appId][KEY_BUILD_ID] = new KeyValue(KEY_BUILD_ID, version.ToString());
         manifestMap[appId][KEY_TARGET_BUILD_ID] = new KeyValue(KEY_TARGET_BUILD_ID, version.ToString());
@@ -776,6 +779,20 @@ public class DepotConfigStore
             if (mountedChild != null) manifestMap[appId][KEY_MOUNTED_CONFIG].Children.Remove(mountedChild);
 
             var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+            if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
+        }
+
+        if (!string.IsNullOrEmpty(disabledDlcStr))
+        {
+            manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_DISABLED_DLC] = new KeyValue(KEY_CONFIG_DISABLED_DLC, disabledDlcStr);
+            manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_DISABLED_DLC] = new KeyValue(KEY_CONFIG_DISABLED_DLC, disabledDlcStr);
+        }
+        else
+        {
+            var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+            var mountedChild = manifestMap[appId][KEY_MOUNTED_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+
+            if (mountedChild != null) manifestMap[appId][KEY_MOUNTED_CONFIG].Children.Remove(mountedChild);
             if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
         }
 
@@ -926,7 +943,8 @@ public class DepotConfigStore
                 Version = entry.Value[KEY_BUILD_ID].AsString() ?? "",
                 LatestVersion = manifestExtra[EXTRA_KEY_LATEST_BUILD_ID].AsString() ?? "",
                 UpdatePending = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
-                Os = os
+                Os = os,
+                DisabledDlc = (entry.Value[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString() ?? "").Split(',')
             });
         }
 
@@ -956,7 +974,8 @@ public class DepotConfigStore
             Version = manifest[KEY_BUILD_ID].AsString() ?? "",
             LatestVersion = manifestExtra[EXTRA_KEY_LATEST_BUILD_ID].AsString() ?? "",
             UpdatePending = (manifest[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
-            Os = os
+            Os = os,
+            DisabledDlc = (manifest[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString() ?? "").Split(',')
         }, branch);
     }
 

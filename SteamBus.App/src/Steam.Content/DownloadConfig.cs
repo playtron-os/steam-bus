@@ -19,6 +19,7 @@ public class AppDownloadOptions
   public string Language;
   public bool LowViolence = false;
   public bool IsUgc = false;
+  public List<string> DisabledDLC = [];
 
   public int CellID { get; set; }
   public bool DownloadAllPlatforms { get; set; }
@@ -54,6 +55,7 @@ public class AppDownloadOptions
     this.Language = "english";
     this.LowViolence = false;
     this.IsUgc = false;
+    this.DisabledDLC = [];
     this.InstallDirectory = installDirectory;
 
     this.DownloadAllPlatforms = false;
@@ -72,6 +74,7 @@ public class AppDownloadOptions
     this.VerifyAll = options.verify;
     this.LowViolence = false;
     this.IsUgc = false;
+    this.DisabledDLC = options.disabledDlc.ToList();
     this.InstallDirectory = installDirectory;
 
     this.DownloadAllPlatforms = false;

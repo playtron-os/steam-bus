@@ -311,7 +311,7 @@ public class SteamClientApp
                 var manifestDir = GetManifestDirectory();
                 Directory.CreateDirectory(manifestDir);
                 toolsDepotConfigStore.EnsureEntryExists(manifestDir, STEAM_CLIENT_APP_ID, "Steam");
-                toolsDepotConfigStore.SetNewVersion(STEAM_CLIENT_APP_ID, uint.Parse(updatingToVersion), "public", "english", "linux");
+                toolsDepotConfigStore.SetNewVersion(STEAM_CLIENT_APP_ID, uint.Parse(updatingToVersion), "public", "english", "linux", []);
                 toolsDepotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
                 toolsDepotConfigStore.Save(STEAM_CLIENT_APP_ID);
 

@@ -397,6 +397,7 @@ public class ContentDownloader
         var language = options.Language;
         var lv = options.LowViolence;
         var isUgc = options.IsUgc;
+        var disabledDlc = options.DisabledDLC;
 
         await this.session.RequestAppInfo(appId);
 
@@ -439,7 +440,7 @@ public class ContentDownloader
             {
               sharedApps.Add((info.AppId, info.InstallDir));
               depotConfigStore.EnsureEntryExists(info.InstallDir, info.AppId, GetAppName(info.AppId));
-              depotConfigStore.SetNewVersion(info.AppId, info.Version, info.Branch, language ?? "", "", steamId.ToString());
+              depotConfigStore.SetNewVersion(info.AppId, info.Version, info.Branch, language ?? "", "", [], steamId.ToString());
             }
           }
         }
@@ -456,7 +457,7 @@ public class ContentDownloader
           };
 
           depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
-          depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", os, steamId.ToString());
+          depotConfigStore.SetNewVersion(appId, version, branch, language ?? "", os, disabledDlc.ToArray(), steamId.ToString());
 
           await DownloadSteam3Async(appId, requiredDepots, infos, cts, installStartedData).ConfigureAwait(false);
           await depotConfigStore.FininishDownloadAndSave(appId);
