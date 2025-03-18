@@ -118,7 +118,7 @@ public class InstallOptions
   public string os = "";
   public string architecture = "";
   public bool verify = false;
-  public string[] disabledDlc = [];
+  public string[] disabled_dlc = [];
 }
 
 public enum AppType

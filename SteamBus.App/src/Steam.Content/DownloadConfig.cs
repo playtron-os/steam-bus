@@ -74,7 +74,7 @@ public class AppDownloadOptions
     this.VerifyAll = options.verify;
     this.LowViolence = false;
     this.IsUgc = false;
-    this.DisabledDLC = options.disabledDlc.ToList();
+    this.DisabledDLC = options.disabled_dlc.ToList();
     this.InstallDirectory = installDirectory;
 
     this.DownloadAllPlatforms = false;
