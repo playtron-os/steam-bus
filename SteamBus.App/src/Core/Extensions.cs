@@ -23,8 +23,17 @@ public static class KeyValueExtensions
 
         try
         {
-            keyValue.SaveToFile(tempFilePath, false);
-            File.Move(tempFilePath, filePath, true);
+            Disk.ExecuteFileOpWithRetry(() =>
+            {
+                keyValue.SaveToFile(tempFilePath, false);
+                return "";
+            }, tempFilePath, maxRetries: 3, delayMilliseconds: 1, OnError: () => File.Delete(tempFilePath));
+
+            Disk.ExecuteFileOpWithRetry(() =>
+            {
+                File.Move(tempFilePath, filePath, true);
+                return "";
+            }, filePath, maxRetries: 3, delayMilliseconds: 5);
         }
         catch (Exception ex)
         {

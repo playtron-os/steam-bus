@@ -19,6 +19,8 @@ public class LibraryCache
     public string path;
     public const string filename = "librarycache.vdf";
 
+    object _lock = new();
+
     // Load the local config from the given custom path
     public LibraryCache(string path)
     {
@@ -56,8 +58,11 @@ public class LibraryCache
     // Save the configuration
     public void Save()
     {
-        Disk.EnsureParentFolderExists(path);
-        this.data?.SaveToFileWithAtomicRename(this.path);
+        lock (_lock)
+        {
+            Disk.EnsureParentFolderExists(path);
+            this.data?.SaveToFileWithAtomicRename(this.path);
+        }
     }
 
     // Adds the list of package ids to the cache
