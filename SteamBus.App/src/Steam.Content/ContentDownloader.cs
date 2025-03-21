@@ -1436,8 +1436,21 @@ public class ContentDownloader
     {
       await InvokeAsync(
           networkChunkQueue.Select(q => new Func<Task>(async () =>
-              await Task.Run(() => DownloadSteam3AsyncDepotFileChunk(appId, cts, downloadCounter, depotFilesData,
-                  q.fileData, q.fileStreamData, q.chunk)))),
+              await Task.Run(async () =>
+              {
+                try
+                {
+                  await DownloadSteam3AsyncDepotFileChunk(appId, cts, downloadCounter, depotFilesData,
+                    q.fileData, q.fileStreamData, q.chunk);
+                }
+                catch (Exception exception)
+                {
+                  Console.Error.WriteLine($"Error during download of depot file chunk, err:{exception}");
+                  cts.Cancel();
+                  var error = exception.Message.Contains("No space left on device") ? DbusErrors.NotEnoughSpace : DbusErrors.Generic;
+                  throw new DBusException(error, "Error during chunk download");
+                }
+              }))),
           maxDegreeOfParallelism: this.options!.MaxDownloads
       );
 

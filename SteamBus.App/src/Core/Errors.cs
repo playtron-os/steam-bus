@@ -28,6 +28,7 @@ public static class DbusErrors
     public const string NotEnoughSpace = "one.playtron.Error.NotEnoughSpace";
     public const string Permission = "one.playtron.Error.Permission";
     public const string NetworkRequired = "one.playtron.Error.NetworkRequired";
+    public const string Generic = "one.playtron.Error.Generic";
 }
 
 public static class DbusExceptionHelper

@@ -200,7 +200,7 @@ static partial class Disk
         return ExecuteFileOpWithRetry(() => File.ReadAllText(filePath), filePath, maxRetries, delayMilliseconds);
     }
 
-    public static T ExecuteFileOpWithRetry<T>(Func<T> Callback, string filePath, int maxRetries = 10, int delayMilliseconds = 10)
+    public static T ExecuteFileOpWithRetry<T>(Func<T> Callback, string filePath, int maxRetries = 10, int delayMilliseconds = 10, Action? OnError = null)
     {
         int attempt = 0;
         while (attempt < maxRetries)
@@ -211,6 +211,7 @@ static partial class Disk
             }
             catch (IOException e) when (IsFileLocked(e))
             {
+                OnError?.Invoke();
                 attempt++;
                 Console.WriteLine($"File is locked, retrying {attempt}/{maxRetries}...");
                 Thread.Sleep(delayMilliseconds);
