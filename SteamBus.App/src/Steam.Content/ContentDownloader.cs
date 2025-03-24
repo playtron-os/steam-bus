@@ -1098,6 +1098,17 @@ public class ContentDownloader
 
     Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots",
         downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count);
+
+    // Mark app download as finished in case it didnt even download anything
+    if (downloadCounter.totalBytesCompressed == 0)
+      this.OnInstallProgressed?.Invoke(new InstallProgressedDescription
+      {
+        AppId = appId.ToString(),
+        Stage = (uint)DownloadStage.Verifying,
+        DownloadedBytes = 0,
+        TotalDownloadSize = 0,
+        Progress = 100,
+      });
   }
 
 
