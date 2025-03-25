@@ -183,6 +183,7 @@ public class InstallScript
                     {
                         Path = path,
                         Registry = GetRegistry(installDir, installScript),
+                        CopyFiles = GetCopyFiles(installDir, installScript),
                         RunProcess = GetRunProcessList(installDir, installScript).ToArray(),
                     };
                 }
@@ -208,10 +209,21 @@ public class InstallScript
         var strings = new List<PostInstallRegistryValue>();
         var dwords = new List<PostInstallRegistryValue>();
 
+        var arch = ContentDownloader.GetSteamArch();
+
         foreach (var group in registry.Children)
         {
             if (string.IsNullOrEmpty(group.Name))
                 continue;
+
+            var groupName = group.Name;
+
+            if (groupName.Contains("_WOW64_"))
+            {
+                var wow64Text = $"_WOW64_{arch}";
+                if (!groupName.Contains(wow64Text)) continue;
+                groupName = string.Join("", groupName.Split(wow64Text));
+            }
 
             foreach (var type in group.Children)
             {
@@ -231,7 +243,7 @@ public class InstallScript
                                 dwords.Add(new PostInstallRegistryValue
                                 {
                                     Language = keyOrLanguage.Name,
-                                    Group = group.Name,
+                                    Group = groupName!,
                                     Key = key.Name ?? "",
                                     Value = ReplaceDynamicVariables(installDir, key.AsString() ?? "", true)!,
                                 });
@@ -241,7 +253,7 @@ public class InstallScript
                                 strings.Add(new PostInstallRegistryValue
                                 {
                                     Language = keyOrLanguage.Name,
-                                    Group = group.Name,
+                                    Group = groupName!,
                                     Key = key.Name ?? "",
                                     Value = ReplaceDynamicVariables(installDir, key.AsString() ?? "", true)!,
                                 });
@@ -253,7 +265,7 @@ public class InstallScript
                         dwords.Add(new PostInstallRegistryValue
                         {
                             Language = null,
-                            Group = group.Name,
+                            Group = groupName!,
                             Key = keyOrLanguage.Name ?? "",
                             Value = ReplaceDynamicVariables(installDir, value, true)!,
                         });
@@ -262,8 +274,8 @@ public class InstallScript
                     {
                         strings.Add(new PostInstallRegistryValue
                         {
-                            Language = keyOrLanguage.Name,
-                            Group = group.Name,
+                            Language = null,
+                            Group = groupName!,
                             Key = keyOrLanguage.Name ?? "",
                             Value = ReplaceDynamicVariables(installDir, value, true)!,
                         });
@@ -279,10 +291,64 @@ public class InstallScript
         };
     }
 
+    private PostInstallCopyFiles GetCopyFiles(string installDir, KeyValue installScript)
+    {
+        var copyfiles = installScript.Children.Find((child) => child.Name?.ToLowerInvariant() == "copy files" || child.Name?.ToLowerInvariant() == "copyfiles");
+        if (copyfiles == null) return new PostInstallCopyFiles { };
+
+        PostInstallCopyFilesLocal? locFiles = null;
+        var locFilesEntry = copyfiles.Children.FirstOrDefault((child) => child.Name?.ToLowerInvariant() == "locfiles");
+
+        if (locFilesEntry != null)
+        {
+            var resetOnLanguageChange = false;
+            var data = new List<PostInstallCopyFileData>();
+
+            foreach (var property in locFilesEntry.Children)
+            {
+                if (string.IsNullOrEmpty(property.Name))
+                    continue;
+
+                var name = property.Name.ToLowerInvariant();
+
+                if (name == "resetonlanguagechange")
+                    resetOnLanguageChange = property.Value == "1";
+                else if (name.Contains("srcfile"))
+                {
+                    var index = name.Split("file").LastOrDefault();
+                    var srcFileValue = property.Value;
+                    if (string.IsNullOrEmpty(index) || string.IsNullOrEmpty(srcFileValue)) continue;
+
+                    var targetFileKey = $"dstfile{index}";
+                    var targetFile = locFilesEntry.Children.FirstOrDefault((child) => child.Name?.ToLowerInvariant() == targetFileKey);
+                    var targetFileValue = targetFile?.Value;
+                    if (string.IsNullOrEmpty(targetFileValue)) continue;
+
+                    data.Add(new PostInstallCopyFileData
+                    {
+                        Source = ReplaceDynamicVariables(installDir, srcFileValue, false)!,
+                        Target = ReplaceDynamicVariables(installDir, targetFileValue, false)!,
+                    });
+                }
+            }
+
+            locFiles = new PostInstallCopyFilesLocal
+            {
+                Data = data,
+                ResetOnLanguageChange = resetOnLanguageChange,
+            };
+        }
+
+        return new PostInstallCopyFiles
+        {
+            LocFiles = locFiles,
+        };
+    }
+
     private List<PostInstallRunProcess> GetRunProcessList(string installDir, KeyValue installScript)
     {
         var runProcessParams = new List<PostInstallRunProcess>();
-        var runProcess = installScript.Children.Find((child) => child.Name?.ToLowerInvariant() == "run process");
+        var runProcess = installScript.Children.Find((child) => child.Name?.ToLowerInvariant() == "run process" || child.Name?.ToLowerInvariant() == "runprocess");
 
         if (runProcess != null)
         {
@@ -357,7 +423,8 @@ public class InstallScript
                     _localAppDataFolder
                 )
                 .Replace("%WinDir%", _windowsFolder)
-                .Replace("%STEAMPATH%", _steamFolder);
+                .Replace("%STEAMPATH%", _steamFolder)
+                .Replace("\\", "/");
     }
 
     private string GetWindowsPath(string value)
@@ -372,6 +439,23 @@ public struct PostInstallRegistryValue
     public string Group { get; set; }
     public string Key { get; set; }
     public string Value { get; set; }
+}
+
+public struct PostInstallCopyFiles
+{
+    public PostInstallCopyFilesLocal? LocFiles { get; set; }
+}
+
+public struct PostInstallCopyFilesLocal
+{
+    public bool ResetOnLanguageChange { get; set; }
+    public List<PostInstallCopyFileData> Data { get; set; }
+}
+
+public struct PostInstallCopyFileData
+{
+    public string Source { get; set; }
+    public string Target { get; set; }
 }
 
 public struct PostInstallRegistry
@@ -401,5 +485,6 @@ public struct PostInstall
 {
     public string Path { get; set; }
     public PostInstallRegistry Registry { get; set; }
+    public PostInstallCopyFiles CopyFiles { get; set; }
     public PostInstallRunProcess[] RunProcess { get; set; }
 }
