@@ -711,7 +711,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task IPluginLibraryProvider.MoveItemAsync(string appIdString, string disk)
   {
-    Console.WriteLine($"Uninstalling app: {appIdString}");
+    Console.WriteLine($"Moving app: {appIdString}");
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
     var downloader = new ContentDownloader(session!, depotConfigStore);
