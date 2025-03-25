@@ -1455,9 +1455,20 @@ public class ContentDownloader
                   await DownloadSteam3AsyncDepotFileChunk(appId, cts, downloadCounter, depotFilesData,
                     q.fileData, q.fileStreamData, q.chunk);
                 }
+                catch (TaskCanceledException)
+                {
+                  Console.WriteLine($"Download of depot:{depot.DepotId} file chunk cancelled");
+                  cts.Cancel();
+                }
+                catch (OperationCanceledException)
+                {
+                  Console.WriteLine($"Download of depot:{depot.DepotId} file chunk cancelled");
+                  cts.Cancel();
+                  throw new TaskCanceledException();
+                }
                 catch (Exception exception)
                 {
-                  Console.Error.WriteLine($"Error during download of depot file chunk, err:{exception}");
+                  Console.Error.WriteLine($"Error during download of depot:{depot.DepotId} file chunk, err:{exception}");
                   cts.Cancel();
                   var error = exception.Message.Contains("No space left on device") ? DbusErrors.NotEnoughSpace : DbusErrors.Generic;
                   throw new DBusException(error, "Error during chunk download");
