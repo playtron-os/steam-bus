@@ -209,21 +209,13 @@ public class InstallScript
         var strings = new List<PostInstallRegistryValue>();
         var dwords = new List<PostInstallRegistryValue>();
 
-        var arch = ContentDownloader.GetSteamArch();
-
         foreach (var group in registry.Children)
         {
             if (string.IsNullOrEmpty(group.Name))
                 continue;
 
-            var groupName = group.Name;
-
-            if (groupName.Contains("_WOW64_"))
-            {
-                var wow64Text = $"_WOW64_{arch}";
-                if (!groupName.Contains(wow64Text)) continue;
-                groupName = string.Join("", groupName.Split(wow64Text));
-            }
+            const string pattern = @"_WOW\d+_\d+";
+            var groupName = Regex.Replace(group.Name, pattern, string.Empty);
 
             foreach (var type in group.Children)
             {

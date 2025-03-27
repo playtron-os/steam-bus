@@ -63,6 +63,7 @@ public class SteamuiLogs
                         }
 
                         if (line.Contains("WaitingForCredentials - Password is not set")
+                            || line.Contains("WaitingForCredentials - Already Logged In Elsewhere")
                             || line.Contains("WaitingForCredentials - Access Denied")
                             || line.Contains("WaitingForCredentials - Invalid Password")
                             || line.Contains("WaitingForCredentials - No Connection")
