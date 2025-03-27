@@ -1054,7 +1054,8 @@ public class DepotConfigStore
             if (currentInstallDirectory == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
 
             // Ensure the destination directory exists
-            Directory.CreateDirectory(newInstallDirectory);
+            if (!Directory.Exists(newInstallDirectory))
+                Directory.CreateDirectory(newInstallDirectory);
 
             // Get all files and subdirectories
             var files = Directory.GetFiles(currentInstallDirectory, "*", SearchOption.AllDirectories);
@@ -1070,10 +1071,12 @@ public class DepotConfigStore
                 string destinationFile = Path.Combine(newInstallDirectory, relativePath);
 
                 // Ensure the destination directory exists
-                Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
+                if (!Directory.Exists(Path.GetDirectoryName(destinationFile)!))
+                    Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
 
                 // Move the file
-                await Task.Run(() => File.Move(file, destinationFile));
+                if (!File.Exists(destinationFile))
+                    await Task.Run(() => File.Move(file, destinationFile));
 
                 // Update progress
                 processedItems++;
@@ -1089,7 +1092,8 @@ public class DepotConfigStore
                 string destinationDir = Path.Combine(newInstallDirectory, relativePath);
 
                 // Create the directory in the destination
-                Directory.CreateDirectory(destinationDir);
+                if (!Directory.Exists(destinationDir))
+                    Directory.CreateDirectory(destinationDir);
 
                 // Update progress
                 processedItems++;
