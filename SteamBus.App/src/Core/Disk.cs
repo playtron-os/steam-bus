@@ -49,6 +49,9 @@ static partial class Disk
                 string device = match.Groups[1].Value;
                 string mountPoint = match.Groups[2].Value.Trim(); // Remove trailing spaces
 
+                // Ignore paths starting with /etc
+                if (mountPoint.StartsWith("/etc")) continue;
+
                 if (driveName == null)
                 {
                     // If no specific drive is requested, return the most relevant home-related mount
