@@ -35,6 +35,7 @@ public class GlobalConfig
     public const string KEY_STEAM = "Steam";
     public const string KEY_ACCOUNTS = "Accounts";
     public const string KEY_STEAM_ID = "SteamID";
+    public const string KEY_CONNECT_CACHE = "ConnectCache";
     public const string KEY_COMPAT_TOOL_MAPPING = "CompatToolMapping";
     public const string KEY_COMPAT_TOOL_MAPPING_NAME = "name";
     public const string KEY_COMPAT_TOOL_MAPPING_CONFIG = "config";
@@ -133,6 +134,25 @@ public class GlobalConfig
             this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_CONFIG] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_CONFIG, "");
             this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_COMPAT_TOOL_MAPPING][appIdStr][KEY_COMPAT_TOOL_MAPPING_PRIORITY] = new KeyValue(KEY_COMPAT_TOOL_MAPPING_PRIORITY, priority.ToString());
         }
+    }
+
+    // Sets ConnectCache for steam client to re-use session
+    public void SetConnectCache(string username, string refreshToken)
+    {
+        EnsureRootKeysExist();
+
+        // The ConnectCache key is the hex-encoded CRC32 hash of the username with "1" added to the end.
+        string key = SteamConfig.GetUsernameCrcString(username);
+
+        // Encrypt the token into a hex-encoded string
+        string value = SteamConfig.EncryptTokenForUser(username, refreshToken);
+
+        if (String.IsNullOrEmpty(this.data![KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_CONNECT_CACHE].Name))
+        {
+            this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_CONNECT_CACHE] = new KeyValue(KEY_CONNECT_CACHE);
+        }
+
+        this.data[KEY_SOFTWARE][KEY_VALVE][KEY_STEAM][KEY_CONNECT_CACHE][key] = new KeyValue(key, value);
     }
 
     // Removes compat tool for an app id

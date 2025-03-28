@@ -48,7 +48,10 @@ public class SteamClientApp
 
     private SteamuiLogs steamuiLogs;
 
-    private string forAppId = "";
+    public string forAppId = "";
+
+    // Used to keep track when last successful login was
+    public DateTime lastLoggedIn = DateTime.MinValue;
 
     public SteamClientApp(DisplayManager displayManager, DepotConfigStore appsDepotConfigStore, DepotConfigStore toolsDepotConfigStore)
     {
@@ -251,6 +254,7 @@ public class SteamClientApp
                     {
                         await Task.Delay(2000);
 
+                        lastLoggedIn = DateTime.UtcNow;
                         readyTask.TrySetResult();
                         readyTask = null;
                         Console.WriteLine("Steam client is ready");

@@ -746,16 +746,14 @@ public class SteamSession
       // Any operations outstanding need to be aborted
       bAborted = true;
     }
-    else if (connectionBackoff >= 4)
+    else if (connectionBackoff >= 7)
     {
       Console.WriteLine("Could not connect to Steam after 4 tries");
       Abort(false);
     }
     else if (!bAborted)
     {
-      // We don't want to back off in case of reconnection
-      if (!bExpectingDisconnectRemote)
-        connectionBackoff += 1;
+      connectionBackoff += 1;
 
       if (bConnecting)
       {
@@ -856,6 +854,7 @@ public class SteamSession
 
   public void SaveToken()
   {
+    Console.WriteLine("#### TEST");
     if (logonDetails?.Username != null && logonDetails?.AccessToken != null && SteamUser?.SteamID != null)
     {
       var localConfig = new LocalConfig(LocalConfig.DefaultPath());
@@ -864,6 +863,7 @@ public class SteamSession
 
       var globalConfig = new GlobalConfig(GlobalConfig.DefaultPath());
       globalConfig.SetSteamUser(logonDetails.Username, SteamUser.SteamID.ConvertToUInt64().ToString());
+      globalConfig.SetConnectCache(logonDetails.Username, logonDetails.AccessToken);
       globalConfig.Save();
     }
   }
@@ -1196,25 +1196,6 @@ public class SteamSession
       else
         Console.Error.WriteLine("Error parsing Sub out of access token");
     }
-  }
-
-  public void DeleteUserConfigOfflineTicket()
-  {
-    if (logonDetails.AccountID == 0) return;
-
-    var (config, path) = loginUsersConfig.GetUserConfig(logonDetails.AccountID.ToString());
-    var child = config.Children.Find((c) => c.Name == "Offline");
-    if (child != null) config.Children.Remove(child);
-
-    config.SaveToFileWithAtomicRename(path);
-  }
-
-  public bool IsUserConfigReady()
-  {
-    if (logonDetails.AccountID == 0) return false;
-
-    var (config, _) = loginUsersConfig.GetUserConfig(logonDetails.AccountID.ToString());
-    return !string.IsNullOrEmpty(config["Offline"]?["Ticket"]?.Value);
   }
 
   /// <summary>
