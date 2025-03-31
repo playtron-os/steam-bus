@@ -142,7 +142,6 @@ public class DepotConfigStore
 
     private ConcurrentDictionary<uint, UserCompatConfig> accountIdToUserCompatConfig = new();
     private AppInfoCache appInfoCache;
-    private ulong? currentAccountId;
 
     public SteamSession? steamSession;
 
@@ -215,6 +214,8 @@ public class DepotConfigStore
     {
         await fileLock.WaitAsync();
 
+        uint appId = 0;
+
         try
         {
             if (manifestPathMap.Any((pair) => pair.Value == manifestPath))
@@ -230,7 +231,7 @@ public class DepotConfigStore
             if (data == null)
                 return false;
 
-            var appId = data["appid"].AsUnsignedInteger();
+            appId = data["appid"].AsUnsignedInteger();
             if (appId == 0)
                 return false;
 
@@ -270,8 +271,6 @@ public class DepotConfigStore
             manifestPathMap.TryAdd(appId, manifestPath);
             manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
 
-            VerifyAppsStateFlag(appId);
-
             return true;
         }
         catch (Exception err)
@@ -282,6 +281,9 @@ public class DepotConfigStore
         finally
         {
             fileLock.Release();
+
+            if (appId != 0)
+                VerifyAppsStateFlag(appId);
         }
     }
 
@@ -314,8 +316,11 @@ public class DepotConfigStore
         var normalizedStateFlags = GetNormalizedStateFlags(appId);
         if (data[KEY_STATE_FLAGS]?.AsUnsignedInteger() != normalizedStateFlags)
         {
-            data[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, normalizedStateFlags.ToString());
-            data.SaveToFileWithAtomicRename(manifestPathMap[appId]);
+            WithLock(() =>
+            {
+                data[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, normalizedStateFlags.ToString());
+                data.SaveToFileWithAtomicRename(manifestPathMap[appId]);
+            });
         }
     }
 
@@ -351,10 +356,13 @@ public class DepotConfigStore
 
             if (manifestExtraMap.TryGetValue(appId, out var data) && data[EXTRA_KEY_OS].AsString() != installedOs)
             {
-                data[EXTRA_KEY_OS] = new KeyValue(EXTRA_KEY_OS, installedOs);
+                WithLock(() =>
+                {
+                    data[EXTRA_KEY_OS] = new KeyValue(EXTRA_KEY_OS, installedOs);
 
-                if (manifestExtraPathMap.TryGetValue(appId, out var extraPath))
-                    data.SaveToFileWithAtomicRename(extraPath);
+                    if (manifestExtraPathMap.TryGetValue(appId, out var extraPath))
+                        data.SaveToFileWithAtomicRename(extraPath);
+                });
             }
         }
     }
@@ -382,11 +390,14 @@ public class DepotConfigStore
         }
         else if (manifest != null && path != null && extraManifest != null && extraPath != null)
         {
-            var stateFlags = GetNormalizedStateFlags(appId);
-            manifest[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
+            WithLock(() =>
+            {
+                var stateFlags = GetNormalizedStateFlags(appId);
+                manifest[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
 
-            manifest.SaveToFileWithAtomicRename(path);
-            extraManifest.SaveToFileWithAtomicRename(extraPath);
+                manifest.SaveToFileWithAtomicRename(path);
+                extraManifest.SaveToFileWithAtomicRename(extraPath);
+            });
         }
     }
 
@@ -562,22 +573,25 @@ public class DepotConfigStore
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return;
 
-        Console.WriteLine($"Removing depotId:{depotId} from appId:{appId}");
-
-        var depotIdKey = depotId.ToString();
-        var depots = manifest[KEY_INSTALLED_DEPOTS];
-        var child = depots?.Children.Find((child) => child.Name == depotIdKey);
-        if (child != null)
-            depots!.Children.Remove(child);
-
-        foreach (var entry in manifest[KEY_SHARED_DEPOTS].Children)
+        WithLock(() =>
         {
-            if (entry.Name == depotIdKey)
+            Console.WriteLine($"Removing depotId:{depotId} from appId:{appId}");
+
+            var depotIdKey = depotId.ToString();
+            var depots = manifest[KEY_INSTALLED_DEPOTS];
+            var child = depots?.Children.Find((child) => child.Name == depotIdKey);
+            if (child != null)
+                depots!.Children.Remove(child);
+
+            foreach (var entry in manifest[KEY_SHARED_DEPOTS].Children)
             {
-                manifest[KEY_SHARED_DEPOTS].Children.Remove(entry);
-                break;
+                if (entry.Name == depotIdKey)
+                {
+                    manifest[KEY_SHARED_DEPOTS].Children.Remove(entry);
+                    break;
+                }
             }
-        }
+        });
     }
 
     /// <summary>
@@ -590,11 +604,14 @@ public class DepotConfigStore
     {
         if (manifestMap.TryGetValue(appId, out var manifest))
         {
-            var key = depotId.ToString();
-            if (manifest[KEY_INSTALL_SCRIPTS] == KeyValue.Invalid)
-                manifest[KEY_INSTALL_SCRIPTS] = new KeyValue(key);
+            WithLock(() =>
+            {
+                var key = depotId.ToString();
+                if (manifest[KEY_INSTALL_SCRIPTS] == KeyValue.Invalid)
+                    manifest[KEY_INSTALL_SCRIPTS] = new KeyValue(key);
 
-            manifest[KEY_INSTALL_SCRIPTS][key] = new KeyValue(key, path);
+                manifest[KEY_INSTALL_SCRIPTS][key] = new KeyValue(key, path);
+            });
         }
     }
 
@@ -607,9 +624,12 @@ public class DepotConfigStore
     {
         if (manifestMap.TryGetValue(appId, out var manifest))
         {
-            var key = depotId.ToString();
-            var child = manifest[KEY_INSTALL_SCRIPTS].Children.FirstOrDefault((child) => child.Name == key);
-            if (child != null) manifest[KEY_INSTALL_SCRIPTS].Children.Remove(child);
+            WithLock(() =>
+            {
+                var key = depotId.ToString();
+                var child = manifest[KEY_INSTALL_SCRIPTS].Children.FirstOrDefault((child) => child.Name == key);
+                if (child != null) manifest[KEY_INSTALL_SCRIPTS].Children.Remove(child);
+            });
         }
     }
 
@@ -622,23 +642,25 @@ public class DepotConfigStore
     /// <param name="manifestSize"></param>
     public void SetManifestID(uint appId, uint depotId, ulong manifestId, ulong manifestSize, uint? dlcAppId)
     {
-        if (!manifestMap.ContainsKey(appId)) return;
+        if (!manifestMap.TryGetValue(appId, out KeyValue? value)) return;
 
-        var key = depotId.ToString();
-        if (manifestMap[appId][KEY_INSTALLED_DEPOTS][key] == KeyValue.Invalid)
-            manifestMap[appId][KEY_INSTALLED_DEPOTS][key] = new KeyValue(key);
-
-        manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_MANIFEST] = new KeyValue(KEY_INSTALLED_DEPOTS_MANIFEST, manifestId.ToString());
-        manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_SIZE] = new KeyValue(KEY_INSTALLED_DEPOTS_SIZE, manifestSize.ToString());
-
-        if (dlcAppId == null || dlcAppId == appId)
+        WithLock(() =>
         {
-            var child = manifestMap[appId][KEY_INSTALLED_DEPOTS][key].Children.FirstOrDefault((x) => x.Name == KEY_INSTALLED_DEPOTS_DLC_APP_ID);
-            if (child != null)
-                manifestMap[appId][KEY_INSTALLED_DEPOTS][key].Children.Remove(child);
-        }
-        else
-            manifestMap[appId][KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_DLC_APP_ID] = new KeyValue(KEY_INSTALLED_DEPOTS_DLC_APP_ID, dlcAppId.ToString());
+            var key = depotId.ToString();
+            if (value[KEY_INSTALLED_DEPOTS][key] == KeyValue.Invalid)
+                value[KEY_INSTALLED_DEPOTS][key] = new KeyValue(key);
+            value[KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_MANIFEST] = new KeyValue(KEY_INSTALLED_DEPOTS_MANIFEST, manifestId.ToString());
+            value[KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_SIZE] = new KeyValue(KEY_INSTALLED_DEPOTS_SIZE, manifestSize.ToString());
+
+            if (dlcAppId == null || dlcAppId == appId)
+            {
+                var child = value[KEY_INSTALLED_DEPOTS][key].Children.FirstOrDefault((x) => x.Name == KEY_INSTALLED_DEPOTS_DLC_APP_ID);
+                if (child != null)
+                    value[KEY_INSTALLED_DEPOTS][key].Children.Remove(child);
+            }
+            else
+                value[KEY_INSTALLED_DEPOTS][key][KEY_INSTALLED_DEPOTS_DLC_APP_ID] = new KeyValue(KEY_INSTALLED_DEPOTS_DLC_APP_ID, dlcAppId.ToString());
+        });
     }
 
     /// <summary>
@@ -649,13 +671,16 @@ public class DepotConfigStore
     /// <param name="depotId"></param>
     public void SetSharedDepot(uint appId, uint depotAppId, uint depotId)
     {
-        if (!manifestMap.ContainsKey(appId)) return;
+        if (!manifestMap.TryGetValue(appId, out KeyValue? value)) return;
 
-        if (manifestMap[appId][KEY_SHARED_DEPOTS] == KeyValue.Invalid)
-            manifestMap[appId][KEY_SHARED_DEPOTS] = new KeyValue(KEY_SHARED_DEPOTS);
+        WithLock(() =>
+        {
+            if (value[KEY_SHARED_DEPOTS] == KeyValue.Invalid)
+                value[KEY_SHARED_DEPOTS] = new KeyValue(KEY_SHARED_DEPOTS);
 
-        var key = depotId.ToString();
-        manifestMap[appId][KEY_SHARED_DEPOTS][key] = new KeyValue(key, depotAppId.ToString());
+            var key = depotId.ToString();
+            value[KEY_SHARED_DEPOTS][key] = new KeyValue(key, depotAppId.ToString());
+        });
     }
 
     /// <summary>
@@ -665,8 +690,12 @@ public class DepotConfigStore
     /// <param name="size"></param>
     public void SetTotalSize(uint appId, ulong size)
     {
-        if (!manifestMap.ContainsKey(appId)) return;
-        manifestMap[appId][KEY_BYTES_TO_DOWNLOAD] = new KeyValue(KEY_BYTES_TO_DOWNLOAD, size.ToString());
+        if (!manifestMap.TryGetValue(appId, out KeyValue? value)) return;
+
+        WithLock(() =>
+        {
+            value[KEY_BYTES_TO_DOWNLOAD] = new KeyValue(KEY_BYTES_TO_DOWNLOAD, size.ToString());
+        });
     }
 
     /// <summary>
@@ -676,8 +705,12 @@ public class DepotConfigStore
     /// <param name="size"></param>
     public void SetCurrentSize(uint appId, ulong size)
     {
-        if (!manifestMap.ContainsKey(appId)) return;
-        manifestMap[appId][KEY_BYTES_DOWNLOADED] = new KeyValue(KEY_BYTES_DOWNLOADED, size.ToString());
+        if (!manifestMap.TryGetValue(appId, out KeyValue? value)) return;
+
+        WithLock(() =>
+        {
+            value[KEY_BYTES_DOWNLOADED] = new KeyValue(KEY_BYTES_DOWNLOADED, size.ToString());
+        });
     }
 
     /// <summary>
@@ -687,9 +720,9 @@ public class DepotConfigStore
     /// <param name="stage"></param>
     public void SetDownloadStage(uint appId, DownloadStage? stage, ulong? sizeOnDisk = null)
     {
-        if (!manifestMap.ContainsKey(appId)) return;
+        if (!manifestMap.TryGetValue(appId, out KeyValue? value)) return;
 
-        var currentStateFlags = manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
+        var currentStateFlags = value[KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
 
         var stateFlags = StateFlags.FullyInstalled;
         if ((currentStateFlags & (int)StateFlags.UpdateRequired) != 0)
@@ -712,13 +745,16 @@ public class DepotConfigStore
                 break;
         }
 
-        if (stage == null)
+        WithLock(() =>
         {
-            manifestMap[appId][KEY_LAST_UPDATED] = new KeyValue(KEY_LAST_UPDATED, DateTimeOffset.Now.ToUnixTimeSeconds().ToString());
-            stateFlags &= ~StateFlags.UpdateRequired;
-        }
+            if (stage == null)
+            {
+                value[KEY_LAST_UPDATED] = new KeyValue(KEY_LAST_UPDATED, DateTimeOffset.Now.ToUnixTimeSeconds().ToString());
+                stateFlags &= ~StateFlags.UpdateRequired;
+            }
 
-        manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
+            value[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)stateFlags).ToString());
+        });
 
         if (sizeOnDisk != null)
             UpdateAppSizeOnDisk(appId, (ulong)sizeOnDisk);
@@ -734,7 +770,11 @@ public class DepotConfigStore
     {
         var installDirectory = GetInstallDirectory(appId);
         if (installDirectory == null) return;
-        manifestMap[appId][KEY_SIZE_ON_DISK] = new KeyValue(KEY_SIZE_ON_DISK, sizeOnDisk.ToString());
+
+        WithLock(() =>
+        {
+            manifestMap[appId][KEY_SIZE_ON_DISK] = new KeyValue(KEY_SIZE_ON_DISK, sizeOnDisk.ToString());
+        });
     }
 
     /// <summary>
@@ -749,54 +789,58 @@ public class DepotConfigStore
     /// <param name="lastOwnedSteamId"></param>
     public void SetNewVersion(uint appId, uint version, string branch, string language, string os, string[] disabledDlc, string? lastOwnedSteamId = null)
     {
-        // TODO: Consider separating MOUNTED_CONFIG changes to when the download completes
-        // USER_CONFIG should be a place for "staged" changes 
         if (!manifestMap.ContainsKey(appId)) return;
-        string disabledDlcStr = String.Join(',', disabledDlc);
-        manifestMap[appId][KEY_UNIVERSE] = new KeyValue(KEY_UNIVERSE, ((int)SteamClientApp.UNIVERSE).ToString());
-        manifestMap[appId][KEY_BUILD_ID] = new KeyValue(KEY_BUILD_ID, version.ToString());
-        manifestMap[appId][KEY_TARGET_BUILD_ID] = new KeyValue(KEY_TARGET_BUILD_ID, version.ToString());
 
-        if (manifestMap[appId][KEY_USER_CONFIG] == KeyValue.Invalid)
-            manifestMap[appId][KEY_USER_CONFIG] = new KeyValue(KEY_USER_CONFIG);
-        manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE] = new KeyValue(KEY_CONFIG_LANGUAGE, language);
-
-        if (manifestMap[appId][KEY_MOUNTED_CONFIG] == KeyValue.Invalid)
-            manifestMap[appId][KEY_MOUNTED_CONFIG] = new KeyValue(KEY_MOUNTED_CONFIG);
-        manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_LANGUAGE] = new KeyValue(KEY_CONFIG_LANGUAGE, language);
-
-        if (lastOwnedSteamId != null)
-            manifestMap[appId][KEY_LAST_OWNER] = new KeyValue(KEY_LAST_OWNER, lastOwnedSteamId);
-
-        if (!string.IsNullOrEmpty(branch) && branch != AppDownloadOptions.DEFAULT_BRANCH)
+        WithLock(() =>
         {
-            manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_BETA_KEY] = new KeyValue(KEY_CONFIG_BETA_KEY, branch);
-            manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_BETA_KEY] = new KeyValue(KEY_CONFIG_BETA_KEY, branch);
-        }
-        else
-        {
-            var mountedChild = manifestMap[appId][KEY_MOUNTED_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
-            if (mountedChild != null) manifestMap[appId][KEY_MOUNTED_CONFIG].Children.Remove(mountedChild);
+            // TODO: Consider separating MOUNTED_CONFIG changes to when the download completes
+            // USER_CONFIG should be a place for "staged" changes 
+            string disabledDlcStr = String.Join(',', disabledDlc);
+            manifestMap[appId][KEY_UNIVERSE] = new KeyValue(KEY_UNIVERSE, ((int)SteamClientApp.UNIVERSE).ToString());
+            manifestMap[appId][KEY_BUILD_ID] = new KeyValue(KEY_BUILD_ID, version.ToString());
+            manifestMap[appId][KEY_TARGET_BUILD_ID] = new KeyValue(KEY_TARGET_BUILD_ID, version.ToString());
 
-            var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
-            if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
-        }
+            if (manifestMap[appId][KEY_USER_CONFIG] == KeyValue.Invalid)
+                manifestMap[appId][KEY_USER_CONFIG] = new KeyValue(KEY_USER_CONFIG);
+            manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE] = new KeyValue(KEY_CONFIG_LANGUAGE, language);
 
-        if (!string.IsNullOrEmpty(disabledDlcStr))
-        {
-            manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_DISABLED_DLC] = new KeyValue(KEY_CONFIG_DISABLED_DLC, disabledDlcStr);
-            manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_DISABLED_DLC] = new KeyValue(KEY_CONFIG_DISABLED_DLC, disabledDlcStr);
-        }
-        else
-        {
-            var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
-            var mountedChild = manifestMap[appId][KEY_MOUNTED_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+            if (manifestMap[appId][KEY_MOUNTED_CONFIG] == KeyValue.Invalid)
+                manifestMap[appId][KEY_MOUNTED_CONFIG] = new KeyValue(KEY_MOUNTED_CONFIG);
+            manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_LANGUAGE] = new KeyValue(KEY_CONFIG_LANGUAGE, language);
 
-            if (mountedChild != null) manifestMap[appId][KEY_MOUNTED_CONFIG].Children.Remove(mountedChild);
-            if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
-        }
+            if (lastOwnedSteamId != null)
+                manifestMap[appId][KEY_LAST_OWNER] = new KeyValue(KEY_LAST_OWNER, lastOwnedSteamId);
 
-        manifestExtraMap[appId][EXTRA_KEY_OS] = new KeyValue(EXTRA_KEY_OS, os);
+            if (!string.IsNullOrEmpty(branch) && branch != AppDownloadOptions.DEFAULT_BRANCH)
+            {
+                manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_BETA_KEY] = new KeyValue(KEY_CONFIG_BETA_KEY, branch);
+                manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_BETA_KEY] = new KeyValue(KEY_CONFIG_BETA_KEY, branch);
+            }
+            else
+            {
+                var mountedChild = manifestMap[appId][KEY_MOUNTED_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+                if (mountedChild != null) manifestMap[appId][KEY_MOUNTED_CONFIG].Children.Remove(mountedChild);
+
+                var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+                if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
+            }
+
+            if (!string.IsNullOrEmpty(disabledDlcStr))
+            {
+                manifestMap[appId][KEY_USER_CONFIG][KEY_CONFIG_DISABLED_DLC] = new KeyValue(KEY_CONFIG_DISABLED_DLC, disabledDlcStr);
+                manifestMap[appId][KEY_MOUNTED_CONFIG][KEY_CONFIG_DISABLED_DLC] = new KeyValue(KEY_CONFIG_DISABLED_DLC, disabledDlcStr);
+            }
+            else
+            {
+                var userConfigChild = manifestMap[appId][KEY_USER_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+                var mountedChild = manifestMap[appId][KEY_MOUNTED_CONFIG]?.Children.FirstOrDefault((child) => child.Name == KEY_CONFIG_BETA_KEY);
+
+                if (mountedChild != null) manifestMap[appId][KEY_MOUNTED_CONFIG].Children.Remove(mountedChild);
+                if (userConfigChild != null) manifestMap[appId][KEY_USER_CONFIG].Children.Remove(userConfigChild);
+            }
+
+            manifestExtraMap[appId][EXTRA_KEY_OS] = new KeyValue(EXTRA_KEY_OS, os);
+        });
     }
 
     /// <summary>
@@ -808,9 +852,12 @@ public class DepotConfigStore
     {
         if (!manifestMap.ContainsKey(appId)) return;
 
-        var currentStateFlags = manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
-        manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, (currentStateFlags | (int)StateFlags.UpdateRequired).ToString());
-        manifestExtraMap[appId][EXTRA_KEY_LATEST_BUILD_ID] = new KeyValue(EXTRA_KEY_LATEST_BUILD_ID, latestVersion);
+        WithLock(() =>
+        {
+            var currentStateFlags = manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0;
+            manifestMap[appId][KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, (currentStateFlags | (int)StateFlags.UpdateRequired).ToString());
+            manifestExtraMap[appId][EXTRA_KEY_LATEST_BUILD_ID] = new KeyValue(EXTRA_KEY_LATEST_BUILD_ID, latestVersion);
+        });
     }
 
     /// <summary>
@@ -820,7 +867,11 @@ public class DepotConfigStore
     public void SetNotUpdatePending(uint appId)
     {
         if (!manifestMap.TryGetValue(appId, out var value)) return;
-        value[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)StateFlags.FullyInstalled).ToString());
+
+        WithLock(() =>
+        {
+            value[KEY_STATE_FLAGS] = new KeyValue(KEY_STATE_FLAGS, ((int)StateFlags.FullyInstalled).ToString());
+        });
     }
 
     /// <summary>
@@ -831,42 +882,48 @@ public class DepotConfigStore
     /// <param name="name"></param>
     public void EnsureEntryExists(string installDirectory, uint appId, string name)
     {
-        var steamappsFolder = Directory.GetParent(Directory.GetParent(installDirectory)!.FullName)!.FullName;
-        var manifestPath = Path.Join(steamappsFolder, $"appmanifest_{appId}.acf");
-        var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
-
-        if (!manifestPathMap.ContainsKey(appId))
-            manifestPathMap.TryAdd(appId, manifestPath);
-        else
-            manifestPathMap[appId] = manifestPath;
-
-        if (!manifestMap.ContainsKey(appId))
+        WithLock(() =>
         {
-            manifestMap.TryAdd(appId, new KeyValue(KEY_APP_STATE));
-            manifestMap[appId][KEY_APP_ID] = new KeyValue(KEY_APP_ID, appId.ToString());
-        }
+            manifestPathMap.Remove(appId, out var _);
+            manifestMap.Remove(appId, out var _);
 
-        if (manifestMap[appId][KEY_INSTALLED_DEPOTS] == KeyValue.Invalid)
-            manifestMap[appId][KEY_INSTALLED_DEPOTS] = new KeyValue(KEY_INSTALLED_DEPOTS);
+            var steamappsFolder = Directory.GetParent(Directory.GetParent(installDirectory)!.FullName)!.FullName;
+            var manifestPath = Path.Join(steamappsFolder, $"appmanifest_{appId}.acf");
+            var manifestExtraPath = manifestPath.Replace(".acf", ".extra.acf");
 
-        manifestMap[appId][KEY_NAME] = new KeyValue(KEY_NAME, name);
-        manifestMap[appId][KEY_INSTALL_DIR] = new KeyValue(KEY_INSTALL_DIR, Path.GetFileName(installDirectory));
-        manifestMap[appId][KEY_AUTO_UPDATE_BEHAVIOR] = new KeyValue(KEY_AUTO_UPDATE_BEHAVIOR, "1");
-        manifestMap[appId][KEY_ALLOW_OTHER_DOWNLOADS_WHILE_RUNNING] = new KeyValue(KEY_ALLOW_OTHER_DOWNLOADS_WHILE_RUNNING, "0");
-        manifestMap[appId][KEY_SCHEDULED_AUTO_UPDATE] = new KeyValue(KEY_SCHEDULED_AUTO_UPDATE, "0");
-        manifestMap[appId][KEY_FULL_VALIDATE_AFTER_NEXT_UPDATE] = new KeyValue(KEY_FULL_VALIDATE_AFTER_NEXT_UPDATE, "0");
+            if (!manifestPathMap.ContainsKey(appId))
+                manifestPathMap.TryAdd(appId, manifestPath);
+            else
+                manifestPathMap[appId] = manifestPath;
 
-        // Extra
-        if (!manifestExtraMap.ContainsKey(appId))
-        {
-            manifestExtraMap.TryAdd(appId, new KeyValue(KEY_APP_STATE));
-            manifestExtraMap[appId][KEY_APP_ID] = new KeyValue(KEY_APP_ID, appId.ToString());
-        }
+            if (!manifestMap.ContainsKey(appId))
+            {
+                manifestMap.TryAdd(appId, new KeyValue(KEY_APP_STATE));
+                manifestMap[appId][KEY_APP_ID] = new KeyValue(KEY_APP_ID, appId.ToString());
+            }
 
-        if (!manifestExtraPathMap.ContainsKey(appId))
-            manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
-        else
-            manifestExtraPathMap[appId] = manifestExtraPath;
+            if (manifestMap[appId][KEY_INSTALLED_DEPOTS] == KeyValue.Invalid)
+                manifestMap[appId][KEY_INSTALLED_DEPOTS] = new KeyValue(KEY_INSTALLED_DEPOTS);
+
+            manifestMap[appId][KEY_NAME] = new KeyValue(KEY_NAME, name);
+            manifestMap[appId][KEY_INSTALL_DIR] = new KeyValue(KEY_INSTALL_DIR, Path.GetFileName(installDirectory));
+            manifestMap[appId][KEY_AUTO_UPDATE_BEHAVIOR] = new KeyValue(KEY_AUTO_UPDATE_BEHAVIOR, "1");
+            manifestMap[appId][KEY_ALLOW_OTHER_DOWNLOADS_WHILE_RUNNING] = new KeyValue(KEY_ALLOW_OTHER_DOWNLOADS_WHILE_RUNNING, "0");
+            manifestMap[appId][KEY_SCHEDULED_AUTO_UPDATE] = new KeyValue(KEY_SCHEDULED_AUTO_UPDATE, "0");
+            manifestMap[appId][KEY_FULL_VALIDATE_AFTER_NEXT_UPDATE] = new KeyValue(KEY_FULL_VALIDATE_AFTER_NEXT_UPDATE, "0");
+
+            // Extra
+            if (!manifestExtraMap.ContainsKey(appId))
+            {
+                manifestExtraMap.TryAdd(appId, new KeyValue(KEY_APP_STATE));
+                manifestExtraMap[appId][KEY_APP_ID] = new KeyValue(KEY_APP_ID, appId.ToString());
+            }
+
+            if (!manifestExtraPathMap.ContainsKey(appId))
+                manifestExtraPathMap.TryAdd(appId, manifestExtraPath);
+            else
+                manifestExtraPathMap[appId] = manifestExtraPath;
+        });
     }
 
     /// <summary>
@@ -885,7 +942,7 @@ public class DepotConfigStore
             infos.Add(installedApp);
         }
 
-        return infos.ToArray();
+        return [.. infos];
     }
 
     /// <summary>
@@ -948,7 +1005,7 @@ public class DepotConfigStore
             });
         }
 
-        return infos.ToArray();
+        return [.. infos];
     }
 
     /// <summary>
@@ -1029,8 +1086,11 @@ public class DepotConfigStore
             if (manifestExtraPathMap.TryGetValue(appId, out var manifestExtraPath) && File.Exists(manifestExtraPath))
                 File.Delete(manifestExtraPath);
 
-            manifestPathMap.Remove(appId, out var _);
-            manifestMap.Remove(appId, out var _);
+            WithLock(() =>
+            {
+                manifestPathMap.Remove(appId, out var _);
+                manifestMap.Remove(appId, out var _);
+            });
         }
     }
 
@@ -1106,13 +1166,16 @@ public class DepotConfigStore
             File.Delete(currentManifestPath);
             File.Delete(currentExtraManifestPath);
 
-            // Update state
-            manifestPathMap[appId] = Path.Join(Directory.GetParent(Directory.GetParent(newInstallDirectory)!.FullName)!.FullName, $"appmanifest_{appId}.acf");
-            manifestExtraPathMap[appId] = manifestPathMap[appId].Replace(".acf", ".extra.acf");
+            WithLock(() =>
+            {
+                // Update state
+                manifestPathMap[appId] = Path.Join(Directory.GetParent(Directory.GetParent(newInstallDirectory)!.FullName)!.FullName, $"appmanifest_{appId}.acf");
+                manifestExtraPathMap[appId] = manifestPathMap[appId].Replace(".acf", ".extra.acf");
 
-            // Save state
-            manifestMap[appId].SaveToFileWithAtomicRename(manifestPathMap[appId]);
-            manifestExtraMap[appId].SaveToFileWithAtomicRename(manifestExtraPathMap[appId]);
+                // Save state
+                manifestMap[appId].SaveToFileWithAtomicRename(manifestPathMap[appId]);
+                manifestExtraMap[appId].SaveToFileWithAtomicRename(manifestExtraPathMap[appId]);
+            });
 
             // Final progress update to 100%
             OnMoveItemProgressed?.Invoke((appId.ToString(), 100));
@@ -1130,11 +1193,6 @@ public class DepotConfigStore
             Console.Error.WriteLine($"Exception when moving item: {err}");
             OnMoveItemFailed?.Invoke((appId.ToString(), ""));
         }
-    }
-
-    public void SetSteamAccountID(ulong? accountId)
-    {
-        currentAccountId = accountId;
     }
 
     public List<uint> GetDisabledDlcIds(uint appId)
@@ -1213,5 +1271,18 @@ public class DepotConfigStore
     {
         var operation = ~(StateFlags.UpdateStarted | StateFlags.UpdateRunning);
         return (manifestMap[appId][KEY_STATE_FLAGS]?.AsUnsignedInteger() ?? 0) & (int)operation;
+    }
+
+    private void WithLock(Action Callback)
+    {
+        fileLock.Wait();
+        try
+        {
+            Callback();
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 }
