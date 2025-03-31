@@ -195,8 +195,15 @@ public class ContentDownloader
 
   private void OnMainProcessExit(object? sender, EventArgs e)
   {
-    cdnPool?.ExhaustedToken?.Cancel();
-    currentDownloadTask?.Wait();
+    try
+    {
+      cdnPool?.ExhaustedToken?.Cancel();
+      currentDownloadTask?.Wait();
+    }
+    catch
+    {
+      // Ignore
+    }
   }
 
   public static async Task PauseInstall()
@@ -1421,7 +1428,31 @@ public class ContentDownloader
     {
       await InvokeAsync(
           files.Select(file => new Func<Task>(async () =>
-              await Task.Run(() => DownloadSteam3AsyncDepotFile(appId, cts, downloadCounter, depotFilesData, file, networkChunkQueue)))),
+              await Task.Run(() =>
+              {
+                try
+                {
+                  DownloadSteam3AsyncDepotFile(appId, cts, downloadCounter, depotFilesData, file, networkChunkQueue);
+                }
+                catch (TaskCanceledException)
+                {
+                  Console.WriteLine($"Verification of depot:{depot.DepotId} file chunk cancelled");
+                  cts.Cancel();
+                }
+                catch (OperationCanceledException)
+                {
+                  Console.WriteLine($"Verification of depot:{depot.DepotId} file chunk cancelled");
+                  cts.Cancel();
+                  throw new TaskCanceledException();
+                }
+                catch (Exception exception)
+                {
+                  Console.Error.WriteLine($"Error during verification of depot:{depot.DepotId} file chunk, err:{exception}");
+                  cts.Cancel();
+                  var error = exception.Message.Contains("No space left on device") ? DbusErrors.NotEnoughSpace : DbusErrors.Generic;
+                  throw new DBusException(error, "Error during chunk verification");
+                }
+              }))),
           maxDegreeOfParallelism: this.options!.MaxDownloads
       );
 
@@ -1616,6 +1647,8 @@ public class ContentDownloader
 
           foreach (var chunk in file.Chunks)
           {
+            cts.Token.ThrowIfCancellationRequested();
+
             var oldChunk = oldManifestFile.Chunks.FirstOrDefault(c => (c.ChunkID ?? []).SequenceEqual(chunk.ChunkID ?? []));
             if (oldChunk != null)
             {
@@ -1635,6 +1668,8 @@ public class ContentDownloader
           {
             foreach (var match in orderedChunks)
             {
+              cts.Token.ThrowIfCancellationRequested();
+
               fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
 
               var adler = AdlerHash(fsOld, (int)match.OldChunk.UncompressedLength);
@@ -1669,6 +1704,8 @@ public class ContentDownloader
 
               foreach (var match in copyChunks)
               {
+                cts.Token.ThrowIfCancellationRequested();
+
                 fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
 
                 var tmp = new byte[match.OldChunk.UncompressedLength];
@@ -1706,7 +1743,7 @@ public class ContentDownloader
 
           // Validate checksums in case file has been written to
           Console.WriteLine("Validating file not found in old manifest {0}, {1}", fileFinalPath, file.Chunks.Count);
-          neededChunks = ValidateSteam3FileChecksums(fs, [.. file.Chunks.OrderBy(x => x.Offset)]);
+          neededChunks = ValidateSteam3FileChecksums(fs, [.. file.Chunks.OrderBy(x => x.Offset)], cts);
         }
         catch (DBusException)
         {
@@ -2191,12 +2228,14 @@ public class ContentDownloader
   }
 
   // Validate a file against Steam3 Chunk data
-  public static List<DepotManifest.ChunkData> ValidateSteam3FileChecksums(FileStream fs, DepotManifest.ChunkData[] chunkdata)
+  public static List<DepotManifest.ChunkData> ValidateSteam3FileChecksums(FileStream fs, DepotManifest.ChunkData[] chunkdata, CancellationTokenSource cts)
   {
     var neededChunks = new List<DepotManifest.ChunkData>();
 
     foreach (var data in chunkdata)
     {
+      cts.Token.ThrowIfCancellationRequested();
+
       fs.Seek((long)data.Offset, SeekOrigin.Begin);
 
       var adler = AdlerHash(fs, (int)data.UncompressedLength);

@@ -1206,10 +1206,6 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Invoked when the Steam client tries to log in
   void OnLoggedOn(SteamUser.LoggedOnCallback callback)
   {
-    var steamId = session?.SteamUser?.SteamID?.ConvertToUInt64();
-    if (steamId != null)
-      depotConfigStore.SetSteamAccountID(steamId);
-
     if (callback.Result != EResult.OK)
     {
       if (!new List<EResult>([EResult.AlreadyLoggedInElsewhere, EResult.TryAnotherCM]).Contains(callback.Result))
@@ -1340,7 +1336,6 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
   {
-    depotConfigStore.SetSteamAccountID(null);
     Console.WriteLine("Logged off of Steam: {0}", callback.Result);
   }
 
