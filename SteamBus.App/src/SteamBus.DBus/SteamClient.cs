@@ -112,6 +112,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   private bool isOnline = false;
 
   public static TaskCompletionSource? fetchingSteamClientData;
+  public static TaskCompletionSource? steamClientWaiting;
 
 
   // Creates a new DBusSteamClient instance with the given DBus path
@@ -225,6 +226,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
       }
     }
+    else
+      await LaunchSteamClientToSyncTokens(session.GetLogonDetails());
   }
 
   // Decrypt the given base64 encoded string using our private key
@@ -816,6 +819,17 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       if (!wantsOfflineMode && session.playingBlocked) throw DbusExceptionHelper.ThrowPlayingBlocked();
 
+      // Return early in case steam client is already running and ready
+      if (steamClientWaiting != null)
+      {
+        if (steamClientApp.readyTask != null) await steamClientApp.readyTask.Task;
+        steamClientWaiting?.TrySetResult();
+        steamClientWaiting = null;
+        steamClientApp.forAppId = appIdString;
+        OnLaunchReady?.Invoke(appIdString);
+        return [];
+      }
+
       var logonDetails = session!.GetLogonDetails();
       await steamClientApp.Start(logonDetails.AccountID, appIdString, logonDetails.Username!, wantsOfflineMode);
     }
@@ -1280,58 +1294,75 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     _ = Task.Run(async () =>
     {
-      if (loginDetails.Username == null || steamClientApp.running || !isOnline) return;
+      await Task.Delay(TimeSpan.FromSeconds(30));
+      await LaunchSteamClientToSyncTokens(loginDetails);
+    });
+  }
 
-      fetchingSteamClientData = new();
-      Console.WriteLine("Logging in with steam client to fetch latest data");
+  async Task LaunchSteamClientToSyncTokens(SteamUser.LogOnDetails loginDetails)
+  {
+    if (loginDetails.Username == null || steamClientApp.running || !isOnline) return;
+
+    if (DateTime.UtcNow - steamClientApp.lastLoggedIn < TimeSpan.FromHours(6))
+    {
+      Console.WriteLine("Skipping steam client sync: Task ran less than 6 hours ago.");
+      return;
+    }
+
+    fetchingSteamClientData = new();
+    Console.WriteLine("Logging in with steam client to fetch latest data");
+
+    try
+    {
+      await steamClientApp.Start(loginDetails.AccountID, "", loginDetails.Username, false);
+    }
+    catch (Exception exception)
+    {
+      Console.Error.WriteLine($"Failed starting steam client to fetch data post login, err:{exception}");
+    }
+    finally
+    {
+      try
+      {
+        if (steamClientApp.updateEndedTask != null) await steamClientApp.updateEndedTask.Task;
+      }
+      catch (Exception) { }
 
       try
       {
-        // Delete offline ticket so we can re-generated it and know when to quit the client
-        session?.DeleteUserConfigOfflineTicket();
-
-        await steamClientApp.Start(loginDetails.AccountID, "", loginDetails.Username, false);
+        if (steamClientApp.readyTask != null) await steamClientApp.readyTask.Task;
       }
-      catch (Exception exception)
+      catch (Exception) { }
+
+      // Mark this process as finished
+      fetchingSteamClientData?.TrySetResult();
+      fetchingSteamClientData = null;
+
+      // If game launch doesn't happen within 1 minute, close steam client
+      steamClientWaiting = new();
+      await AsyncUtils.WaitForConditionAsync(() => steamClientWaiting == null || !steamClientApp.running, TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1));
+
+      if (steamClientWaiting != null)
       {
-        Console.Error.WriteLine($"Failed starting steam client to fetch data post login, err:{exception}");
-      }
-      finally
-      {
         try
         {
-          if (steamClientApp.updateEndedTask != null) await steamClientApp.updateEndedTask.Task;
-        }
-        catch (Exception) { }
-
-        try
-        {
-          if (steamClientApp.readyTask != null) await steamClientApp.readyTask.Task;
-        }
-        catch (Exception) { }
-
-
-        try
-        {
-          // Wait until offline field is populated with updated data
-          var delay = TimeSpan.FromMilliseconds(200);
-          var timeout = TimeSpan.FromSeconds(20);
-          var success = await AsyncUtils.WaitForConditionAsync(() => session?.IsUserConfigReady() ?? false, delay, timeout);
-
-          if (!success) Console.Error.WriteLine($"Steam has not generated user files...");
-
-          await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(10));
           Console.WriteLine("Shut down steam client after fetching data");
+          await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(20));
         }
         catch (Exception err)
         {
           Console.Error.WriteLine($"Error waiting and shutting down steam client after launching it to fetch configs: {err}");
         }
+        finally
+        {
+          steamClientWaiting?.TrySetResult();
+          steamClientWaiting = null;
+        }
       }
+    }
 
-      fetchingSteamClientData?.TrySetResult();
-      fetchingSteamClientData = null;
-    });
+    fetchingSteamClientData?.TrySetResult();
+    fetchingSteamClientData = null;
   }
 
   void OnLoggedOff(SteamUser.LoggedOffCallback callback)
