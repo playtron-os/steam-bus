@@ -854,7 +854,6 @@ public class SteamSession
 
   public void SaveToken()
   {
-    Console.WriteLine("#### TEST");
     if (logonDetails?.Username != null && logonDetails?.AccessToken != null && SteamUser?.SteamID != null)
     {
       var localConfig = new LocalConfig(LocalConfig.DefaultPath());
