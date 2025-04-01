@@ -717,11 +717,21 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     Console.WriteLine($"Moving app: {appIdString}");
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
-    var downloader = new ContentDownloader(session!, depotConfigStore);
-    var installdir = await downloader.GetAppInstallDir(appId);
-    var newInstallDirectory = await Disk.GetInstallRootFromDevice(disk, installdir);
+    var installDir = depotConfigStore.GetInstallDirectory(appId);
+    if (installDir == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
+
+    var installFolderName = new DirectoryInfo(installDir).Name;
+    var newInstallDirectory = await Disk.GetInstallRootFromDevice(disk, installFolderName);
 
     _ = Task.Run(() => depotConfigStore.MoveInstalledApp(appId, newInstallDirectory, OnMoveItemProgressed, OnMoveItemCompleted, OnMoveItemFailed));
+  }
+
+  async Task IPluginLibraryProvider.CancelMoveItemAsync(string appIdString)
+  {
+    Console.WriteLine($"Cancelling move for app: {appIdString}");
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    await depotConfigStore.CancelMoveInstalledApp(appId);
   }
 
   async Task<EulaEntry[]> IPluginLibraryProvider.GetEulasAsync(string appIdString, string country, string locale)
