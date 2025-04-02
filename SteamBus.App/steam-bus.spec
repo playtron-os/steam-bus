@@ -1,5 +1,5 @@
 Name: SteamBus
-Version: 1.15.4
+Version: 1.16.0
 Release: 1%{?dist}
 Summary: SteamBus app used to interface with Steam Services
 License: GPLv2
