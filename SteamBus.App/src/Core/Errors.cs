@@ -29,6 +29,7 @@ public static class DbusErrors
     public const string Permission = "one.playtron.Error.Permission";
     public const string NetworkRequired = "one.playtron.Error.NetworkRequired";
     public const string Generic = "one.playtron.Error.Generic";
+    public const string MoveItemCancelled = "one.playtron.Error.MoveItemCancelled";
 }
 
 public static class DbusExceptionHelper

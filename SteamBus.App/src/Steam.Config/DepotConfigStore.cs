@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading.Tasks;
 using Playtron.Plugin;
 using Steam.Config;
@@ -146,6 +147,8 @@ public class DepotConfigStore
     public SteamSession? steamSession;
 
     private readonly SemaphoreSlim fileLock = new(1, 1);
+
+    private Dictionary<uint, CancellationTokenSource> _moveCancellationTokenMap = [];
 
     DepotConfigStore()
     {
@@ -1102,97 +1105,121 @@ public class DepotConfigStore
     /// <param name="OnMoveItemProgressed"></param>
     /// <param name="OnMoveItemCompleted"></param>
     /// <param name="OnMoveItemFailed"></param>
-    public async Task MoveInstalledApp(uint appId, string newInstallDirectory, Action<(string appId, double progress)>? OnMoveItemProgressed,
-        Action<(string appId, string installFolder)>? OnMoveItemCompleted, Action<(string appId, string error)>? OnMoveItemFailed)
+    /// <param name="ct"></param>
+    public void MoveInstalledApp(
+        uint appId,
+        string newInstallDirectory,
+        Action<(string appId, double progress)>? OnMoveItemProgressed,
+        Action<(string appId, string installFolder)>? OnMoveItemCompleted,
+        Action<(string appId, string error)>? OnMoveItemFailed)
     {
+        if (_moveCancellationTokenMap.ContainsKey(appId)) return;
+        var cts = new CancellationTokenSource();
+        _moveCancellationTokenMap.Add(appId, cts);
+
         try
         {
-            if (!manifestPathMap.TryGetValue(appId, out var currentManifestPath) || !manifestExtraPathMap.TryGetValue(appId, out var currentExtraManifestPath))
+            if (!manifestPathMap.TryGetValue(appId, out var currentManifestPath) ||
+                !manifestExtraPathMap.TryGetValue(appId, out var currentExtraManifestPath))
                 throw DbusExceptionHelper.ThrowAppNotInstalled();
 
             var currentInstallDirectory = GetInstallDirectory(appId);
             if (currentInstallDirectory == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
 
-            // Ensure the destination directory exists
             if (!Directory.Exists(newInstallDirectory))
                 Directory.CreateDirectory(newInstallDirectory);
 
-            // Get all files and subdirectories
             var files = Directory.GetFiles(currentInstallDirectory, "*", SearchOption.AllDirectories);
             var directories = Directory.GetDirectories(currentInstallDirectory, "*", SearchOption.AllDirectories);
-            var totalItems = files.Length + directories.Length;
+            var totalItems = files.Length;
             int processedItems = 0;
 
-            // Move all files
-            foreach (var file in files)
-            {
-                // Calculate relative path
-                string relativePath = Path.GetRelativePath(currentInstallDirectory, file);
-                string destinationFile = Path.Combine(newInstallDirectory, relativePath);
-
-                // Ensure the destination directory exists
-                if (!Directory.Exists(Path.GetDirectoryName(destinationFile)!))
-                    Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
-
-                // Move the file
-                if (!File.Exists(destinationFile))
-                    await Task.Run(() => File.Move(file, destinationFile));
-
-                // Update progress
-                processedItems++;
-                int progress = (int)((double)processedItems / totalItems * 100);
-                OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
-            }
-
-            // Move all directories
+            // Copy directories first
             foreach (var directory in directories)
             {
-                // Calculate relative path
+                cts.Token.ThrowIfCancellationRequested();
+
                 string relativePath = Path.GetRelativePath(currentInstallDirectory, directory);
                 string destinationDir = Path.Combine(newInstallDirectory, relativePath);
 
-                // Create the directory in the destination
                 if (!Directory.Exists(destinationDir))
                     Directory.CreateDirectory(destinationDir);
+            }
 
-                // Update progress
+            // Copy files
+            foreach (var file in files)
+            {
+                cts.Token.ThrowIfCancellationRequested();
+
+                string relativePath = Path.GetRelativePath(currentInstallDirectory, file);
+                string destinationFile = Path.Combine(newInstallDirectory, relativePath);
+                var directory = Path.GetDirectoryName(destinationFile)!;
+
+                if (!Directory.Exists(directory))
+                    Directory.CreateDirectory(directory);
+
+                if (!File.Exists(destinationFile))
+                    File.Copy(file, destinationFile, true);
+
                 processedItems++;
                 int progress = (int)((double)processedItems / totalItems * 100);
                 OnMoveItemProgressed?.Invoke((appId.ToString(), progress));
             }
 
-            // Delete the source directory after moving
-            Directory.Delete(currentInstallDirectory, true);
-            File.Delete(currentManifestPath);
-            File.Delete(currentExtraManifestPath);
+            cts.Token.ThrowIfCancellationRequested();
 
             WithLock(() =>
             {
-                // Update state
-                manifestPathMap[appId] = Path.Join(Directory.GetParent(Directory.GetParent(newInstallDirectory)!.FullName)!.FullName, $"appmanifest_{appId}.acf");
-                manifestExtraPathMap[appId] = manifestPathMap[appId].Replace(".acf", ".extra.acf");
+                var newManifestPath = Path.Join(Directory.GetParent(Directory.GetParent(newInstallDirectory)!.FullName)!.FullName, $"appmanifest_{appId}.acf");
+                var newExtraManifestPath = newManifestPath.Replace(".acf", ".extra.acf");
+                File.Copy(currentManifestPath, newManifestPath, true);
+                File.Copy(currentExtraManifestPath, newExtraManifestPath, true);
 
-                // Save state
+                Directory.Delete(currentInstallDirectory, true);
+                File.Delete(currentManifestPath);
+                File.Delete(currentExtraManifestPath);
+
+                manifestPathMap[appId] = newManifestPath;
+                manifestExtraPathMap[appId] = newExtraManifestPath;
+
                 manifestMap[appId].SaveToFileWithAtomicRename(manifestPathMap[appId]);
                 manifestExtraMap[appId].SaveToFileWithAtomicRename(manifestExtraPathMap[appId]);
             });
 
-            // Final progress update to 100%
             OnMoveItemProgressed?.Invoke((appId.ToString(), 100));
-
-            // Send complete msg
             OnMoveItemCompleted?.Invoke((appId.ToString(), newInstallDirectory));
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("Operation cancelled, rolling back...");
+            OnMoveItemFailed?.Invoke((appId.ToString(), DbusErrors.MoveItemCancelled));
+            if (Directory.Exists(newInstallDirectory))
+                Directory.Delete(newInstallDirectory, true);
         }
         catch (DBusException err)
         {
             Console.Error.WriteLine($"DBus exception when moving item: {err}");
             OnMoveItemFailed?.Invoke((appId.ToString(), err.ErrorName));
+            if (Directory.Exists(newInstallDirectory))
+                Directory.Delete(newInstallDirectory, true);
         }
         catch (Exception err)
         {
             Console.Error.WriteLine($"Exception when moving item: {err}");
-            OnMoveItemFailed?.Invoke((appId.ToString(), ""));
+            OnMoveItemFailed?.Invoke((appId.ToString(), err.Message));
+            if (Directory.Exists(newInstallDirectory))
+                Directory.Delete(newInstallDirectory, true);
         }
+        finally
+        {
+            _moveCancellationTokenMap.Remove(appId);
+        }
+    }
+
+    public async Task CancelMoveInstalledApp(uint appId)
+    {
+        if (_moveCancellationTokenMap.TryGetValue(appId, out var cts))
+            await cts.CancelAsync();
     }
 
     public List<uint> GetDisabledDlcIds(uint appId)
