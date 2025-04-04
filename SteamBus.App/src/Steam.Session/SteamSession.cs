@@ -84,6 +84,7 @@ public class SteamSession
   private UserCache userCache;
   private LibraryCache libraryCache;
   private AppInfoCache appInfoCache;
+  private SteamConnectionConfig steamConnectionConfig;
 
   public Action? OnAvatarUpdated;
 
@@ -103,6 +104,7 @@ public class SteamSession
     this.userCache = new UserCache(UserCache.DefaultPath());
     this.libraryCache = new LibraryCache(LibraryCache.DefaultPath());
     this.appInfoCache = new AppInfoCache(AppInfoCache.DefaultPath());
+    this.steamConnectionConfig = new SteamConnectionConfig(SteamConnectionConfig.CellIdDefaultPath(), SteamConnectionConfig.ServersBinDefaultPath());
 
     if (details.AccountID != 0)
     {
@@ -117,7 +119,7 @@ public class SteamSession
       PackageIDs = new ReadOnlyCollection<uint>([]);
     }
 
-    var clientConfiguration = GetDefaultSteamClientConfig();
+    var clientConfiguration = steamConnectionConfig.GetSteamClientConfig();
     this.SteamClient = new SteamClient(clientConfiguration);
 
     this.SteamUser = this.SteamClient.GetHandler<SteamUser>();
@@ -471,8 +473,10 @@ public class SteamSession
   {
     bAborted = false;
     bConnecting = true;
-    connectionBackoff = 0;
     authSession = null;
+
+    if (!bIsConnectionRecovery)
+      connectionBackoff = 0;
 
     ResetConnectionFlags();
     this.SteamClient.Connect();
@@ -523,9 +527,12 @@ public class SteamSession
     Console.WriteLine(" Done!");
     bConnecting = false;
 
-    // Update our tracking so that we don't time out, even if we need to reconnect multiple times,
-    // e.g. if the authentication phase takes a while and therefore multiple connections.
-    connectionBackoff = 0;
+    if (!bIsConnectionRecovery)
+    {
+      // Update our tracking so that we don't time out, even if we need to reconnect multiple times,
+      // e.g. if the authentication phase takes a while and therefore multiple connections.
+      connectionBackoff = 0;
+    }
 
     if (!AuthenticatedUser())
     {
@@ -776,9 +783,6 @@ public class SteamSession
   // Invoked when the Steam client tries to log in
   private void OnLogIn(SteamUser.LoggedOnCallback loggedOn)
   {
-    // Make sure to save token first thing so we don't end up getting error "AlreadyLoggedInElsewhere" for having a used token locally
-    SaveToken();
-
     var isSteamGuard = loggedOn.Result == EResult.AccountLogonDenied;
     var is2FA = loggedOn.Result == EResult.AccountLoginDeniedNeedTwoFactor;
     var isAccessToken = this.RememberPassword && logonDetails.AccessToken != null &&
@@ -844,6 +848,10 @@ public class SteamSession
 
       return;
     }
+
+    connectionBackoff = 0;
+    SaveToken();
+    steamConnectionConfig.SaveCellId(loggedOn.CellID);
 
     Console.WriteLine(" Done!");
 
@@ -1356,7 +1364,8 @@ public class SteamSession
         return GetProviderItem(appId.ToString(), cached);
     }
 
-    var steamClient = new SteamClient(GetDefaultSteamClientConfig());
+    var steamConnectionConfig = new SteamConnectionConfig(SteamConnectionConfig.CellIdDefaultPath(), SteamConnectionConfig.ServersBinDefaultPath());
+    var steamClient = new SteamClient(steamConnectionConfig.GetSteamClientConfig());
     var steamUser = steamClient.GetHandler<SteamUser>();
     var steamApps = steamClient.GetHandler<SteamApps>();
     if (steamUser == null || steamApps == null) return null;
@@ -1419,12 +1428,5 @@ public class SteamSession
     }
 
     return null;
-  }
-
-  private static SteamConfiguration GetDefaultSteamClientConfig()
-  {
-    return SteamConfiguration.Create(config =>
-        config.WithConnectionTimeout(TimeSpan.FromSeconds(10))
-    );
   }
 }
