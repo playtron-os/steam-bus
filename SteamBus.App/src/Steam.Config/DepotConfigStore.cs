@@ -885,6 +885,8 @@ public class DepotConfigStore
     /// <param name="name"></param>
     public void EnsureEntryExists(string installDirectory, uint appId, string name)
     {
+        if (manifestPathMap.ContainsKey(appId)) return;
+
         WithLock(() =>
         {
             manifestPathMap.Remove(appId, out var _);
