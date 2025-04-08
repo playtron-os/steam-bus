@@ -978,6 +978,63 @@ public class DepotConfigStore
     }
 
     /// <summary>
+    /// Verifies all the installed apps have a size, and if not, get their sizes
+    /// </summary>
+    /// <returns></returns>
+    public async Task<bool> VerifyAppsAreSized()
+    {
+        var manifests = manifestMap.Where((entry) => manifestPathMap.ContainsKey(entry.Key));
+        var appSizesToUpdate = new List<(uint, ulong, string)>();
+
+        foreach (var entry in manifests)
+        {
+            if (!manifestExtraMap.TryGetValue(entry.Key, out var manifestExtra)) continue;
+
+            var appId = entry.Key;
+            var totalDownloadSize = entry.Value[KEY_BYTES_TO_DOWNLOAD].AsUnsignedLong();
+            var diskSize = entry.Value[KEY_SIZE_ON_DISK].AsUnsignedLong();
+
+            if (steamSession != null && diskSize == 0 && totalDownloadSize == 0)
+            {
+                var os = GetOS(appId);
+                var installPath = GetInstallDirectory(entry.Key)!;
+                var disabledDlc = (entry.Value[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString() ?? "").Split(',');
+                var branch = entry.Value[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
+                var language = entry.Value[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_LANGUAGE]?.AsString() ?? "english";
+
+                var contentDownloader = new ContentDownloader(steamSession, this);
+                var installOptions = new InstallOptions
+                {
+                    branch = branch,
+                    language = language,
+                    os = os,
+                    disabled_dlc = disabledDlc
+                };
+                var options = new AppDownloadOptions(installOptions, installPath);
+                totalDownloadSize = await contentDownloader.GetTotalDownloadSizeAsync(appId, options);
+
+                if (totalDownloadSize != 0)
+                    appSizesToUpdate.Add((appId, totalDownloadSize, installPath));
+            }
+        }
+
+        if (appSizesToUpdate.Count > 0)
+        {
+            foreach (var (appId, size, installPath) in appSizesToUpdate)
+            {
+                Console.WriteLine($"Updating total sizes which wasn't found for appId:{appId}, size:{size}");
+                SetTotalSize(appId, size);
+                UpdateAppSizeOnDisk(appId, await Disk.GetFolderSizeWithDu(installPath));
+                Save(appId);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// List of installed apps with their install information
     /// </summary>
     /// <returns></returns>

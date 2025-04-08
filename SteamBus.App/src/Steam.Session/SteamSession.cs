@@ -966,7 +966,7 @@ public class SteamSession
                 var (version, branch) = item;
                 var newVersion = GetSteam3AppBuildNumber(entry.Key, branch);
 
-                if (version != newVersion.ToString())
+                if (newVersion != 0 && version != newVersion.ToString())
                 {
                   Console.WriteLine($"Found new version for appid:{entry.Key}, version:{newVersion}, installedVersion:{version}");
 
@@ -1008,6 +1008,9 @@ public class SteamSession
 
       await VerifyDownloadedApps();
       await ImportSteamClientApps();
+
+      if (await depotConfigStore.VerifyAppsAreSized())
+        InstalledAppsUpdated?.Invoke();
     }
     catch (TaskCanceledException)
     {
