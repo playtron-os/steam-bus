@@ -28,14 +28,16 @@ public class RequiredDepot
 {
   public uint DepotId;
   public ulong ManifestId;
+  public ulong ManifestSize;
   public uint DepotAppId;
   public bool IsSharedDepot;
   public bool IsDlc;
 
-  public RequiredDepot(uint depotId, ulong manifestId, uint depotAppId, bool isSharedDepot = false, bool isDlc = false)
+  public RequiredDepot(uint depotId, ulong manifestId, ulong manifestSize, uint depotAppId, bool isSharedDepot = false, bool isDlc = false)
   {
     DepotId = depotId;
     ManifestId = manifestId;
+    ManifestSize = manifestSize;
     DepotAppId = depotAppId;
     IsSharedDepot = isSharedDepot;
     IsDlc = isDlc;
@@ -324,6 +326,21 @@ public class ContentDownloader
     ];
   }
 
+  public async Task<ulong> GetTotalDownloadSizeAsync(uint appId, AppDownloadOptions options)
+  {
+    try
+    {
+      var requiredDepots = await GetAppRequiredDepots(appId, options, false, false);
+
+      return requiredDepots.Aggregate(0UL, (sum, x) => sum + x.ManifestSize);
+    }
+    catch
+    {
+      // Ignore error
+      return 0;
+    }
+  }
+
 
   public async Task DownloadAppAsync(uint appId, Action<InstallStartedDescription>? onInstallStarted, Action<InstallProgressedDescription>? onInstallProgressed,
     Action<string>? onInstallCompleted, Action<(string appId, string error)>? onInstallFailed)
@@ -535,12 +552,15 @@ public class ContentDownloader
     var language = options.Language;
     var lv = options.LowViolence;
 
-    var requiredDepots = options.DepotManifestIds.Select((d) => new RequiredDepot(d.depotId, d.manifestId, appId)).ToList();
+    var requiredDepots = options.DepotManifestIds.Select((d) => new RequiredDepot(d.depotId, d.manifestId, 0, appId)).ToList();
     var hasSpecificDepots = requiredDepots.Count > 0;
     var depotIdsFound = new List<uint>();
     var depotIdsExpected = requiredDepots.Select(x => x.DepotId).ToList();
     var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
     var disabledDlcIds = depotConfigStore.GetDisabledDlcIds(appId);
+
+    // List of dlcs found in depots config but are not owned
+    var dlcsNotOwned = new List<uint>();
 
     if (depots == null)
       throw DbusExceptionHelper.ThrowContentNotFound();
@@ -556,7 +576,7 @@ public class ContentDownloader
       if (workshopDepot != 0 && !depotIdsExpected.Contains(workshopDepot))
       {
         depotIdsExpected.Add(workshopDepot);
-        requiredDepots = requiredDepots.Select(pair => new RequiredDepot(workshopDepot, pair.ManifestId, appId)).ToList();
+        requiredDepots = requiredDepots.Select(pair => new RequiredDepot(workshopDepot, pair.ManifestId, pair.ManifestSize, appId)).ToList();
       }
 
       depotIdsFound.AddRange(depotIdsExpected);
@@ -626,7 +646,7 @@ public class ContentDownloader
           if (depotSection["sharedinstall"]?.AsString() == "1")
           {
             if (depotFromApp == 0) continue;
-            requiredDepots.Add(new RequiredDepot(id, INVALID_MANIFEST_ID, depotFromApp, true, false));
+            requiredDepots.Add(new RequiredDepot(id, INVALID_MANIFEST_ID, 0, depotFromApp, true, false));
           }
           else
           {
@@ -636,9 +656,12 @@ public class ContentDownloader
             {
               var isDlc = dlcAppId != 0;
               if (isDlc && !session.IsAppOwned(dlcAppId))
+              {
+                dlcsNotOwned.Add(dlcAppId);
                 continue;
+              }
 
-              requiredDepots.Add(new RequiredDepot(id, INVALID_MANIFEST_ID, depotFromApp == 0 ? appId : depotFromApp, false, isDlc));
+              requiredDepots.Add(new RequiredDepot(id, INVALID_MANIFEST_ID, 0, depotFromApp == 0 ? appId : depotFromApp, false, isDlc));
             }
           }
         }
@@ -665,7 +688,7 @@ public class ContentDownloader
     var hasDepotsInDlc = depots["hasdepotsindlc"].AsString() == "1";
     foreach (var dlcAppId in dlcAppIds)
     {
-      if (requiredDepots.Any((depot) => depot.DepotAppId == dlcAppId || depot.DepotId == dlcAppId) || disabledDlcIds.Contains(dlcAppId))
+      if (dlcsNotOwned.Contains(dlcAppId) || requiredDepots.Any((depot) => depot.DepotAppId == dlcAppId || depot.DepotId == dlcAppId) || disabledDlcIds.Contains(dlcAppId))
         continue;
 
       if (hasDepotsInDlc)
@@ -676,7 +699,7 @@ public class ContentDownloader
 
           foreach (var dlcDepot in dlcRequiredDepots)
             if (!disabledDlcIds.Contains(dlcDepot.DepotAppId) && !requiredDepots.Any((d) => d.DepotId == dlcDepot.DepotId))
-              requiredDepots.Add(new RequiredDepot(dlcDepot.DepotId, dlcDepot.ManifestId, dlcDepot.DepotAppId, false, true));
+              requiredDepots.Add(new RequiredDepot(dlcDepot.DepotId, dlcDepot.ManifestId, dlcDepot.ManifestSize, dlcDepot.DepotAppId, false, true));
 
           continue;
         }
@@ -692,7 +715,7 @@ public class ContentDownloader
         }
       }
 
-      requiredDepots.Add(new RequiredDepot(dlcAppId, INVALID_MANIFEST_ID, dlcAppId, false, true));
+      requiredDepots.Add(new RequiredDepot(dlcAppId, INVALID_MANIFEST_ID, 0, dlcAppId, false, true));
     }
 
     List<RequiredDepot> validDepotManifestIds = [];
@@ -708,19 +731,19 @@ public class ContentDownloader
 
       var depotFromAppId = requiredDepot.IsDlc ? requiredDepot.DepotAppId : appId;
 
-      var manifestId = await GetSteam3DepotManifest(requiredDepot.DepotId, depotFromAppId, options.Branch);
+      var (manifestId, manifestSize) = await GetSteam3DepotManifest(requiredDepot.DepotId, depotFromAppId, options.Branch);
 
       // If is dlc and manifest was not found in dlc app info, find in parent app
       if (requiredDepot.IsDlc && manifestId == INVALID_MANIFEST_ID)
       {
-        manifestId = await GetSteam3DepotManifest(requiredDepot.DepotId, appId, options.Branch);
+        (manifestId, manifestSize) = await GetSteam3DepotManifest(requiredDepot.DepotId, appId, options.Branch);
       }
 
       if (manifestId == INVALID_MANIFEST_ID && !string.Equals(options.Branch, AppDownloadOptions.DEFAULT_BRANCH, StringComparison.OrdinalIgnoreCase))
       {
         if (log)
           Console.WriteLine("Warning: Depot {0} does not have branch named \"{1}\". Trying {2} branch.", requiredDepot.DepotId, options.Branch, AppDownloadOptions.DEFAULT_BRANCH);
-        manifestId = await GetSteam3DepotManifest(requiredDepot.DepotId, requiredDepot.DepotAppId, AppDownloadOptions.DEFAULT_BRANCH);
+        (manifestId, manifestSize) = await GetSteam3DepotManifest(requiredDepot.DepotId, requiredDepot.DepotAppId, AppDownloadOptions.DEFAULT_BRANCH);
       }
 
       if (manifestId == INVALID_MANIFEST_ID)
@@ -731,6 +754,7 @@ public class ContentDownloader
       }
 
       requiredDepot.ManifestId = manifestId;
+      requiredDepot.ManifestSize = manifestSize;
       validDepotManifestIds.Add(requiredDepot);
     }
 
@@ -835,16 +859,16 @@ public class ContentDownloader
   }
 
 
-  async Task<ulong> GetSteam3DepotManifest(uint depotId, uint appId, string branch)
+  async Task<(ulong, ulong)> GetSteam3DepotManifest(uint depotId, uint appId, string branch)
   {
     var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
     if (depots == null)
-      return INVALID_MANIFEST_ID;
+      return (INVALID_MANIFEST_ID, 0);
 
     var depotChild = depots[depotId.ToString()];
 
     if (depotChild == KeyValue.Invalid)
-      return INVALID_MANIFEST_ID;
+      return (INVALID_MANIFEST_ID, 0);
 
     // Shared depots can either provide manifests, or leave you relying on their parent app.
     // It seems that with the latter, "sharedinstall" will exist (and equals 2 in the one existance I know of).
@@ -857,7 +881,7 @@ public class ContentDownloader
         // This shouldn't ever happen, but ya never know with Valve. Don't infinite loop.
         Console.WriteLine("App {0}, Depot {1} has depotfromapp of {2}!",
             appId, depotId, otherAppId);
-        return INVALID_MANIFEST_ID;
+        return (INVALID_MANIFEST_ID, 0);
       }
 
       await this.session.RequestAppInfo(otherAppId);
@@ -869,9 +893,10 @@ public class ContentDownloader
     var manifests_encrypted = depotChild["encryptedmanifests"];
 
     if (manifests.Children.Count == 0 && manifests_encrypted.Children.Count == 0)
-      return INVALID_MANIFEST_ID;
+      return (INVALID_MANIFEST_ID, 0);
 
     var node = manifests[branch]["gid"];
+    var size = manifests[branch]["size"];
 
     if (node == KeyValue.Invalid && !string.Equals(branch, AppDownloadOptions.DEFAULT_BRANCH, StringComparison.OrdinalIgnoreCase))
     {
@@ -897,7 +922,7 @@ public class ContentDownloader
         //  if (!this.session.AppBetaPasswords.TryGetValue(branch, out var appBetaPassword))
         //  {
         //    Console.WriteLine("Password was invalid for branch {0}", branch);
-        //    return INVALID_MANIFEST_ID;
+        //    return (INVALID_MANIFEST_ID, 0);
         //  }
 
         //  var input = DecodeHexString(encrypted_gid.Value);
@@ -909,23 +934,23 @@ public class ContentDownloader
         //  catch (Exception e)
         //  {
         //    Console.WriteLine("Failed to decrypt branch {0}: {1}", branch, e.Message);
-        //    return INVALID_MANIFEST_ID;
+        //    return (INVALID_MANIFEST_ID, 0);
         //  }
 
         //  return BitConverter.ToUInt64(manifest_bytes, 0);
         //}
 
         Console.WriteLine("Unhandled depot encryption for depotId {0}", depotId);
-        return INVALID_MANIFEST_ID;
+        return (INVALID_MANIFEST_ID, 0);
       }
 
-      return INVALID_MANIFEST_ID;
+      return (INVALID_MANIFEST_ID, 0);
     }
 
     if (node.Value == null)
-      return INVALID_MANIFEST_ID;
+      return (INVALID_MANIFEST_ID, 0);
 
-    return ulong.Parse(node.Value);
+    return (ulong.Parse(node.Value), size == KeyValue.Invalid ? 0 : size.AsUnsignedLong());
   }
 
 
@@ -1046,13 +1071,13 @@ public class ContentDownloader
 
     // Clean up old depots
     var oldBranch = depotConfigStore.GetBranch(appId);
-    foreach (var (oldDepotId, oldManifestId, _) in oldDepots)
+    foreach (var (oldDepotId, oldManifestId, oldManifestSize) in oldDepots)
     {
       // If it is a depot that should be downloaded, skip clean up
       if (oldManifestId == INVALID_MANIFEST_ID || allRequiredDepots.Any((d) => d.DepotId == oldDepotId && d.ManifestId == oldManifestId))
         continue;
 
-      var requiredDepot = new RequiredDepot(oldDepotId, oldManifestId, appId);
+      var requiredDepot = new RequiredDepot(oldDepotId, oldManifestId, oldManifestSize, appId);
       var info = await GetDepotInfo(requiredDepot, oldBranch, installStartedData.InstallDirectory);
       if (info != null)
       {

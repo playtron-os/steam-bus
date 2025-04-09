@@ -2035,4 +2035,19 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     Console.WriteLine("Upload complete");
   }
+
+  public async Task<ulong> GetDownloadSize(string appIdString, InstallOptions options)
+  {
+    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+    if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
+
+    // Create a content downloader for the given app
+    var downloader = new ContentDownloader(session!, depotConfigStore);
+
+    // Configure the download options
+    var downloadOptions = new AppDownloadOptions(options, "");
+
+    return await downloader.GetTotalDownloadSizeAsync(appId, downloadOptions);
+  }
 }
