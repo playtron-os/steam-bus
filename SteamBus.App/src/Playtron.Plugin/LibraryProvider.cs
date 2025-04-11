@@ -197,7 +197,7 @@ public interface IPluginLibraryProvider : IDBusObject
   Task<LibraryProviderProperties> GetAllAsync();
   // Methods
 
-  Task<ulong> GetDownloadSize(string appId, InstallOptions options);
+  Task<ulong> GetDownloadSizeAsync(string appId, InstallOptions options);
 
   // Downloads and installs the app with the given app id to the target disk.
   // Available install options can be queried using the `GetInstallOptionsAsync`
