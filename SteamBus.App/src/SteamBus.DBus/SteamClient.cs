@@ -2036,7 +2036,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     Console.WriteLine("Upload complete");
   }
 
-  public async Task<ulong> GetDownloadSize(string appIdString, InstallOptions options)
+  public async Task<ulong> GetDownloadSizeAsync(string appIdString, InstallOptions options)
   {
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
