@@ -91,6 +91,25 @@ class SteamBus
         client.EmitInstalledAppsUpdated();
       });
 
+      await pluginManager.WatchPropertiesAsync((changes) =>
+      {
+        try
+        {
+          foreach (var (key, value) in changes.Changed)
+          {
+            if (key == "RunningProvider" && value != null)
+            {
+              var valueStr = value as string;
+              client.SetSteamClientEnabled(string.IsNullOrEmpty(valueStr) || valueStr.ToLower() == "steam");
+            }
+          }
+        }
+        catch (Exception exception)
+        {
+          Console.Error.WriteLine($"Error occurred when listening to plugin manager property changes, err:{exception}");
+        }
+      });
+
       var drives = await pluginManager.GetDrivesAsync();
       var libraryConfig = await LibraryFoldersConfig.CreateAsync();
       foreach (var drive in drives)

@@ -114,6 +114,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public static TaskCompletionSource? fetchingSteamClientData;
   public static TaskCompletionSource? steamClientWaiting;
 
+  private bool isSteamClientEnabled = true;
 
   // Creates a new DBusSteamClient instance with the given DBus path
   public DBusSteamClient(ObjectPath path, DepotConfigStore depotConfigStore, DepotConfigStore dependenciesStore, DisplayManager displayManager, INetworkManager networkManager)
@@ -1311,7 +1312,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task LaunchSteamClientToSyncTokens(SteamUser.LogOnDetails loginDetails)
   {
-    if (loginDetails.Username == null || steamClientApp.running || !isOnline) return;
+    if (loginDetails.Username == null || steamClientApp.running || !isOnline || !isSteamClientEnabled) return;
 
     if (DateTime.UtcNow - steamClientApp.lastLoggedIn < TimeSpan.FromHours(6))
     {
@@ -2049,5 +2050,19 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var downloadOptions = new AppDownloadOptions(options, "");
 
     return await downloader.GetTotalDownloadSizeAsync(appId, downloadOptions);
+  }
+
+  public void SetSteamClientEnabled(bool isSteamClientEnabled)
+  {
+    if (this.isSteamClientEnabled == isSteamClientEnabled) return;
+
+    Console.WriteLine($"Setting steam client enabled: {isSteamClientEnabled}");
+
+    this.isSteamClientEnabled = isSteamClientEnabled;
+
+    if (!isSteamClientEnabled)
+      steamClientApp.RunSteamShutdown();
+    else if (session != null)
+      _ = Task.Run(async () => await LaunchSteamClientToSyncTokens(session.GetLogonDetails()));
   }
 }

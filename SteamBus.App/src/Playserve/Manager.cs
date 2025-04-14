@@ -26,9 +26,12 @@ public interface IPluginManager : IDBusObject
 
     // Properties
     Task<string> GetVersionAsync();
+    Task<string> GetRunningAppIdAsync();
+    Task<string> GetRunningProviderAsync();
 
     // Signals
     Task<IDisposable> WatchPluginRegisteredAsync(Action<(string pluginName, uint pluginId)> handler);
     Task<IDisposable> WatchOnDriveAddedAsync(Action<DriveInfo> handler);
     Task<IDisposable> WatchOnDriveRemovedAsync(Action<string> handler);
+    Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler, Action<Exception>? exception = null);
 }
