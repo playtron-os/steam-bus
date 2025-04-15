@@ -55,6 +55,9 @@ public class SteamSession
 
   public CallbackManager Callbacks;
 
+  // Keeps tracking whether we are waiting to reconnect, and if not, the reconnection won't happen after the delay
+  bool waitingToRetry;
+
   bool bConnecting;
   bool bAborted;
   bool bExpectingDisconnectRemote;
@@ -435,9 +438,10 @@ public class SteamSession
 
   private void ResetConnectionFlags()
   {
+    Console.WriteLine("Resetting connection flags");
+
     bExpectingDisconnectRemote = false;
     bDidDisconnect = false;
-    bIsConnectionRecovery = false;
   }
 
 
@@ -471,12 +475,17 @@ public class SteamSession
 
   void Connect()
   {
+    Console.WriteLine("Starting steam connection");
+
+    waitingToRetry = false;
     bAborted = false;
     bConnecting = true;
     authSession = null;
 
     if (!bIsConnectionRecovery)
       connectionBackoff = 0;
+
+    bIsConnectionRecovery = false;
 
     ResetConnectionFlags();
     this.SteamClient.Connect();
@@ -499,7 +508,10 @@ public class SteamSession
 
     bAborted = true;
     bConnecting = false;
-    bIsConnectionRecovery = false;
+
+    if (!bExpectingDisconnectRemote)
+      bIsConnectionRecovery = false;
+
     abortedToken.Cancel();
     SteamClient.Disconnect();
 
@@ -516,6 +528,7 @@ public class SteamSession
 
   private void Reconnect()
   {
+    waitingToRetry = false;
     bIsConnectionRecovery = true;
     bExpectingDisconnectRemote = true;
     SteamClient.Disconnect();
@@ -524,7 +537,7 @@ public class SteamSession
 
   private async void OnConnected(SteamClient.ConnectedCallback connected)
   {
-    Console.WriteLine(" Done!");
+    Console.WriteLine("OnConnected: Done!");
     bConnecting = false;
 
     if (!bIsConnectionRecovery)
@@ -533,6 +546,8 @@ public class SteamSession
       // e.g. if the authentication phase takes a while and therefore multiple connections.
       connectionBackoff = 0;
     }
+
+    bIsConnectionRecovery = false;
 
     if (!AuthenticatedUser())
     {
@@ -745,7 +760,7 @@ public class SteamSession
   {
     bDidDisconnect = true;
 
-    DebugLog.WriteLine(nameof(SteamSession), $"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
+    Console.WriteLine(nameof(SteamSession), $"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
 
     // When recovering the connection, we want to reconnect even if the remote disconnects us
     if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
@@ -771,7 +786,7 @@ public class SteamSession
         Console.WriteLine($"Lost connection to Steam. Reconnecting (#{connectionBackoff})");
       }
 
-      Thread.Sleep(1000);
+      Thread.Sleep(3000);
 
       // Any connection related flags need to be reset here to match the state after Connect
       ResetConnectionFlags();
@@ -826,9 +841,18 @@ public class SteamSession
 
     if (loggedOn.Result == EResult.TryAnotherCM || loggedOn.Result == EResult.AlreadyLoggedInElsewhere)
     {
-      Console.WriteLine("Retrying Steam3 connection (TryAnotherCM)...");
+      Task.Run(async () =>
+      {
+        if (waitingToRetry) return;
 
-      Reconnect();
+        waitingToRetry = true;
+        if (loggedOn.Result == EResult.AlreadyLoggedInElsewhere) await Task.Delay(10000);
+        if (!waitingToRetry) return;
+
+        Console.WriteLine($"Retrying Steam3 connection ({loggedOn.Result})...");
+
+        Reconnect();
+      });
 
       return;
     }
@@ -853,7 +877,7 @@ public class SteamSession
     SaveToken();
     steamConnectionConfig.SaveCellId(loggedOn.CellID);
 
-    Console.WriteLine(" Done!");
+    Console.WriteLine("OnLogIn: Done!");
 
     this.seq++;
     IsLoggedOn = true;
