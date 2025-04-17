@@ -562,6 +562,8 @@ public class ContentDownloader
     // List of dlcs found in depots config but are not owned
     var dlcsNotOwned = new List<uint>();
 
+    var depotAppIdsInCommonConfig = new HashSet<uint>();
+
     if (depots == null)
       throw DbusExceptionHelper.ThrowContentNotFound();
 
@@ -594,6 +596,9 @@ public class ContentDownloader
 
         if (!uint.TryParse(depotSection.Name, out id))
           continue;
+
+        // Add id to depotAppIdsInCommonConfig so in case this depot is in the extended dlc list, it will be ignored
+        depotAppIdsInCommonConfig.Add(id);
 
         if (hasSpecificDepots && !depotIdsExpected.Contains(id))
           continue;
@@ -651,6 +656,7 @@ public class ContentDownloader
           else
           {
             var dlcAppId = depotSection["dlcappid"]?.AsUnsignedInteger() ?? 0;
+            depotAppIdsInCommonConfig.Add(id);
 
             if (!disabledDlcIds.Contains(dlcAppId))
             {
@@ -685,10 +691,12 @@ public class ContentDownloader
 
     // Handle DLCs
     var dlcAppIds = session.GetExtendedDLCs(appId);
+
     var hasDepotsInDlc = depots["hasdepotsindlc"].AsString() == "1";
     foreach (var dlcAppId in dlcAppIds)
     {
-      if (dlcsNotOwned.Contains(dlcAppId) || requiredDepots.Any((depot) => depot.DepotAppId == dlcAppId || depot.DepotId == dlcAppId) || disabledDlcIds.Contains(dlcAppId))
+      if (depotAppIdsInCommonConfig.Contains(dlcAppId) || dlcsNotOwned.Contains(dlcAppId)
+        || requiredDepots.Any((depot) => depot.DepotAppId == dlcAppId || depot.DepotId == dlcAppId) || disabledDlcIds.Contains(dlcAppId))
         continue;
 
       if (hasDepotsInDlc)
