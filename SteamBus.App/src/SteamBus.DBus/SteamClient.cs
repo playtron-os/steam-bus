@@ -1065,6 +1065,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         return true;
       }
     }
+
+    steamClientApp.RunSteamShutdown();
+
     // Configure the user/pass for the session
     var login = new SteamUser.LogOnDetails();
     login.Username = user_id;
@@ -1146,6 +1149,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     // This should invalidate all properties essentially making clients reload them
     OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
+
+    steamClientApp.RunSteamShutdown();
 
     return Task.FromResult(0);
   }
