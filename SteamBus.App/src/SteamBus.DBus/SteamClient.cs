@@ -963,6 +963,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     session.OnAppNewVersionFound = OnAppNewVersionFound;
     session.InstalledAppsUpdated = InstalledAppsUpdated;
     session.OnAuthError = OnAuthError;
+    session.OnAuthUpdated = () => OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
     session.OnAvatarUpdated = () => OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar"]));
 
     // Subscribe to client callbacks
@@ -1236,17 +1237,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   // Invoked when the Steam client tries to log in
   void OnLoggedOn(SteamUser.LoggedOnCallback callback)
   {
-    if (callback.Result != EResult.OK)
-    {
-      if (!new List<EResult>([EResult.AlreadyLoggedInElsewhere, EResult.TryAnotherCM]).Contains(callback.Result))
-      {
-        Console.WriteLine("Unable to logon to Steam: {0} / {1}", callback.Result, callback.ExtendedResult);
-        OnAuthError?.Invoke(DbusErrors.AuthenticationError);
-        OnUserPropsChanged?.Invoke(new PropertyChanges([new KeyValuePair<string, object>("Identifier", ""), new KeyValuePair<string, object>("Status", 0)], ["Avatar", "Username", "Identifier", "Status"]));
-      }
-
-      return;
-    }
+    if (callback.Result != EResult.OK) return;
 
     if (this.session == null)
     {

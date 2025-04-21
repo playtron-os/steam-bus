@@ -81,6 +81,7 @@ public class SteamSession
   private DepotConfigStore depotConfigStore;
   public Action<(string appId, string version)>? OnAppNewVersionFound;
   public Action<string>? OnAuthError;
+  public Action? OnAuthUpdated;
   public Action? InstalledAppsUpdated;
 
   private LoginUsersConfig loginUsersConfig;
@@ -523,6 +524,8 @@ public class SteamSession
         Callbacks.RunWaitAllCallbacks(TimeSpan.FromMilliseconds(100));
       }
     }
+
+    OnAuthUpdated?.Invoke();
   }
 
 
@@ -839,7 +842,7 @@ public class SteamSession
       return;
     }
 
-    if (loggedOn.Result == EResult.TryAnotherCM || loggedOn.Result == EResult.AlreadyLoggedInElsewhere)
+    if (loggedOn.Result == EResult.TryAnotherCM || loggedOn.Result == EResult.AlreadyLoggedInElsewhere || loggedOn.Result == EResult.NoConnection)
     {
       Task.Run(async () =>
       {
