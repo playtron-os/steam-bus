@@ -1031,6 +1031,10 @@ public class ContentDownloader
       }
     }
 
+    // If old depots and depots are empty, throw error since game has no content
+    if (depots.Count == 0 && oldDepots.Count == 0)
+      throw DbusExceptionHelper.ThrowContentNotFound();
+
     // First, fetch all the manifests for each depot (including previous manifests) and perform the initial setup
     // also exclude already installed depots
     foreach (var depot in depots)
