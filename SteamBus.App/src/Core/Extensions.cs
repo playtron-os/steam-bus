@@ -25,6 +25,7 @@ public static class KeyValueExtensions
         {
             Disk.ExecuteFileOpWithRetry(() =>
             {
+                Directory.CreateDirectory(Directory.GetParent(tempFilePath)!.FullName);
                 keyValue.SaveToFile(tempFilePath, false);
                 return "";
             }, tempFilePath, maxRetries: 3, delayMilliseconds: 1, OnError: () => File.Delete(tempFilePath));
