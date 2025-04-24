@@ -141,9 +141,7 @@ static partial class Disk
         }
 
         if (!System.IO.Directory.Exists(folderPath))
-        {
-            throw new System.IO.DirectoryNotFoundException($"The folder '{folderPath}' does not exist.");
-        }
+            return 0;
 
         try
         {
