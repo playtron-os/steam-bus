@@ -172,10 +172,16 @@ public class DepotConfigStore
     /// <returns></returns>
     public async Task Reload()
     {
-        manifestMap.Clear();
-        manifestPathMap.Clear();
-        manifestExtraMap.Clear();
-        manifestExtraPathMap.Clear();
+        var appIdsToRemove = manifestPathMap.Where((entry) => !File.Exists(entry.Value)).Select((entry) => entry.Key);
+        foreach (var appId in appIdsToRemove)
+        {
+            if (ContentDownloader.currentAppIdDownloading == appId) continue;
+
+            manifestMap.Remove(appId, out var _);
+            manifestPathMap.Remove(appId, out var _);
+            manifestExtraMap.Remove(appId, out var _);
+            manifestExtraPathMap.Remove(appId, out var _);
+        }
 
         if (folders != null)
         {

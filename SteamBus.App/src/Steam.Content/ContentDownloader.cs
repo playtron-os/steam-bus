@@ -65,6 +65,7 @@ public class ContentDownloader
   private event Action<(string appId, string error)>? OnInstallFailed;
 
   private static TaskCompletionSource? currentDownload;
+  public static uint? currentAppIdDownloading;
 
   private sealed class DepotDownloadInfo(
       RequiredDepot requiredDepot, string branch, uint version,
@@ -409,6 +410,7 @@ public class ContentDownloader
         cdnPool!.ExhaustedToken = cts;
 
         currentDownload = new TaskCompletionSource();
+        currentAppIdDownloading = appId;
 
         // Keep track of signal handlers
         this.OnInstallStarted = onInstallStarted;
@@ -527,6 +529,7 @@ public class ContentDownloader
       {
         currentDownload?.TrySetResult();
         currentDownload = null;
+        currentAppIdDownloading = null;
 
         if (wasAppInstalled && options.VerifyAll)
         {
