@@ -95,6 +95,7 @@ public class SteamSession
   public uint playingAppID { get; private set; }
   public bool playingBlocked { get; private set; }
 
+  private bool isOnline;
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
@@ -537,7 +538,6 @@ public class SteamSession
     SteamClient.Disconnect();
   }
 
-
   private async void OnConnected(SteamClient.ConnectedCallback connected)
   {
     Console.WriteLine("OnConnected: Done!");
@@ -757,6 +757,32 @@ public class SteamSession
     }
   }
 
+  public async Task OnOnline()
+  {
+    isOnline = true;
+
+    if (IsPendingLogin)
+    {
+      if (bIsConnectionRecovery)
+      {
+        // If expecting to reconnect, just connect to steam client
+        ResetConnectionFlags();
+        SteamClient.Connect();
+        return;
+      }
+
+      Console.WriteLine("Previous session exists, trying to re-login to steam");
+
+      await Login();
+      if (IsLoggedOn)
+        OnAuthUpdated?.Invoke();
+    }
+  }
+
+  public void OnOffline()
+  {
+    isOnline = false;
+  }
 
   // Invoked when the steam client is disconnected
   private void OnDisconnected(SteamClient.DisconnectedCallback disconnected)
@@ -773,27 +799,35 @@ public class SteamSession
     }
     else if (connectionBackoff >= 7)
     {
-      Console.WriteLine("Could not connect to Steam after 4 tries");
+      Console.WriteLine("Could not connect to Steam after 7 tries");
       Abort(false);
     }
     else if (!bAborted)
     {
       connectionBackoff += 1;
 
-      if (bConnecting)
+      if (isOnline)
       {
-        Console.WriteLine($"Connection to Steam failed. Trying again (#{connectionBackoff})...");
+        if (bConnecting)
+        {
+          Console.WriteLine($"Connection to Steam failed. Trying again (#{connectionBackoff})...");
+        }
+        else
+        {
+          Console.WriteLine($"Lost connection to Steam. Reconnecting (#{connectionBackoff})");
+        }
+
+        Thread.Sleep(3000);
+
+        // Any connection related flags need to be reset here to match the state after Connect
+        ResetConnectionFlags();
+        SteamClient.Connect();
       }
       else
       {
-        Console.WriteLine($"Lost connection to Steam. Reconnecting (#{connectionBackoff})");
+        Console.WriteLine("Skipping reconnection for now because no internet connectivity found");
+        IsPendingLogin = true;
       }
-
-      Thread.Sleep(3000);
-
-      // Any connection related flags need to be reset here to match the state after Connect
-      ResetConnectionFlags();
-      SteamClient.Connect();
     }
   }
 

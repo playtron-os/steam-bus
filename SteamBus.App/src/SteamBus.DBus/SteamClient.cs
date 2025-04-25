@@ -188,6 +188,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
               if (isOnline)
                 _ = Task.Run(OnOnline);
+              else
+                OnOffline();
             }
           }
         }
@@ -217,18 +219,19 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     if (this.session == null) return;
 
-    if (this.session.IsPendingLogin)
-    {
-      Console.WriteLine("Previous session exists, trying to re-login to steam");
+    var wasPendingLogin = this.session.IsPendingLogin;
 
-      await this.session.Login();
-      if (this.session.IsLoggedOn)
-      {
-        OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
-      }
-    }
-    else
+    await this.session.OnOnline();
+
+    if (!wasPendingLogin)
       await LaunchSteamClientToSyncTokens(session.GetLogonDetails());
+  }
+
+  private void OnOffline()
+  {
+    if (this.session == null || this.session.IsPendingLogin) return;
+
+    this.session.OnOffline();
   }
 
   // Decrypt the given base64 encoded string using our private key
