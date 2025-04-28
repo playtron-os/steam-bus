@@ -789,6 +789,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       });
     }
 
+
     return result.ToArray();
   }
 
