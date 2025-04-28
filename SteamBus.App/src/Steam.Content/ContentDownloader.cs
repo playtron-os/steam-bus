@@ -67,6 +67,9 @@ public class ContentDownloader
   private static TaskCompletionSource? currentDownload;
   public static uint? currentAppIdDownloading;
 
+  // Used to throttle rate at which progress is sent via dbus
+  private static DateTime _lastProgressSentAt = DateTime.MinValue;
+
   private sealed class DepotDownloadInfo(
       RequiredDepot requiredDepot, string branch, uint version,
       string installDir, byte[] depotKey)
@@ -978,6 +981,9 @@ public class ContentDownloader
     var allFileNamesAllDepots = new HashSet<string>();
     var downloadStarted = false;
 
+    float lastProgress = 0;
+    DownloadStage? lastStage = null;
+
     downloadCounter.PropertyChanged += (sender, args) =>
     {
       if (!downloadStarted) return;
@@ -1003,6 +1009,14 @@ public class ContentDownloader
           var size = stage == DownloadStage.Preallocating || stage == DownloadStage.Verifying ? counter.sizeAllocated : counter.sizeDownloaded;
           var progress = size / (float)counter.completeDownloadSize * 100.0f;
 
+          if (progress < 100.0 && lastStage == stage && Math.Abs(lastProgress - progress) < 1)
+          {
+            var now = DateTime.UtcNow;
+            if ((now - _lastProgressSentAt).TotalMilliseconds < 100)
+              return;
+            _lastProgressSentAt = now;
+          }
+
           this.OnInstallProgressed?.Invoke(new InstallProgressedDescription
           {
             AppId = appId.ToString(),
@@ -1015,6 +1029,8 @@ public class ContentDownloader
           depotConfigStore.SetDownloadStage(appId, stage);
           depotConfigStore.SetCurrentSize(appId, counter.sizeDownloaded);
           depotConfigStore.SetTotalSize(appId, counter.completeDownloadSize);
+          lastStage = stage;
+          lastProgress = progress;
           // No need to save this on every iteration, just when finished or cancelled
         }
       }
@@ -1487,6 +1503,8 @@ public class ContentDownloader
                 }
                 catch (Exception exception)
                 {
+                  if (cts.IsCancellationRequested) throw new TaskCanceledException();
+
                   Console.Error.WriteLine($"Error during verification of depot:{depot.DepotId} file chunk, err:{exception}");
                   cts.Cancel();
                   var error = exception.Message.Contains("No space left on device") ? DbusErrors.NotEnoughSpace : DbusErrors.Generic;
@@ -1888,6 +1906,8 @@ public class ContentDownloader
 
     try
     {
+      bool hasRetriedTimeoutError = false;
+
       do
       {
         cts.Token.ThrowIfCancellationRequested();
@@ -1923,6 +1943,11 @@ public class ContentDownloader
         catch (TaskCanceledException)
         {
           Console.WriteLine("Connection timeout downloading chunk {0}", chunkID);
+
+          if (hasRetriedTimeoutError)
+            break;
+
+          hasRetriedTimeoutError = true;
         }
         catch (SteamKitWebRequestException e)
         {
