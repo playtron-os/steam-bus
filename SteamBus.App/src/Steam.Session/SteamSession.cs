@@ -95,7 +95,7 @@ public class SteamSession
   public uint playingAppID { get; private set; }
   public bool playingBlocked { get; private set; }
 
-  private bool isOnline;
+  public bool isOnline;
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {

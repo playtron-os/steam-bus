@@ -962,6 +962,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
     var session = new SteamSession(login, depotConfigStore, steamGuardData, this);
+    session.isOnline = isOnline;
     session.OnLibraryUpdated = OnLibraryUpdated;
     session.OnAppNewVersionFound = OnAppNewVersionFound;
     session.InstalledAppsUpdated = InstalledAppsUpdated;
