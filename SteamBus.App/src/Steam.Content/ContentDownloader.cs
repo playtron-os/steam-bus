@@ -1870,7 +1870,9 @@ public class ContentDownloader
       DepotFilesData depotFilesData,
       DepotManifest.FileData file,
       FileStreamData fileStreamData,
-      DepotManifest.ChunkData chunk)
+      DepotManifest.ChunkData chunk,
+      bool isRecursing = false
+    )
   {
     cts.Token.ThrowIfCancellationRequested();
 
@@ -1971,6 +1973,16 @@ public class ContentDownloader
 
       if (written == 0)
       {
+        cts.Token.ThrowIfCancellationRequested();
+
+        if (!isRecursing)
+        {
+          await Task.Delay(1000);
+          Console.WriteLine("Failed when download chunk {0} for depot {1}, retrying", chunkID, depot.DepotId);
+          await DownloadSteam3AsyncDepotFileChunk(appId, cts, downloadCounter, depotFilesData, file, fileStreamData, chunk, true);
+          return;
+        }
+
         Console.WriteLine("Failed to find any server with chunk {0} for depot {1}. Aborting.", chunkID, depot.DepotId);
         cts.Cancel();
         OnInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
