@@ -192,15 +192,20 @@ public class ContentDownloader
     this.depotConfigStore = depotConfigStore;
 
     AppDomain.CurrentDomain.ProcessExit += OnMainProcessExit;
-    Console.CancelKeyPress += (sender, e) =>
-    {
-      e.Cancel = true;
-      OnMainProcessExit(sender, e);
-    };
+    Console.CancelKeyPress += OnCancelKeyPress;
+  }
+
+  private void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
+  {
+    e.Cancel = true;
+    OnMainProcessExit(sender, e);
   }
 
   private void OnMainProcessExit(object? sender, EventArgs e)
   {
+    AppDomain.CurrentDomain.ProcessExit -= OnMainProcessExit;
+    Console.CancelKeyPress -= OnCancelKeyPress;
+
     try
     {
       cdnPool?.ExhaustedToken?.Cancel();
@@ -210,6 +215,8 @@ public class ContentDownloader
     {
       // Ignore
     }
+
+    Environment.Exit(0);
   }
 
   public static async Task PauseInstall()

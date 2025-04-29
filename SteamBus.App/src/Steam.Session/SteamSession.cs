@@ -496,6 +496,7 @@ public class SteamSession
 
   private void Abort(bool sendLogOff = true)
   {
+    IsLoggedOn = false;
     IsPendingLogin = false;
     Disconnect(sendLogOff);
   }
@@ -829,6 +830,8 @@ public class SteamSession
         IsPendingLogin = true;
       }
     }
+
+    if (bAborted) IsLoggedOn = false;
   }
 
 
