@@ -790,7 +790,7 @@ public class SteamSession
   {
     bDidDisconnect = true;
 
-    Console.WriteLine(nameof(SteamSession), $"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
+    Console.WriteLine($"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
 
     // When recovering the connection, we want to reconnect even if the remote disconnects us
     if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
