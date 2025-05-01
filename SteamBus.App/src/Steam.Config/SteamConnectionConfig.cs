@@ -47,6 +47,21 @@ public class SteamConnectionConfig
                 Console.WriteLine($"Using persisted cell ID {cellId}");
             }
         }
+
+        if (File.Exists(serversBinPath))
+        {
+            var content = File.ReadAllText(serversBinPath).Trim();
+
+            if (string.IsNullOrEmpty(content))
+            {
+                Console.WriteLine($"Error reading servers list from {serversBinPath}. Continuing with empty servers list.");
+                File.Delete(serversBinPath);
+            }
+            else
+            {
+                Console.WriteLine($"Using persisted servers list");
+            }
+        }
     }
 
     // Save the cell id
