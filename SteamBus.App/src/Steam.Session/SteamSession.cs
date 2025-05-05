@@ -799,6 +799,7 @@ public class SteamSession
     {
       Console.WriteLine("Could not connect to Steam after 7 tries");
       Abort(false);
+      OnAuthError?.Invoke(DbusErrors.Timeout);
     }
     else if (!bAborted)
     {
