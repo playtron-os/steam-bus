@@ -188,6 +188,11 @@ public class SteamSession
     return bAborted;
   }
 
+  public async Task<bool> WaitForReconnect()
+  {
+    await WaitUntilCallback(() => { }, () => (IsLoggedOn && !IsPendingLogin) || bAborted);
+    return IsLoggedOn;
+  }
 
   public async Task<bool> WaitForCredentials()
   {

@@ -681,6 +681,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<int> IPluginLibraryProvider.InstallAsync(string appIdString, string disk, InstallOptions options)
   {
     Console.WriteLine($"Installing app: {appIdString}");
+    // Wait until fully logged in if login pending (might be reconnecting)
+    if (session != null && session.IsPendingLogin)
+      await Task.WhenAny([session.WaitForReconnect(), Task.Delay(20000)]);
+
     if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
@@ -801,6 +805,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<string[]> IPluginLibraryProvider.PreLaunchHookAsync(string appIdString, bool wantsOfflineMode)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+
+    // Wait until fully logged in if login pending (might be reconnecting)
+    if (!wantsOfflineMode && session != null && session.IsPendingLogin)
+      await Task.WhenAny([session.WaitForReconnect(), Task.Delay(20000)]);
+
     if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (steamClientApp.updating)
       return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
