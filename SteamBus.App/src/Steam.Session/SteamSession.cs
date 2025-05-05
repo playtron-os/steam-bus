@@ -188,6 +188,11 @@ public class SteamSession
     return bAborted;
   }
 
+  public async Task<bool> WaitForReconnect()
+  {
+    await WaitUntilCallback(() => { }, () => (IsLoggedOn && !IsPendingLogin) || bAborted);
+    return IsLoggedOn;
+  }
 
   public async Task<bool> WaitForCredentials()
   {
@@ -536,6 +541,7 @@ public class SteamSession
     waitingToRetry = false;
     bIsConnectionRecovery = true;
     bExpectingDisconnectRemote = true;
+    IsPendingLogin = true;
     SteamClient.Disconnect();
   }
 
@@ -543,15 +549,6 @@ public class SteamSession
   {
     Console.WriteLine("OnConnected: Done!");
     bConnecting = false;
-
-    if (!bIsConnectionRecovery)
-    {
-      // Update our tracking so that we don't time out, even if we need to reconnect multiple times,
-      // e.g. if the authentication phase takes a while and therefore multiple connections.
-      connectionBackoff = 0;
-    }
-
-    bIsConnectionRecovery = false;
 
     if (!AuthenticatedUser())
     {
@@ -802,6 +799,7 @@ public class SteamSession
     {
       Console.WriteLine("Could not connect to Steam after 7 tries");
       Abort(false);
+      OnAuthError?.Invoke(DbusErrors.Timeout);
     }
     else if (!bAborted)
     {
@@ -913,6 +911,7 @@ public class SteamSession
       return;
     }
 
+    bIsConnectionRecovery = false;
     connectionBackoff = 0;
     SaveToken();
     steamConnectionConfig.SaveCellId(loggedOn.CellID);
