@@ -13,6 +13,17 @@
 
 IMAGE_NAME ?= playtron/steambus-builder
 IMAGE_TAG ?= latest
+ARCH ?= $(shell uname -m)
+DISTRO ?= fc41
+ALL_CS := $(shell find SteamBus.App/src -name '*.cs')
+ALL_CSPROJ := $(shell find SteamBus.App -name '*.csproj')
+
+ifeq ($(ARCH),x86_64)
+TARGET_ARCH ?= linux-x64
+endif
+ifeq ($(ARCH),aarch64)
+TARGET_ARCH ?= linux-arm64
+endif
 
 PREFIX ?= $(HOME)/.local
 
@@ -31,25 +42,27 @@ build: ## Build the project
 	cd ./SteamBus.App && dotnet build
 
 .PHONY: build-release
-build-release: ## Build the project in release mode
-	cd ./SteamBus.App && dotnet publish -r linux-x64 -c Release -o ./build
+build-release: SteamBus.App/build/$(ARCH)/SteamBus ## Build the project in release mode
+SteamBus.App/build/$(ARCH)/SteamBus: $(ALL_CS) $(ALL_CSPROJ)
+	cd ./SteamBus.App && dotnet publish -r $(TARGET_ARCH) -c Release -o ./build/$(ARCH)
 
 .PHONY: rpm
-rpm: ## Builds the RPM package
-	mkdir -p /tmp/rpmbuild/BUILD
-	mkdir -p /tmp/rpmbuild/RPMS
-	mkdir -p /tmp/rpmbuild/SOURCES
-	mkdir -p /tmp/rpmbuild/SPECS
-	mkdir -p /tmp/rpmbuild/SRPMS
+rpm: SteamBus-$(VERSION)-1.$(DISTRO).$(ARCH).rpm ## Builds the RPM package
+SteamBus-$(VERSION)-1.$(DISTRO).$(ARCH).rpm: SteamBus.App/build/$(ARCH)/SteamBus
+	mkdir -p /tmp/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 	cp ./SteamBus.App/steam-bus.spec /tmp/rpmbuild/SPECS/
 	rm -rf /tmp/rpmbuild/SOURCES/SteamBus
-	cp -r ./SteamBus.App/build /tmp/rpmbuild/SOURCES/SteamBus
+	cp -r ./SteamBus.App/build/$(ARCH) /tmp/rpmbuild/SOURCES/SteamBus
 	cp ./Makefile /tmp/rpmbuild/SOURCES/SteamBus/
 	cp ./LICENSE /tmp/rpmbuild/SOURCES/SteamBus/
 	cp ./README.md /tmp/rpmbuild/SOURCES/SteamBus/
-	tar --transform 's/^build/SteamBus/' -czf ./SteamBus-$(VERSION).tar.gz -C ./SteamBus.App build
-	rpmbuild --define "_topdir /tmp/rpmbuild" -bb /tmp/rpmbuild/SPECS/steam-bus.spec
-	mv /tmp/rpmbuild/RPMS/x86_64/SteamBus-$(VERSION)-1.fc41.x86_64.rpm .
+	rpmbuild --define "_topdir /tmp/rpmbuild" -bb --target $(ARCH) /tmp/rpmbuild/SPECS/steam-bus.spec
+	mv /tmp/rpmbuild/RPMS/$(ARCH)/SteamBus-$(VERSION)-1.$(DISTRO).$(ARCH).rpm .
+
+.PHONY: tar
+tar: SteamBus-$(VERSION)-$(ARCH).tar.gz ## Builds the TAR archive
+SteamBus-$(VERSION)-$(ARCH).tar.gz: SteamBus.App/build/$(ARCH)/SteamBus
+	tar --transform 's|^build/$(ARCH)|SteamBus|' -czf ./SteamBus-$(VERSION)-$(ARCH).tar.gz -C ./SteamBus.App build/$(ARCH)
 
 .PHONY: install
 install: ## Performs install step for RPM
@@ -71,6 +84,9 @@ install: ## Performs install step for RPM
 clean: ## Remove build artifacts
 	rm -rf ./SteamBus.Tests/obj/ ./SteamBus.Tests/bin/
 	rm -rf ./SteamBus.App/bin/ ./SteamBus.App/obj/
+	rm -rf ./SteamBus.App/build/
+	rm -f *.rpm
+	rm -f *.tar.gz
 
 .PHONY: run
 run: ## Run the project
@@ -95,5 +111,6 @@ in-docker:
 		--workdir /src \
 		--user $(shell id -u):$(shell id -g) \
 		-e DOTNET_CLI_HOME=/tmp \
+		-e ARCH=$(ARCH) \
 		$(IMAGE_NAME):$(IMAGE_TAG) \
 		make $(TARGET)
