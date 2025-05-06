@@ -549,7 +549,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         // TODO: consider using description_loc to use localized values of description.
         Executable = entry["executable"]?.Value ?? "",
         Arguments = entry["arguments"]?.Value ?? "",
-        Environment = [("SteamAppId", appIdString), ("STEAM_COMPAT_APP_ID", appIdString), ("SteamGameId", appIdString)],
+        Environment = [
+          ("SteamAppId", appIdString),
+          ("STEAM_COMPAT_APP_ID", appIdString),
+          ("SteamGameId", appIdString),
+          ("SteamAppUser", session?.GetLogonDetails().Username ?? ""),
+        ],
         WorkingDirectory = entry["workingdir"]?.Value ?? "",
         LaunchType = (uint)LaunchType.Unknown,
         HardwareTags = HardwareTags.ToArray()
