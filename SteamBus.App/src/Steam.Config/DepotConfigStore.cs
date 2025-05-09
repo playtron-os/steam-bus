@@ -200,20 +200,34 @@ public class DepotConfigStore
         }
     }
 
-    public async Task ReloadApps(string dir)
+    public async Task ReloadApps(string dir, bool isRecursing = false)
     {
         var commonDir = Path.Join(dir, "common");
         if (!Directory.Exists(dir) || !Directory.Exists(commonDir))
             return;
 
-        var manifestPaths = Directory.EnumerateFiles(dir);
-
-        foreach (var manifestPath in manifestPaths ?? [])
+        try
         {
-            if (!manifestPath.EndsWith(".acf") || manifestPath.Contains(".extra.acf"))
-                continue;
+            var manifestPaths = Directory.EnumerateFiles(dir).ToList();
 
-            await ImportApp(manifestPath);
+            foreach (var manifestPath in manifestPaths ?? [])
+            {
+                if (!manifestPath.EndsWith(".acf") || manifestPath.Contains(".extra.acf"))
+                    continue;
+
+                await ImportApp(manifestPath);
+            }
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Exception when importing apps from dir:{dir}, err:{exception}");
+
+            if (!isRecursing)
+            {
+                Console.WriteLine($"Attempting to reload apps again for dir:{dir}");
+                await ReloadApps(dir, true);
+                return;
+            }
         }
 
         Console.WriteLine($"Depot config store loaded {manifestPathMap.Count} installed apps");
