@@ -208,7 +208,7 @@ public class DepotConfigStore
 
         try
         {
-            var manifestPaths = Directory.EnumerateFiles(dir);
+            var manifestPaths = Directory.EnumerateFiles(dir).ToList();
 
             foreach (var manifestPath in manifestPaths ?? [])
             {
