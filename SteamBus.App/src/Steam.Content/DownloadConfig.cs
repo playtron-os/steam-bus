@@ -38,8 +38,9 @@ public class AppDownloadOptions
 
   // maximum number of content servers to use. (default: 20).
   public int MaxServers = 20;
-  // maximum number of chunks to download concurrently. (default: 8).
-  public int MaxDownloads = 8;
+  // maximum number of chunks to download concurrently.
+  // by default 50% of available cores, its always at least 4
+  public int MaxDownloads = Math.Max((int)Math.Round(Environment.ProcessorCount * 0.5), 4);
 
   public static async Task<AppDownloadOptions> CreateAsync(string installFolderName)
   {
