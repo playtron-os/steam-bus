@@ -410,7 +410,14 @@ public class ContentDownloader
         globalConfig.Save();
 
         this.options = options;
-        await Client.DetectLancacheServerAsync();
+        try
+        {
+          await Client.DetectLancacheServerAsync();
+        }
+        catch (Exception e)
+        {
+          Console.WriteLine("Failed to detect LancacheServer: {0}", e);
+        }
         if (Client.UseLancacheServer)
         {
           Console.WriteLine("Using LanCache server for downloads");
