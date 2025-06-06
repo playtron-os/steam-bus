@@ -56,6 +56,7 @@ public struct InstallStartedDescription
   public ulong TotalDownloadSize { get; set; }
   public bool RequiresInternetConnection { get; set; }
   public string Os { get; set; }
+  public string Language { get; set; }
 }
 
 public enum DownloadStage

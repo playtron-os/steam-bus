@@ -497,6 +497,7 @@ public class ContentDownloader
             InstallDirectory = options.InstallDirectory,
             RequiresInternetConnection = requiresInternetConnection,
             Os = os,
+            Language = language ?? "",
           };
 
           depotConfigStore.EnsureEntryExists(options.InstallDirectory, appId, GetAppName(appId));
