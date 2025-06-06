@@ -34,6 +34,7 @@ public struct InstalledAppDescription
   public string LatestVersion { get; set; }
   public bool UpdatePending { get; set; }
   public string Os { get; set; }
+  public string Language { get; set; }
   public string[] DisabledDlc { get; set; }
 }
 
