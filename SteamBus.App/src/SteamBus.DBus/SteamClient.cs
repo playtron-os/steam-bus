@@ -1372,7 +1372,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         try
         {
           Console.WriteLine("Shut down steam client after fetching data");
-          await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(20));
+
+          // Only shut down steam client here if it hasn't been launched when launching an app
+          if (string.IsNullOrEmpty(steamClientApp.forAppId))
+            await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(20));
         }
         catch (Exception err)
         {
