@@ -795,7 +795,7 @@ public class SteamSession
       // Any operations outstanding need to be aborted
       bAborted = true;
     }
-    else if (connectionBackoff >= 7)
+    else if (connectionBackoff >= 12)
     {
       Console.WriteLine("Could not connect to Steam after 7 tries");
       Abort(false);
@@ -803,7 +803,9 @@ public class SteamSession
     }
     else if (!bAborted)
     {
-      connectionBackoff += 1;
+      // Only increment connection backoff if this is not a connection recovery
+      if (!bIsConnectionRecovery)
+        connectionBackoff += 1;
 
       if (isOnline)
       {
