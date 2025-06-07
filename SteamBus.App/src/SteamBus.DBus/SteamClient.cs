@@ -112,7 +112,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   private bool isOnline = false;
 
   public static TaskCompletionSource? fetchingSteamClientData;
-  public static TaskCompletionSource? steamClientWaiting;
+  public static bool steamClientLocked;
 
   private bool isSteamClientEnabled = true;
 
@@ -848,11 +848,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (!wantsOfflineMode && session.playingBlocked) throw DbusExceptionHelper.ThrowPlayingBlocked();
 
       // Return early in case steam client is already running and ready
-      if (steamClientWaiting != null)
+      if (steamClientLocked)
       {
-        if (steamClientApp.readyTask != null) await steamClientApp.readyTask.Task;
-        steamClientWaiting?.TrySetResult();
-        steamClientWaiting = null;
+        if (!steamClientApp.isLoggedIn && steamClientApp.readyTask != null) await steamClientApp.readyTask.Task;
         steamClientApp.forAppId = appIdString;
         OnLaunchReady?.Invoke(appIdString);
         return [];
@@ -1364,24 +1362,20 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       fetchingSteamClientData = null;
 
       // If game launch doesn't happen within 1 minute, close steam client
-      steamClientWaiting = new();
-      await AsyncUtils.WaitForConditionAsync(() => steamClientWaiting == null || !steamClientApp.running, TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1));
+      steamClientLocked = true;
+      await AsyncUtils.WaitForConditionAsync(() => !steamClientLocked || !steamClientApp.running, TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1));
 
-      if (steamClientWaiting != null)
+      if (steamClientLocked)
       {
         try
         {
+          steamClientLocked = false;
           Console.WriteLine("Shut down steam client after fetching data");
           await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(20));
         }
         catch (Exception err)
         {
           Console.Error.WriteLine($"Error waiting and shutting down steam client after launching it to fetch configs: {err}");
-        }
-        finally
-        {
-          steamClientWaiting?.TrySetResult();
-          steamClientWaiting = null;
         }
       }
     }
@@ -1515,6 +1509,13 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   Task IAuthTwoFactorFlow.SendCodeAsync(string code)
   {
+    if (string.IsNullOrEmpty(code))
+    {
+      Console.WriteLine("No 2fa code provided");
+      OnAuthError?.Invoke(DbusErrors.AuthenticationError);
+      return Task.CompletedTask;
+    }
+
     if (tfaCodeTask != null)
     {
       Console.WriteLine($"Got 2FA code: {code}");

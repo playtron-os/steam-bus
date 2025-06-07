@@ -32,6 +32,7 @@ public class SteamClientApp
     public bool running { get; private set; }
     public bool updating { get; private set; }
     public bool loginFailed { get; private set; }
+    public bool isLoggedIn { get; private set; }
     private bool isReady;
     private string updatingToVersion = "0";
     private Process? process;
@@ -91,6 +92,7 @@ public class SteamClientApp
         isReady = false;
         loginFailed = false;
         readyTask = new();
+        isLoggedIn = false;
         steamuiLogs.Delete();
 
         // Verify all installed apps have correct config so steam client does not set them to update pending
@@ -188,6 +190,7 @@ public class SteamClientApp
             running = true;
             isReady = false;
             loginFailed = false;
+            isLoggedIn = false;
 
             if (startingTask == null) startingTask = new();
             if (readyTask == null) readyTask = new();
@@ -255,6 +258,7 @@ public class SteamClientApp
                         await Task.Delay(2000);
 
                         lastLoggedIn = DateTime.UtcNow;
+                        isLoggedIn = true;
                         readyTask.TrySetResult();
                         readyTask = null;
                         Console.WriteLine("Steam client is ready");
