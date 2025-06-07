@@ -133,6 +133,8 @@ public class LibraryFoldersConfig
     /// <param name="mountPoint"></param>
     public void AddDiskEntry(string mountPoint)
     {
+        if (mountPoint.StartsWith("/etc")) return;
+
         string installPath;
         bool isMainDisk = Disk.IsMountPointMainDisk(mountPoint);
         if (isMainDisk)
