@@ -14,7 +14,7 @@
 IMAGE_NAME ?= playtron/steambus-builder
 IMAGE_TAG ?= latest
 ARCH ?= $(shell uname -m)
-DISTRO ?= fc42
+DISTRO ?= fc41
 ALL_CS := $(shell find SteamBus.App/src -name '*.cs')
 ALL_CSPROJ := $(shell find SteamBus.App -name '*.csproj')
 
