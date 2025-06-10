@@ -22,6 +22,7 @@ class CDNClientPool
 
   private readonly SteamClient steamClient;
   private readonly uint appId;
+  private readonly uint cellId;
   public Client CDNClient { get; }
   public Server? ProxyServer { get; private set; }
 
@@ -35,10 +36,11 @@ class CDNClientPool
 
   private Action<(string appId, string error)>? onInstallFailed;
 
-  public CDNClientPool(SteamClient steamClient, uint appId, Action<(string appId, string error)>? onInstallFailed = null)
+  public CDNClientPool(SteamClient steamClient, uint appId, uint cellId, Action<(string appId, string error)>? onInstallFailed = null)
   {
     this.steamClient = steamClient;
     this.appId = appId;
+    this.cellId = cellId;
     this.onInstallFailed = onInstallFailed;
     CDNClient = new Client(steamClient);
 
@@ -61,7 +63,7 @@ class CDNClientPool
         Console.WriteLine("Failed to get content handler from steam client");
         return null;
       }
-      var cdnServers = await steamContent!.GetServersForSteamPipe();
+      var cdnServers = await steamContent!.GetServersForSteamPipe(cellId);
       if (cdnServers != null)
       {
         return cdnServers;
@@ -90,7 +92,11 @@ class CDNClientPool
 
         if (servers == null || servers.Count == 0)
         {
-          onInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
+          if (!shutdownToken.IsCancellationRequested)
+          {
+            onInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
+          }
+
           ExhaustedToken?.Cancel();
           return;
         }

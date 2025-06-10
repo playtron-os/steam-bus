@@ -402,14 +402,18 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
-  bool EnsureConnected()
+  async Task<bool> EnsureConnected()
   {
+    if (this.session != null)
+      await this.session!.WaitLoggingInTask();
+
     // Ensure that a Steam session exists
     if (this.session is null)
     {
       Console.WriteLine("No active Steam session found");
       return false;
     }
+
     if (!this.session.IsLoggedOn)
     {
       Console.WriteLine("Not logged in to Steam");
@@ -445,7 +449,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     try
     {
-      if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+      if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
       await this.session!.WaitForLibrary();
       if (!this.session.ProviderItemMap.TryGetValue(appId, out var providerItem)) throw DbusExceptionHelper.ThrowInvalidAppId();
       return providerItem;
@@ -461,7 +465,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<ProviderItem[]> IPluginLibraryProvider.GetProviderItemsAsync()
   {
-    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     await this.session!.WaitForLibrary();
     return this.session.GetProviderItems().ToArray();
   }
@@ -474,7 +478,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<ItemMetadata> IPluginLibraryProvider.GetAppMetadataAsync(string appIdString)
   {
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
     await session!.RequestAppInfo(appId, true);
@@ -513,7 +517,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
-    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
 
     if (!session!.IsPendingLogin)
@@ -576,7 +580,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<InstallOptionDescription[]> IPluginLibraryProvider.GetInstallOptionsAsync(string appIdString)
   {
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
     var downloader = new ContentDownloader(session!, depotConfigStore);
@@ -690,7 +694,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (session != null && session.IsPendingLogin)
       await Task.WhenAny([session.WaitForReconnect(), Task.Delay(20000)]);
 
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
 
@@ -750,7 +754,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<EulaEntry[]> IPluginLibraryProvider.GetEulasAsync(string appIdString, string country, string locale)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
-    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
 
     await this.session!.WaitForLibrary();
     await this.session!.RequestAppInfo(appId);
@@ -815,7 +819,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (!wantsOfflineMode && session != null && session.IsPendingLogin)
       await Task.WhenAny([session.WaitForReconnect(), Task.Delay(20000)]);
 
-    if ((session == null || !session.IsPendingLogin) && !EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (steamClientApp.updating)
       return [SteamClientApp.STEAM_CLIENT_APP_ID.ToString()];
 
@@ -1565,7 +1569,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task<CloudPathObject[]> IPluginLibraryProvider.GetSavePathPatternsAsync(string appIdString, string platform)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     await session!.RequestAppInfo(appId, false);
 
     Console.WriteLine("Getting paths for {0}", appId);
@@ -1722,7 +1726,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appIdString, string platform, bool force, CloudPathObject[] paths)
   {
     if (ParseAppId(appIdString) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (!isOnline) throw DbusExceptionHelper.ThrowNotOnline();
     if (this.session?.steamCloud == null)
     {
@@ -1885,7 +1889,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, string platform, bool force, CloudPathObject[] paths)
   {
     if (ParseAppId(appid) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (!isOnline) throw DbusExceptionHelper.ThrowNotOnline();
     while (steamClientApp.running)
     {
@@ -2057,7 +2061,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   public async Task<ulong> GetDownloadSizeAsync(string appIdString, InstallOptions options)
   {
-    if (!EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (fetchingSteamClientData != null) await fetchingSteamClientData.Task;
 

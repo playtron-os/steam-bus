@@ -58,6 +58,8 @@ public class SteamSession
   // Keeps tracking whether we are waiting to reconnect, and if not, the reconnection won't happen after the delay
   bool waitingToRetry;
 
+  TaskCompletionSource? loggingInTask;
+
   bool bConnecting;
   bool bAborted;
   bool bExpectingDisconnectRemote;
@@ -89,6 +91,8 @@ public class SteamSession
   private LibraryCache libraryCache;
   private AppInfoCache appInfoCache;
   private SteamConnectionConfig steamConnectionConfig;
+
+  public uint cellId { get => steamConnectionConfig.cellId; }
 
   public Action? OnAvatarUpdated;
 
@@ -479,6 +483,20 @@ public class SteamSession
     return this.SteamGuardData;
   }
 
+  public async Task WaitLoggingInTask()
+  {
+    if (loggingInTask != null)
+    {
+      await loggingInTask.Task;
+    }
+  }
+
+  void FinishLoggingInTask()
+  {
+    loggingInTask?.SetResult();
+    loggingInTask = null;
+  }
+
 
   void Connect()
   {
@@ -488,6 +506,7 @@ public class SteamSession
     bAborted = false;
     bConnecting = true;
     authSession = null;
+    loggingInTask ??= new TaskCompletionSource();
 
     if (!bIsConnectionRecovery)
       connectionBackoff = 0;
@@ -516,6 +535,7 @@ public class SteamSession
 
     bAborted = true;
     bConnecting = false;
+    FinishLoggingInTask();
 
     if (!bExpectingDisconnectRemote)
       bIsConnectionRecovery = false;
@@ -542,6 +562,7 @@ public class SteamSession
     bIsConnectionRecovery = true;
     bExpectingDisconnectRemote = true;
     IsPendingLogin = true;
+    loggingInTask ??= new TaskCompletionSource();
     SteamClient.Disconnect();
   }
 
@@ -764,6 +785,7 @@ public class SteamSession
       if (bIsConnectionRecovery)
       {
         // If expecting to reconnect, just connect to steam client
+        loggingInTask ??= new TaskCompletionSource();
         ResetConnectionFlags();
         SteamClient.Connect();
         return;
@@ -818,6 +840,7 @@ public class SteamSession
           Console.WriteLine($"Lost connection to Steam. Reconnecting (#{connectionBackoff})");
         }
 
+        loggingInTask ??= new TaskCompletionSource();
         Thread.Sleep(3000);
 
         // Any connection related flags need to be reset here to match the state after Connect
@@ -831,7 +854,11 @@ public class SteamSession
       }
     }
 
-    if (bAborted) IsLoggedOn = false;
+    if (bAborted)
+    {
+      IsLoggedOn = false;
+      FinishLoggingInTask();
+    }
   }
 
 
@@ -923,6 +950,7 @@ public class SteamSession
     this.seq++;
     IsLoggedOn = true;
     IsPendingLogin = false;
+    FinishLoggingInTask();
   }
 
   public void SaveToken()
