@@ -1083,6 +1083,7 @@ public class DepotConfigStore
                 LatestVersion = manifestExtra[EXTRA_KEY_LATEST_BUILD_ID].AsString() ?? "",
                 UpdatePending = (entry.Value[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
                 Os = os,
+                Language = entry.Value[KEY_USER_CONFIG]?[KEY_CONFIG_LANGUAGE]?.AsString() ?? "",
                 DisabledDlc = (entry.Value[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString() ?? "").Split(',')
             });
         }
@@ -1114,6 +1115,7 @@ public class DepotConfigStore
             LatestVersion = manifestExtra[EXTRA_KEY_LATEST_BUILD_ID].AsString() ?? "",
             UpdatePending = (manifest[KEY_STATE_FLAGS].AsUnsignedInteger() & (int)StateFlags.UpdateRequired) != 0,
             Os = os,
+            Language = manifest[KEY_USER_CONFIG]?[KEY_CONFIG_LANGUAGE]?.AsString() ?? "",
             DisabledDlc = (manifest[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString() ?? "").Split(',')
         }, branch);
     }
