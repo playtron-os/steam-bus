@@ -422,7 +422,7 @@ public class ContentDownloader
         {
           Console.WriteLine("Using LanCache server for downloads");
         }
-        cdnPool = new CDNClientPool(this.session.SteamClient, appId, onInstallFailed);
+        cdnPool = new CDNClientPool(this.session.SteamClient, appId, session.cellId, onInstallFailed);
         var cts = new CancellationTokenSource();
         cdnPool!.ExhaustedToken = cts;
 
