@@ -128,11 +128,12 @@ public class SteamClientApp
             CreateNoWindow = true
         };
 
-        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64) {
-                // Required for Steam to run on Arm
-                startInfo.EnvironmentVariables["STEAMOS"] = "1";
-                startInfo.EnvironmentVariables["STEAM_RUNTIME"] = "1";
-                startInfo.EnvironmentVariables["DBUS_FATAL_WARNINGS"] = "0";
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            // Required for Steam to run on Arm
+            startInfo.EnvironmentVariables["STEAMOS"] = "1";
+            startInfo.EnvironmentVariables["STEAM_RUNTIME"] = "1";
+            startInfo.EnvironmentVariables["DBUS_FATAL_WARNINGS"] = "0";
         }
 
         startInfo.EnvironmentVariables["DISPLAY"] = display;
@@ -384,6 +385,7 @@ public class SteamClientApp
                 TotalDownloadSize = (ulong)totalBytes,
                 RequiresInternetConnection = true,
                 Os = "linux",
+                Language = "",
             });
         }
     }
