@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Playtron.Plugin;
@@ -126,6 +127,14 @@ public class SteamClientApp
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64) {
+                // Required for Steam to run on Arm
+                startInfo.EnvironmentVariables["STEAMOS"] = "1";
+                startInfo.EnvironmentVariables["STEAM_RUNTIME"] = "1";
+                startInfo.EnvironmentVariables["DBUS_FATAL_WARNINGS"] = "0";
+        }
+
         startInfo.EnvironmentVariables["DISPLAY"] = display;
         startInfo.EnvironmentVariables["LANG"] = "C";
         process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
