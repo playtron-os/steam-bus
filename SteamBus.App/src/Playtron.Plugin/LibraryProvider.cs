@@ -224,7 +224,7 @@ public interface IPluginLibraryProvider : IDBusObject
 
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
 
-  Task<LaunchOption[]> GetLaunchOptionsAsync(string appId);
+  Task<LaunchOption[]> GetLaunchOptionsAsync(string appIdString, InstallOptions extraOptions);
 
   Task<string> GetPostInstallStepsAsync(string appId);
 

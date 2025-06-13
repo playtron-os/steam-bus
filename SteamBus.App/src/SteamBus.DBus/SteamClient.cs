@@ -514,7 +514,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     };
   }
 
-  async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString)
+  async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString, InstallOptions extraOptions)
   {
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
     if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
