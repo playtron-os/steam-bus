@@ -36,6 +36,8 @@ class CDNClientPool
 
   private Action<(string appId, string error)>? onInstallFailed;
 
+  int retryCount = 0;
+
   public CDNClientPool(SteamClient steamClient, uint appId, uint cellId, Action<(string appId, string error)>? onInstallFailed = null)
   {
     this.steamClient = steamClient;
@@ -92,6 +94,15 @@ class CDNClientPool
 
         if (servers == null || servers.Count == 0)
         {
+          Console.Error.WriteLine($"No servers found for CDN client pool, retryCount:{retryCount}");
+
+          retryCount++;
+          if (retryCount <= 5)
+          {
+            await Task.Delay(500);
+            continue;
+          }
+
           if (!shutdownToken.IsCancellationRequested)
           {
             onInstallFailed?.Invoke((appId.ToString(), DbusErrors.ContentNotFound));
@@ -101,6 +112,7 @@ class CDNClientPool
           return;
         }
 
+        retryCount = 0;
         ProxyServer = servers!.Where(x => x.UseAsProxy).FirstOrDefault();
 
         var weightedCdnServers = servers
