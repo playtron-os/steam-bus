@@ -20,14 +20,14 @@ class SteamBus
     string? busAddress = Address.Session;
     if (busAddress is null)
     {
-      Console.Write("Can not determine session bus address");
+      Console.Error.Write("Can not determine session bus address");
       return;
     }
 
     string? systemBusAddress = Address.System;
     if (systemBusAddress is null)
     {
-      Console.Write("Can not determine system bus address");
+      Console.Error.Write("Can not determine system bus address");
       return;
     }
 
@@ -58,6 +58,16 @@ class SteamBus
     DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore, dependenciesStore, displayManager, networkManager);
     await connection.RegisterObjectAsync(client);
 
+    await Register(connection, path, client, depotConfigStore);
+
+    // Run forever
+    await Task.Delay(-1);
+
+    return;
+  }
+
+  static async Task Register(Connection connection, string path, DBusSteamClient client, DepotConfigStore depotConfigStore, bool retry = true)
+  {
     // Register with Playserve
     try
     {
@@ -136,14 +146,15 @@ class SteamBus
     }
     catch (Exception ex)
     {
-      Console.WriteLine($"Error registering plugin to playserve, ex:{ex}");
+      Console.Error.WriteLine($"Error registering plugin to playserve, ex:{ex}");
+
+      if (retry)
+      {
+        Console.WriteLine("Retrying plugin registration in 3 seconds...");
+        await Task.Delay(3000);
+        await Register(connection, path, client, depotConfigStore, false);
+      }
     }
-
-    // Run forever
-    await Task.Delay(-1);
-
-    return;
   }
 }
-
 
