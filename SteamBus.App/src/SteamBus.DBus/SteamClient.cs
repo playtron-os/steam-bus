@@ -476,42 +476,54 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Task.FromResult(0);
   }
 
-  async Task<ItemMetadata> IPluginLibraryProvider.GetAppMetadataAsync(string appIdString)
+  async Task<String> IPluginLibraryProvider.GetItemMetadataAsync(string appIdString)
   {
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
-    await session!.RequestAppInfo(appId, true);
+    // await session!.RequestAppInfo(appId, true);
 
-    var info = depotConfigStore.GetInstalledAppInfo(appId);
     var name = session!.GetSteam3AppName(appId);
-    var requiresInternetConnection = session!.GetSteam3AppRequiresInternetConnection(appId);
-
-    if (info == null)
+    var options = new JsonSerializerOptions
     {
-      return new ItemMetadata
-      {
-        Name = name,
-        InstallSize = 0,
-        RequiresInternetConnection = requiresInternetConnection,
-        CloudSaveFolders = [],
-        InstalledVersion = "",
-        LatestVersion = "",
-      };
-    }
-
-    var latestVersion = session!.GetSteam3AppBuildNumber(appId, info!.Value.Branch);
-
-    return new ItemMetadata
-    {
-      Name = name,
-      InstallSize = info.Value.Info.DownloadedBytes,
-      RequiresInternetConnection = requiresInternetConnection,
-      // TODO: Implement cloud save folders?
-      CloudSaveFolders = [],
-      InstalledVersion = info.Value.Info.Version,
-      LatestVersion = latestVersion.ToString(),
+      PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower
     };
+
+    var provider = new PlaytronProvider
+    {
+      Provider = "steam",
+      ProviderAppId = appId.ToString(),
+      StoreId = appId.ToString(),
+      ProductStoreLink = $"https://store.steampowered.com/app/{appId}",
+      KnownDlcStoreIds = [],
+      Namespace = "",
+    };
+
+    var landscapeImage = new PlaytronImage
+    {
+      Url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
+      ImageType = "landscape",
+      Source = "steam",
+      Alt = "",
+    };
+
+    var metadata = new ItemMetadata
+    {
+      Id = appId.ToString(),
+      Name = name,
+      Slug = appId.ToString(),
+      Providers = [provider],
+      Developers = [],
+      Publishers = [],
+      Tags = [],
+      Description = "",
+      Summary = "",
+      Images = [landscapeImage],
+      app_type = "Game"
+    };
+
+
+    return JsonSerializer.Serialize(metadata, options);
   }
 
   async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString, InstallOptions extraOptions)
