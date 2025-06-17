@@ -476,54 +476,42 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Task.FromResult(0);
   }
 
-  async Task<String> IPluginLibraryProvider.GetItemMetadataAsync(string appIdString)
+  async Task<ItemMetadata> IPluginLibraryProvider.GetAppMetadataAsync(string appIdString)
   {
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
-    // await session!.RequestAppInfo(appId, true);
+    await session!.RequestAppInfo(appId, true);
 
+    var info = depotConfigStore.GetInstalledAppInfo(appId);
     var name = session!.GetSteam3AppName(appId);
-    var options = new JsonSerializerOptions
-    {
-      PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower
-    };
+    var requiresInternetConnection = session!.GetSteam3AppRequiresInternetConnection(appId);
 
-    var provider = new PlaytronProvider
+    if (info == null)
     {
-      Provider = "steam",
-      ProviderAppId = appId.ToString(),
-      StoreId = appId.ToString(),
-      ProductStoreLink = $"https://store.steampowered.com/app/{appId}",
-      KnownDlcStoreIds = [],
-      Namespace = "",
-    };
+      return new ItemMetadata
+      {
+        Name = name,
+        InstallSize = 0,
+        RequiresInternetConnection = requiresInternetConnection,
+        CloudSaveFolders = [],
+        InstalledVersion = "",
+        LatestVersion = "",
+      };
+    }
 
-    var landscapeImage = new PlaytronImage
-    {
-      Url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
-      ImageType = "landscape",
-      Source = "steam",
-      Alt = "",
-    };
+    var latestVersion = session!.GetSteam3AppBuildNumber(appId, info!.Value.Branch);
 
-    var metadata = new ItemMetadata
+    return new ItemMetadata
     {
-      Id = appId.ToString(),
       Name = name,
-      Slug = appId.ToString(),
-      Providers = [provider],
-      Developers = [],
-      Publishers = [],
-      Tags = [],
-      Description = "",
-      Summary = "",
-      Images = [landscapeImage],
-      app_type = "Game"
+      InstallSize = info.Value.Info.DownloadedBytes,
+      RequiresInternetConnection = requiresInternetConnection,
+      // TODO: Implement cloud save folders?
+      CloudSaveFolders = [],
+      InstalledVersion = info.Value.Info.Version,
+      LatestVersion = latestVersion.ToString(),
     };
-
-
-    return JsonSerializer.Serialize(metadata, options);
   }
 
   async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString, InstallOptions extraOptions)
