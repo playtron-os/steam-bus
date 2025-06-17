@@ -158,14 +158,42 @@ public struct ProviderItem
 }
 
 [StructLayout(LayoutKind.Sequential)]
+public struct PlaytronProvider
+{
+  public string Provider { get; set; }
+  public string ProviderAppId { get; set; }
+  public string StoreId { get; set; }
+  public string? ParentStoreId { get; set; }
+  public DateTime? LastImportedTimestamp { get; set; }
+  public string[] KnownDlcStoreIds { get; set; }
+  public string Namespace { get; set; }
+  public string ProductStoreLink { get; set; }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct PlaytronImage
+{
+  public string ImageType { get; set; }
+  public string Url { get; set; }
+  public string Alt { get; set; }
+  public string Source { get; set; }
+}
+
+
+[StructLayout(LayoutKind.Sequential)]
 public struct ItemMetadata
 {
+  public string Id { get; set; }
   public string Name { get; set; }
-  public ulong InstallSize { get; set; }
-  public bool RequiresInternetConnection { get; set; }
-  public string[] CloudSaveFolders { get; set; }
-  public string InstalledVersion { get; set; }
-  public string LatestVersion { get; set; }
+  public PlaytronProvider[] Providers { get; set; }
+  public string Slug { get; set; }
+  public string Summary { get; set; }
+  public string Description { get; set; }
+  public string[] Tags { get; set; }
+  public PlaytronImage[] Images { get; set; }
+  public string[] Publishers { get; set; }
+  public string[] Developers { get; set; }
+  public string app_type { get; set; }
 }
 
 public enum LaunchType
@@ -220,7 +248,7 @@ public interface IPluginLibraryProvider : IDBusObject
   // Pauses the current install that is in progress
   Task PauseInstallAsync();
 
-  Task<ItemMetadata> GetAppMetadataAsync(string appId);
+  Task<string> GetItemMetadataAsync(string appId);
 
   Task<InstallOptionDescription[]> GetInstallOptionsAsync(string appId);
 
