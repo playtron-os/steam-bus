@@ -52,6 +52,7 @@ public class SteamSession
   public Steam.Cloud.SteamCloud steamCloud;
   readonly SteamKit2.SteamCloud? steamCloudKit;
   //readonly PublishedFile steamPublishedFile;
+  readonly SteamAchievements achievements;
 
   public CallbackManager Callbacks;
 
@@ -114,6 +115,7 @@ public class SteamSession
     this.libraryCache = new LibraryCache(LibraryCache.DefaultPath());
     this.appInfoCache = new AppInfoCache(AppInfoCache.DefaultPath());
     this.steamConnectionConfig = new SteamConnectionConfig(SteamConnectionConfig.CellIdDefaultPath(), SteamConnectionConfig.ServersBinDefaultPath());
+    this.achievements = new SteamAchievements(this);
 
     if (details.AccountID != 0)
     {
@@ -1155,6 +1157,11 @@ public class SteamSession
 
     playingAppID = callback.PlayingAppID;
     playingBlocked = callback.PlayingBlocked;
+
+    if (playingAppID == 0)
+      achievements.StopTracking();
+    else
+      achievements.StartTracking(playingAppID);
   }
 
   private void OnPersonaState(SteamFriends.PersonaStateCallback callback)
