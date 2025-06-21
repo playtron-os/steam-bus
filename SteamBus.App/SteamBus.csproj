@@ -41,4 +41,21 @@
       SkipUnchangedFiles="true" />
   </Target>
 
+  <Target Name="CopyLibsteamApiToRuntimes" AfterTargets="Build">
+    <PropertyGroup>
+      <RuntimeFolder>runtimes/linux-x64/lib/netstandard2.1</RuntimeFolder>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <SteamLib Include="..\SteamBusClientBridge.App\libsteam_api.so" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(OutputPath)$(RuntimeFolder)" />
+
+    <Copy
+      SourceFiles="@(SteamLib)"
+      DestinationFolder="$(OutputPath)$(RuntimeFolder)"
+      SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>
