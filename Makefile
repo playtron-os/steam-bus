@@ -114,3 +114,15 @@ in-docker:
 		-e ARCH=$(ARCH) \
 		$(IMAGE_NAME):$(IMAGE_TAG) \
 		make $(TARGET)
+
+APPID ?= 207250
+APP_DIR = SteamBusClientBridge.App
+OUT_DIR = $(APP_DIR)/bin/Debug/net8.0
+EXE = $(OUT_DIR)/SteamBusClientBridge.App
+run-bridge:
+	@echo "Building $(APP_DIR)..."
+	@dotnet build $(APP_DIR)
+
+	@chmod +x $(EXE)
+	@echo "Running $(EXE) with APPID=$(APPID)..."
+	@SteamAppId=$(APPID) $(EXE) $(APPID)

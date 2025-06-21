@@ -11,7 +11,6 @@
   <ItemGroup>
     <PackageReference Include="SteamKit2" Version="3.2.0" />
     <PackageReference Include="protobuf-net" Version="3.2.52" />
-    <PackageReference Include="Steamworks.NET" Version="2024.8.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.3.0" />
     <PackageReference Include="System.IO.Hashing" Version="9.0.4" />
     <PackageReference Include="Tmds.DBus" Version="0.18.0" />
@@ -20,9 +19,26 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../SteamBusClientBridge.App/SteamBusClientBridge.App.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="pluginmanifest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <Target Name="CopySteamBridgeExecutable" AfterTargets="Build">
+    <ItemGroup>
+      <BridgeExe Include="$(SolutionDir)SteamBusClientBridge.App/bin/$(Configuration)/net8.0/SteamBusClientBridge.App$(ExecutableExtension)" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(OutputPath)" />
+
+    <Copy
+      SourceFiles="@(BridgeExe)"
+      DestinationFolder="$(OutputPath)" 
+      SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>
