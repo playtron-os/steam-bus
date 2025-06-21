@@ -19,9 +19,26 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../SteamBusClientBridge.App/SteamBusClientBridge.App.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="pluginmanifest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <Target Name="CopySteamBridgeExecutable" AfterTargets="Build">
+    <ItemGroup>
+      <BridgeExe Include="$(SolutionDir)SteamBusClientBridge.App/bin/$(Configuration)/net8.0/SteamBusClientBridge.App$(ExecutableExtension)" />
+    </ItemGroup>
+
+    <MakeDir Directories="$(OutputPath)" />
+
+    <Copy
+      SourceFiles="@(BridgeExe)"
+      DestinationFolder="$(OutputPath)" 
+      SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

@@ -11,6 +11,7 @@ using System.Text;
 using Xdg.Directories;
 using Steam.Config;
 using Steam.Cloud;
+using SteamBusClientBridge.App.Models;
 
 namespace SteamBus.DBus;
 
@@ -52,7 +53,19 @@ public interface IDBusSteamClient : IDBusObject
   //Task<IDisposable> WatchLoggedOutAsync(Action<string> reply);
 }
 
-class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IUser, IAuthTwoFactorFlow, IAuthQrFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator, IPluginDependencies
+class DBusSteamClient :
+  IDBusSteamClient,
+  IPlaytronPlugin,
+  IAuthPasswordFlow,
+  IAuthCryptography,
+  IUser,
+  IAuthTwoFactorFlow,
+  IAuthQrFlow,
+  IPluginLibraryProvider,
+  ICloudSaveProvider,
+  IAuthenticator,
+  IPluginDependencies,
+  IPluginAchievements
 {
   // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
   public ObjectPath Path;
@@ -105,6 +118,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   public event Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
   public event Action<string>? OnLaunchReady;
   public event Action<(string appId, string error)>? OnLaunchError;
+
+  public event Action<string>? OnAchievementUnlocked;
 
 
   private DepotConfigStore dependenciesStore;
@@ -985,6 +1000,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     session.OnAuthError = OnAuthError;
     session.OnAuthUpdated = () => OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
     session.OnAvatarUpdated = () => OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar"]));
+    session.achievements.AchievementUnlocked = OnAchievementUnlocked;
 
     // Subscribe to client callbacks
     session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
@@ -2086,5 +2102,16 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       steamClientApp.RunSteamShutdown();
     else if (session != null)
       _ = Task.Run(async () => await LaunchSteamClientToSyncTokens(session.GetLogonDetails()));
+  }
+
+  public async Task<string> GetAchievementsAsync()
+  {
+    if (session == null) return "";
+    return await session.achievements.GetAchievements();
+  }
+
+  public Task<IDisposable> WatchAchievementUnlockedAsync(Action<string> reply)
+  {
+    return SignalWatcher.AddAsync(this, nameof(OnAchievementUnlocked), reply);
   }
 }
