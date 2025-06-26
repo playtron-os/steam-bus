@@ -115,7 +115,7 @@ public class RemoteCache
 		{
 			if (entry.Children.Count == 0) continue;
 			RemoteCacheFile cacheFile = new(entry);
-			result.Add(cacheFile.GetRemotePath().ToLower(), cacheFile);
+			result.Add(cacheFile.GetRemotePath(), cacheFile);
 		}
 		return result;
 	}

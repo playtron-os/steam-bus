@@ -30,6 +30,7 @@ public struct CloudSyncFailure
   public ulong Remote;
   public ulong QuotaUsage;
   public ulong Quota;
+  public uint SyncState;
 }
 
 public enum SyncState

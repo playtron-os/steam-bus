@@ -34,14 +34,29 @@ public class CloudUtils
         public ulong remote;
     }
 
-    public static AnalisisResult AnalyzeSaves(CCloud_GetAppFileChangelist_Response changelist, Dictionary<string, RemoteCacheFile> remoteFiles, Dictionary<string, LocalFile> localFiles, bool upload = false)
+    public static AnalisisResult AnalyzeSaves(CCloud_GetAppFileChangelist_Response changelist, Dictionary<string, RemoteCacheFile> remoteFiles, Dictionary<string, LocalFile> localFiles, ERemoteStoragePlatform platformToSync)
     {
         AnalisisResult res = new() { missingLocal = [], changedLocal = [] };
         ConflictDetails conflictDetails = new() { local = 0, remote = 0 };
+        Dictionary<string, string> filePathToSha = [];
+
         foreach (var file in changelist.files)
         {
+            if ((file.platforms_to_sync & (uint)platformToSync) != (uint)platformToSync) continue;
+
             if (conflictDetails.remote < file.time_stamp)
                 conflictDetails.remote = file.time_stamp;
+
+            string shaHex = BitConverter.ToString(file.sha_file).Replace("-", "").ToLowerInvariant();
+
+            var path = "";
+            if (changelist.path_prefixes.Count > 0 && file.ShouldSerializepath_prefix_index())
+            {
+                path = changelist.path_prefixes[(int)file.path_prefix_index];
+            }
+            var cloudpath = $"{path}{file.file_name}";
+
+            filePathToSha.Add(cloudpath, shaHex);
         }
         foreach (var file in remoteFiles)
         {
@@ -50,12 +65,18 @@ public class CloudUtils
         }
         foreach (var file in localFiles)
         {
+            filePathToSha.TryGetValue(file.Key, out var asd);
             if (!remoteFiles.TryGetValue(file.Key, out var remoteFile))
-                res.changedLocal.Add(file.Value);
-            else if (remoteFile.Time < file.Value.UpdateTime)
             {
-                if (remoteFile.Sha1() != file.Value.Sha1())
-                    res.changedLocal.Add(file.Value);
+                res.changedLocal.Add(file.Value);
+            }
+            else if (remoteFile.Time < file.Value.UpdateTime && remoteFile.Sha1() != file.Value.Sha1())
+            {
+                res.changedLocal.Add(file.Value);
+            }
+            else if (filePathToSha.TryGetValue(file.Key, out var sha) && sha != file.Value.Sha1())
+            {
+                res.changedLocal.Add(file.Value);
             }
 
             if (conflictDetails.local < file.Value.UpdateTime)
@@ -92,10 +113,13 @@ public class CloudUtils
             var file_size = response.file_size;
             if (file.PersistState == ECloudStoragePersistState.k_ECloudStoragePersistStateDeleted)
             {
-                if (File.Exists(fspath))
+                await Disk.ExecuteFileOpWithRetry(() =>
                 {
-                    File.Delete(fspath);
-                }
+                    if (File.Exists(fspath))
+                        File.Delete(fspath);
+                    return Task.CompletedTask;
+                }, fspath, maxRetries: 8, delayMilliseconds: 50);
+
                 semaphore.Release();
                 return (file, null);
             }
@@ -121,7 +145,12 @@ public class CloudUtils
                 {
                     Console.WriteLine("Got compressed file");
                     var zip = new ZipArchive(fileData);
-                    zip.Entries[0].ExtractToFile(fspath, true);
+
+                    await Disk.ExecuteFileOpWithRetry(() =>
+                    {
+                        zip.Entries[0].ExtractToFile(fspath, true);
+                        return Task.CompletedTask;
+                    }, fspath, maxRetries: 8, delayMilliseconds: 50);
                 }
                 else if (fileData != null)
                 {
@@ -130,11 +159,15 @@ public class CloudUtils
                     {
                         using FileStream fileH = File.Open(fspath, FileMode.Create);
                         await fileData.CopyToAsync(fileH);
-                        return Task.CompletedTask;
-                    }, fspath, 3, 500);
+                    }, fspath, maxRetries: 8, delayMilliseconds: 50);
                 }
             }
-            File.SetLastWriteTimeUtc(fspath, DateTime.UnixEpoch.AddSeconds(file.RemoteTime));
+
+            await Disk.ExecuteFileOpWithRetry(() =>
+            {
+                File.SetLastWriteTimeUtc(fspath, DateTime.UnixEpoch.AddSeconds(file.RemoteTime));
+                return Task.CompletedTask;
+            }, fspath, maxRetries: 8, delayMilliseconds: 50);
         }
         catch (Exception e)
         {
