@@ -491,20 +491,20 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     var provider = new PlaytronProvider
     {
-      Provider = "steam",
-      ProviderAppId = appId.ToString(),
-      StoreId = appId.ToString(),
-      ProductStoreLink = $"https://store.steampowered.com/app/{appId}",
-      KnownDlcStoreIds = [],
+      provider = "steam",
+      provider_app_id = appId.ToString(),
+      store_id = appId.ToString(),
+      product_store_link = $"https://store.steampowered.com/app/{appId}",
+      known_dlc_store_ids = [],
       Namespace = "",
     };
 
     var landscapeImage = new PlaytronImage
     {
-      Url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
-      ImageType = "landscape",
-      Source = "steam",
-      Alt = "",
+      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
+      image_type = "landscape",
+      source = "steam",
+      alt = "",
     };
 
     var metadata = new ItemMetadata

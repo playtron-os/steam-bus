@@ -160,23 +160,23 @@ public struct ProviderItem
 [StructLayout(LayoutKind.Sequential)]
 public struct PlaytronProvider
 {
-  public string Provider { get; set; }
-  public string ProviderAppId { get; set; }
-  public string StoreId { get; set; }
-  public string? ParentStoreId { get; set; }
-  public DateTime? LastImportedTimestamp { get; set; }
-  public string[] KnownDlcStoreIds { get; set; }
+  public string provider { get; set; }
+  public string provider_app_id { get; set; }
+  public string store_id { get; set; }
+  public string? parent_store_id { get; set; }
+  public DateTime? last_imported_timestamp { get; set; }
+  public string[] known_dlc_store_ids { get; set; }
   public string Namespace { get; set; }
-  public string ProductStoreLink { get; set; }
+  public string product_store_link { get; set; }
 }
 
 [StructLayout(LayoutKind.Sequential)]
 public struct PlaytronImage
 {
-  public string ImageType { get; set; }
-  public string Url { get; set; }
-  public string Alt { get; set; }
-  public string Source { get; set; }
+  public string image_type { get; set; }
+  public string url { get; set; }
+  public string alt { get; set; }
+  public string source { get; set; }
 }
 
 
