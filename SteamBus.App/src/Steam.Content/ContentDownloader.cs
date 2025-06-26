@@ -638,6 +638,10 @@ public class ContentDownloader
                 continue;
             }
 
+            if (depotConfig["realm"] != KeyValue.Invalid &&
+                (depotConfig["realm"].AsString() ?? "steamglobal") != "steamglobal")
+              continue;
+
             if (!options.DownloadAllArchs &&
                 depotConfig["osarch"] != KeyValue.Invalid &&
                 !string.IsNullOrWhiteSpace(depotConfig["osarch"].Value))
