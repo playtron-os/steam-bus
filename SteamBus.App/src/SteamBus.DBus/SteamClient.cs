@@ -891,15 +891,23 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     Console.WriteLine($"Running post launch hook for appId:{appId}");
     _ = Task.Run(async () =>
     {
-      if (ParseAppId(appId) is uint appIdVal)
+      try
       {
-        // Wait for Steam to pick up game closing
-        await Task.Delay(500);
-        // Check if the sync operation has been started
-        await steamClientApp.WaitForSteamCloud(session.SteamUser.SteamID.AccountID, appIdVal, TimeSpan.FromSeconds(15));
+        var accountId = session?.SteamUser?.SteamID?.AccountID;
+        if (accountId != null && ParseAppId(appId) is uint appIdVal)
+        {
+          // Wait for Steam to pick up game closing
+          await Task.Delay(500);
+          // Check if the sync operation has been started
+          await steamClientApp.WaitForSteamCloud((uint)accountId, appIdVal, TimeSpan.FromSeconds(15));
+        }
+        // Send shutdown request
+        await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(8));
       }
-      // Send shutdown request
-      await steamClientApp.ShutdownSteamWithTimeoutAsync(TimeSpan.FromSeconds(8));
+      catch (Exception ex)
+      {
+        Console.Error.WriteLine($"Error on post launch hook process, ex:{ex}");
+      }
     }
     );
     return Task.CompletedTask;
@@ -1340,7 +1348,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task LaunchSteamClientToSyncTokens(SteamUser.LogOnDetails loginDetails)
   {
-    if (loginDetails.Username == null || steamClientApp.running || !isOnline || !isSteamClientEnabled) return;
+    var isLoggedOn = session?.IsLoggedOn ?? false;
+    if (!isLoggedOn || loginDetails.Username == null || steamClientApp.running || !isOnline || !isSteamClientEnabled) return;
 
     if (DateTime.UtcNow - steamClientApp.lastLoggedIn < TimeSpan.FromHours(6))
     {
@@ -1737,6 +1746,19 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task ICloudSaveProvider.CloudSaveDownloadAsync(string appIdString, string platform, bool force, CloudPathObject[] paths)
   {
+    try
+    {
+      await CloudSaveDownloadAsync(appIdString, platform, force, paths);
+    }
+    catch (TaskCanceledException)
+    {
+      Console.WriteLine("Task cancelled during cloud save download, trying again");
+      await CloudSaveDownloadAsync(appIdString, platform, force, paths);
+    }
+  }
+
+  async Task CloudSaveDownloadAsync(string appIdString, string platform, bool force, CloudPathObject[] paths)
+  {
     if (ParseAppId(appIdString) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (!isOnline) throw DbusExceptionHelper.ThrowNotOnline();
@@ -1745,19 +1767,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Console.WriteLine("Steam Cloud not initialized");
       return;
     }
-    ERemoteStoragePlatform platformToSync = ERemoteStoragePlatform.Windows; // Decide what platform we sync
-    switch (platform)
-    {
-      case "linux":
-        platformToSync = ERemoteStoragePlatform.Linux;
-        break;
-      case "windows":
-        platformToSync = ERemoteStoragePlatform.Windows;
-        break;
-      case "macos":
-        platformToSync = ERemoteStoragePlatform.OSX;
-        break;
-    }
+    var platformToSync = GetRemoteStoragePlatform(platform);
     Console.WriteLine("CloudDownload for {0}", appidParsed);
     var remoteCacheFile = new RemoteCache(this.session.SteamUser!.SteamID!.AccountID, appidParsed);
     var changeNumber = remoteCacheFile.GetChangeNumber();
@@ -1774,7 +1784,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     // Check if there are any changes we need to apply
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
-    var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles);
+    var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, platformToSync);
+
     if (changelist.current_change_number == changeNumber && analysis.missingLocal.Count == 0)
     {
       Console.WriteLine("files are synced");
@@ -1785,7 +1796,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       var local = analysis.conflictDetails.local;
       var remote = analysis.conflictDetails.remote;
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure
+      {
+        AppdId = appIdString,
+        Error = DbusErrors.CloudConflict,
+        Local = local,
+        Remote = remote,
+        SyncState = (uint)SyncState.Download,
+      });
       throw DbusExceptionHelper.ThrowCloudConflict();
     }
 
@@ -1864,7 +1882,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         {
           AppdId = appIdString,
           Progress = (double)downloaded / totalSize * 100,
-          SyncState = (uint)SyncState.Download
+          SyncState = (uint)SyncState.Download,
         });
       }
       else
@@ -1875,12 +1893,17 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         file.LocalTime = 0;
         currentError ??= DbusErrors.CloudFileDownload;
       }
-      cachedFiles[file.GetRemotePath().ToLower()] = file;
+      cachedFiles[file.GetRemotePath()] = file;
     }
 
     if (currentError != null)
     {
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appIdString, Error = currentError });
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure
+      {
+        AppdId = appIdString,
+        Error = currentError,
+        SyncState = (uint)SyncState.Download,
+      });
     }
     // Set this to unknown for now, this shouldnt break anything afaik
     remoteCacheFile.UpdateLocalCache(changelist.current_change_number, "-1", cachedFiles.Values.ToArray());
@@ -1900,10 +1923,23 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task ICloudSaveProvider.CloudSaveUploadAsync(string appid, string platform, bool force, CloudPathObject[] paths)
   {
+    try
+    {
+      await CloudSaveUploadAsync(appid, platform, force, paths);
+    }
+    catch (TaskCanceledException)
+    {
+      Console.WriteLine("Task cancelled during cloud save upload, trying again");
+      await CloudSaveUploadAsync(appid, platform, force, paths);
+    }
+  }
+
+  async Task CloudSaveUploadAsync(string appid, string platform, bool force, CloudPathObject[] paths)
+  {
     if (ParseAppId(appid) is not uint appidParsed) throw DbusExceptionHelper.ThrowInvalidAppId();
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (!isOnline) throw DbusExceptionHelper.ThrowNotOnline();
-    while (steamClientApp.running)
+    while (!string.IsNullOrEmpty(steamClientApp.forAppId) && steamClientApp.running)
     {
       await Task.Delay(500);
     }
@@ -1913,6 +1949,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Console.WriteLine("Steam Cloud not initialized");
       return;
     }
+
+    var platformToSync = GetRemoteStoragePlatform(platform);
+
     var localFiles = Steam.Cloud.SteamCloud.MapFilePaths(paths);
     Console.WriteLine("CloudUpload for {0}", appidParsed);
     var remoteCacheFile = new RemoteCache(this.session.SteamUser!.SteamID!.AccountID, appidParsed);
@@ -1923,7 +1962,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       return;
     }
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
-    var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, true);
+    var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, platformToSync);
     Console.WriteLine("Current change number {0}", changelist.current_change_number);
     Console.WriteLine("Local change number {0}", changeNumber);
     if (changelist.ShouldSerializecurrent_change_number() && changelist.current_change_number != changeNumber && changelist.files.Count > 0)
@@ -1933,7 +1972,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         Console.WriteLine("Potential conflict, different change numbers detected");
         var local = analysis.conflictDetails.local;
         var remote = analysis.conflictDetails.remote;
-        OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = DbusErrors.CloudConflict, Local = local, Remote = remote });
+        OnCloudSyncFailed?.Invoke(new CloudSyncFailure
+        {
+          AppdId = appid,
+          Error = DbusErrors.CloudConflict,
+          Local = local,
+          Remote = remote,
+          SyncState = (uint)SyncState.Upload,
+        });
         throw DbusExceptionHelper.ThrowCloudConflict();
       }
       Console.WriteLine("Focefully uploading files");
@@ -1946,7 +1992,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       {
         AppdId = appid,
         Progress = 100,
-        SyncState = (uint)SyncState.Upload
+        SyncState = (uint)SyncState.Upload,
       });
       return;
     }
@@ -1966,7 +2012,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (uploadData == null)
     {
       Console.WriteLine("Failed to initialize upload with steam services");
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = DbusErrors.CloudFileUpload });
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure
+      {
+        AppdId = appid,
+        Error = DbusErrors.CloudFileUpload,
+        SyncState = (uint)SyncState.Upload,
+      });
       return;
     }
 
@@ -1981,7 +2032,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     foreach (var file in analysis.changedLocal)
     {
-      cachedFiles.TryGetValue(file.GetRemotePath().ToLower(), out var uploadFile);
+      cachedFiles.TryGetValue(file.GetRemotePath(), out var uploadFile);
       uploadFile ??= new RemoteCacheFile(file);
       uploadFile.SyncState = ERemoteStorageSyncState.inprogress;
       totalSize += uploadFile.Size;
@@ -2024,7 +2075,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         {
           AppdId = appid,
           Progress = (double)uploaded / totalSize * 100,
-          SyncState = (uint)SyncState.Upload
+          SyncState = (uint)SyncState.Upload,
         });
       }
       else
@@ -2034,11 +2085,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         file.RemoteTime = 0;
         currentError ??= DbusErrors.CloudFileUpload;
       }
-      cachedFiles[file.GetRemotePath().ToLower()] = file;
+      cachedFiles[file.GetRemotePath()] = file;
     }
     foreach (var file in analysis.missingLocal)
     {
-      cachedFiles.TryGetValue(file.GetRemotePath().ToLower(), out var uploadFile);
+      cachedFiles.TryGetValue(file.GetRemotePath(), out var uploadFile);
       if (uploadFile == null) continue;
       uploadFile.PersistState = SteamKit2.Internal.ECloudStoragePersistState.k_ECloudStoragePersistStateDeleted;
       uploadFile.SyncState = ERemoteStorageSyncState.inprogress;
@@ -2047,12 +2098,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       {
         Console.WriteLine("Failed to call delete on a file");
       }
-      cachedFiles.Remove(file.GetRemotePath().ToLower());
+      cachedFiles.Remove(file.GetRemotePath());
     }
     EResult eResult = EResult.OK;
     if (currentError != null)
     {
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = currentError });
+      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = currentError, SyncState = (uint)SyncState.Upload });
       eResult = EResult.Fail;
     }
     await this.session.steamCloud.CompleteAppUploadBatch(appidParsed, uploadData.batch_id, (uint)eResult);
@@ -2084,6 +2135,24 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var downloadOptions = new AppDownloadOptions(options, "");
 
     return await downloader.GetTotalDownloadSizeAsync(appId, downloadOptions);
+  }
+
+  private ERemoteStoragePlatform GetRemoteStoragePlatform(string platform)
+  {
+    ERemoteStoragePlatform platformToSync = ERemoteStoragePlatform.Windows; // Decide what platform we sync
+    switch (platform)
+    {
+      case "linux":
+        platformToSync = ERemoteStoragePlatform.Linux;
+        break;
+      case "windows":
+        platformToSync = ERemoteStoragePlatform.Windows;
+        break;
+      case "macos":
+        platformToSync = ERemoteStoragePlatform.OSX;
+        break;
+    }
+    return platformToSync;
   }
 
   public void SetSteamClientEnabled(bool isSteamClientEnabled)

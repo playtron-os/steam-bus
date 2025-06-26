@@ -216,11 +216,12 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
       string[] files = Directory.GetFiles(mapRoot.path, mapRoot.pattern, new EnumerationOptions() { RecurseSubdirectories = mapRoot.recursive });
       foreach (var file in files)
       {
-        if (Path.GetFileName(file).ToLower() == "steam_autocloud.vdf") {
+        if (Path.GetFileName(file).ToLower() == "steam_autocloud.vdf")
+        {
           continue;
         }
         var newFile = new LocalFile(file, file[mapRoot.path.Length..], mapRoot.alias, syncPlatform);
-        results.Add(newFile.GetRemotePath().ToLower(), newFile);
+        results.Add(newFile.GetRemotePath(), newFile);
       }
     }
     return results;
