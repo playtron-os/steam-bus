@@ -481,9 +481,25 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
-    // await session!.RequestAppInfo(appId, true);
+    var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
+    var name = CommonSection?["name"].Value?.ToString();
+    var app_type = CommonSection?["type"].Value?.ToString() ?? "";
+    var parent_store_id = CommonSection?["parent"].Value?.ToString() ?? "";
 
-    var name = session!.GetSteam3AppName(appId);
+    if (name == null)
+    {
+      return "";
+    }
+    if (
+      !string.Equals(app_type, "game", StringComparison.OrdinalIgnoreCase)
+      || !string.Equals(app_type, "demo", StringComparison.OrdinalIgnoreCase)
+      || !string.Equals(app_type, "beta", StringComparison.OrdinalIgnoreCase))
+    {
+      return "";
+    }
+
+    // TODO: Check for expired betas and demos
+
     var options = new JsonSerializerOptions
     {
       PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower
@@ -493,6 +509,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       provider = "steam",
       provider_app_id = appId.ToString(),
+      parent_store_id = parent_store_id,
       store_id = appId.ToString(),
       product_store_link = $"https://store.steampowered.com/app/{appId}",
       known_dlc_store_ids = [],
@@ -519,7 +536,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Description = "",
       Summary = "",
       Images = [landscapeImage],
-      app_type = "Game"
+      app_type = app_type
     };
 
 
