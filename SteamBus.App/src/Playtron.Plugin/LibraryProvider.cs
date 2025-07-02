@@ -10,6 +10,14 @@ namespace Playtron.Plugin;
 /// typed tuples.
 using InstallOptionDescription = (string, string, string[]);
 
+public enum PluginProviderStatus
+{
+  Unauthorized = 0,
+  Requires2fa = 1,
+  Authorized = 2,
+  Reconnecting = 3,
+}
+
 [StructLayout(LayoutKind.Sequential)]
 public struct EulaEntry
 {

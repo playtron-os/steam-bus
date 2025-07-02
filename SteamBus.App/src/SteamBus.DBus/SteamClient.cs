@@ -404,15 +404,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<bool> EnsureConnected()
   {
-    if (this.session != null)
-      await this.session!.WaitLoggingInTask();
-
     // Ensure that a Steam session exists
     if (this.session is null)
     {
       Console.WriteLine("No active Steam session found");
       return false;
     }
+
+    await this.session!.WaitLoggingInTask();
 
     if (!this.session.IsLoggedOn)
     {
@@ -1024,11 +1023,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     session.OnAvatarUpdated = () => OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar"]));
 
     // Subscribe to client callbacks
-    session.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
-    session.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
-    session.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
-    session.Callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
-    // session.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
+    session.SubscribeCallback<SteamClient.ConnectedCallback>(OnConnected);
+    session.SubscribeCallback<SteamClient.DisconnectedCallback>(OnDisconnected);
+    session.SubscribeCallback<SteamUser.LoggedOnCallback>(OnLoggedOn);
+    session.SubscribeCallback<SteamUser.LoggedOffCallback>(OnLoggedOff);
 
     return session;
   }
@@ -1038,11 +1036,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     var isLoggedOn = this.session?.IsLoggedOn ?? false;
     var IsPendingLogin = this.session?.IsPendingLogin ?? false;
-    int status = isLoggedOn || IsPendingLogin ? 2 : 0;
+    int status = isLoggedOn || IsPendingLogin ? (int)PluginProviderStatus.Authorized : (int)PluginProviderStatus.Unauthorized;
     if (this.needsDeviceConfirmation || (this.tfaCodeTask != null))
-    {
-      status = 1;
-    }
+      status = (int)PluginProviderStatus.Requires2fa;
+    else if (this.session?.IsReconnecting ?? false)
+      status = (int)PluginProviderStatus.Reconnecting;
     return status;
   }
 
@@ -1078,7 +1076,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     // Initiate the connection
     Console.WriteLine("Initializing Steam Client connection");
-    //this.steamClient.Connect();
+    this.session?.Dispose();
     this.session = InitSession(login, steamGuardData);
     await this.session.Login();
   }
@@ -1090,6 +1088,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var login = new SteamUser.LogOnDetails();
     string? steamGuardData = null;
 
+    this.session?.Dispose();
     this.session = InitSession(login, steamGuardData);
     this.session.OnNewQrCode = OnQrCodeUpdated;
     Console.WriteLine("Connecting to Steam...");
@@ -1165,7 +1164,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       return false;
     }
     needsDeviceConfirmation = false;
-    this.session?.Disconnect();
+    this.session?.Dispose();
     this.session = InitSession(login, steamGuardData);
 
     if (isOnline)
@@ -1188,7 +1187,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
 
     Console.WriteLine("Session has expired, disconnecting");
-    this.session?.Disconnect();
+    this.session?.Dispose();
     this.session = null;
     OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
 
