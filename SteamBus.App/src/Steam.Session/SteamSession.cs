@@ -22,7 +22,7 @@ using SteamBus.DBus;
 
 namespace Steam.Session;
 
-public class SteamSession
+public class SteamSession : IDisposable
 {
   public const uint INVALID_APP_ID = uint.MaxValue;
   public bool IsLoggedOn { get; private set; }
@@ -53,12 +53,14 @@ public class SteamSession
   readonly SteamKit2.SteamCloud? steamCloudKit;
   //readonly PublishedFile steamPublishedFile;
 
-  public CallbackManager Callbacks;
+  private CallbackManager Callbacks;
 
   // Keeps tracking whether we are waiting to reconnect, and if not, the reconnection won't happen after the delay
   bool waitingToRetry;
 
   TaskCompletionSource? loggingInTask;
+
+  public bool IsReconnecting => !bAborted && !IsLoggedOn && loggingInTask != null;
 
   bool bConnecting;
   bool bAborted;
@@ -68,6 +70,7 @@ public class SteamSession
   int connectionBackoff;
   int seq; // more hack fixes
   bool isLoadingLibrary = true;
+  bool loggingInWithQrCode = false;
   AuthSession? authSession;
   QrAuthSession? qrAuthSession;
   public Action<string>? OnNewQrCode;
@@ -100,6 +103,9 @@ public class SteamSession
   public bool playingBlocked { get; private set; }
 
   public bool isOnline;
+
+  private Task? loginTask;
+  private List<IDisposable> subscriptions = [];
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
   {
@@ -148,13 +154,24 @@ public class SteamSession
 
     this.Callbacks = new CallbackManager(this.SteamClient);
 
-    this.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected);
-    this.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
-    this.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLogIn);
-    this.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList);
-    this.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo);
-    this.Callbacks.Subscribe<SteamUser.PlayingSessionStateCallback>(OnPlayingSessionStateCallback);
-    this.Callbacks.Subscribe<SteamFriends.PersonaStateCallback>(OnPersonaState);
+    subscriptions.AddRange([
+      this.Callbacks.Subscribe<SteamClient.ConnectedCallback>(OnConnected),
+      this.Callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected),
+      this.Callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLogIn),
+      this.Callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff),
+    this.Callbacks.Subscribe<SteamApps.LicenseListCallback>(OnLicenseList),
+      this.Callbacks.Subscribe<SteamUser.AccountInfoCallback>(OnAccountInfo),
+      this.Callbacks.Subscribe<SteamUser.PlayingSessionStateCallback>(OnPlayingSessionStateCallback),
+      this.Callbacks.Subscribe<SteamFriends.PersonaStateCallback>(OnPersonaState),
+    ]);
+  }
+
+  public void Dispose()
+  {
+    Abort(false);
+
+    foreach (var sub in subscriptions)
+      sub.Dispose();
   }
 
 
@@ -190,6 +207,11 @@ public class SteamSession
     }
 
     return bAborted;
+  }
+
+  public void SubscribeCallback<T>(Action<T> callback) where T : CallbackMsg
+  {
+    subscriptions.Add(Callbacks.Subscribe(callback));
   }
 
   public async Task<bool> WaitForReconnect()
@@ -460,6 +482,8 @@ public class SteamSession
   {
     Console.WriteLine("Connecting to Steam...");
     this.Connect();
+    OnAuthUpdated?.Invoke();
+
     if (!await this.WaitForCredentials())
     {
       Console.WriteLine("Unable to get Steam credentials");
@@ -467,7 +491,9 @@ public class SteamSession
     }
 
     Console.WriteLine("Got credentials...");
-    _ = Task.Run(this.TickCallbacks);
+
+    if (loginTask == null)
+      loginTask = Task.Run(this.TickCallbacks);
   }
 
 
@@ -570,6 +596,7 @@ public class SteamSession
   {
     Console.WriteLine("OnConnected: Done!");
     bConnecting = false;
+    bDidDisconnect = false;
 
     if (!AuthenticatedUser())
     {
@@ -677,6 +704,7 @@ public class SteamSession
         Console.WriteLine($"Got QR result, AccountName:{result.AccountName}");
         logonDetails.Username = result.AccountName;
         logonDetails.AccessToken = result.RefreshToken;
+        loggingInWithQrCode = true;
         if (result.NewGuardData != null)
         {
           this.SteamGuardData = result.NewGuardData;
@@ -782,10 +810,12 @@ public class SteamSession
 
     if (IsPendingLogin)
     {
+      loggingInTask ??= new TaskCompletionSource();
+      OnAuthUpdated?.Invoke();
+
       if (bIsConnectionRecovery)
       {
         // If expecting to reconnect, just connect to steam client
-        loggingInTask ??= new TaskCompletionSource();
         ResetConnectionFlags();
         SteamClient.Connect();
         return;
@@ -808,6 +838,7 @@ public class SteamSession
   private void OnDisconnected(SteamClient.DisconnectedCallback disconnected)
   {
     bDidDisconnect = true;
+    IsLoggedOn = false;
 
     Console.WriteLine($"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
 
@@ -841,11 +872,17 @@ public class SteamSession
         }
 
         loggingInTask ??= new TaskCompletionSource();
-        Thread.Sleep(3000);
+        OnAuthUpdated?.Invoke();
 
-        // Any connection related flags need to be reset here to match the state after Connect
-        ResetConnectionFlags();
-        SteamClient.Connect();
+        _ = Task.Run(async () =>
+        {
+          await Task.Delay(3000);
+          if (bAborted) return;
+
+          // Any connection related flags need to be reset here to match the state after Connect
+          ResetConnectionFlags();
+          SteamClient.Connect();
+        });
       }
       else
       {
@@ -855,16 +892,16 @@ public class SteamSession
     }
 
     if (bAborted)
-    {
-      IsLoggedOn = false;
       FinishLoggingInTask();
-    }
   }
 
 
   // Invoked when the Steam client tries to log in
   private void OnLogIn(SteamUser.LoggedOnCallback loggedOn)
   {
+    var loggingInWithQrCode = this.loggingInWithQrCode;
+    this.loggingInWithQrCode = false;
+
     var isSteamGuard = loggedOn.Result == EResult.AccountLogonDenied;
     var is2FA = loggedOn.Result == EResult.AccountLoginDeniedNeedTwoFactor;
     var isAccessToken = this.RememberPassword && logonDetails.AccessToken != null &&
@@ -914,13 +951,23 @@ public class SteamSession
 
         waitingToRetry = true;
         if (loggedOn.Result == EResult.AlreadyLoggedInElsewhere) await Task.Delay(10000);
-        if (!waitingToRetry) return;
+        if (!waitingToRetry || bAborted) return;
 
         Console.WriteLine($"Retrying Steam3 connection ({loggedOn.Result})...");
 
         Reconnect();
       });
 
+      return;
+    }
+
+    if (loggedOn.Result == EResult.RateLimitExceeded)
+      OnAuthError?.Invoke(DbusErrors.RateLimitExceeded);
+
+    if (loggingInWithQrCode && loggedOn.Result != EResult.OK)
+    {
+      Console.WriteLine($"Reconnecting to steam client because of qr code login error: {loggedOn.Result}");
+      Reconnect();
       return;
     }
 
@@ -951,6 +998,12 @@ public class SteamSession
     IsLoggedOn = true;
     IsPendingLogin = false;
     FinishLoggingInTask();
+  }
+
+  private void OnLoggedOff(SteamUser.LoggedOffCallback loggedOff)
+  {
+    Console.WriteLine($"Steam log off received: {loggedOff.Result}");
+    if (loggedOff.Result == EResult.Revoked) Abort(true);
   }
 
   public void SaveToken()
