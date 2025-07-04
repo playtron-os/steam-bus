@@ -483,6 +483,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
     var name = CommonSection?["name"].Value?.ToString();
     var app_type = CommonSection?["type"].Value?.ToString() ?? "";
+    app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
     var parent_store_id = CommonSection?["parent"].Value?.ToString() ?? "";
 
     if (name == null)
@@ -491,13 +492,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     if (
       !string.Equals(app_type, "game", StringComparison.OrdinalIgnoreCase)
-      || !string.Equals(app_type, "demo", StringComparison.OrdinalIgnoreCase)
-      || !string.Equals(app_type, "beta", StringComparison.OrdinalIgnoreCase))
+      && !string.Equals(app_type, "demo", StringComparison.OrdinalIgnoreCase)
+      && !string.Equals(app_type, "beta", StringComparison.OrdinalIgnoreCase))
     {
-      return "";
+      throw DbusExceptionHelper.ThrowInvalidAppId();
     }
-
-    // TODO: Check for expired betas and demos
 
     var options = new JsonSerializerOptions
     {
@@ -518,7 +517,15 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var landscapeImage = new PlaytronImage
     {
       url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
-      image_type = "landscape",
+      image_type = "capsule",
+      source = "steam",
+      alt = "",
+    };
+
+    var portraitImage = new PlaytronImage
+    {
+      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/library_600x900_2x.jpg",
+      image_type = "library",
       source = "steam",
       alt = "",
     };
@@ -534,7 +541,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Tags = [],
       Description = "",
       Summary = "",
-      Images = [landscapeImage],
+      Images = [landscapeImage, portraitImage],
       app_type = app_type
     };
 
