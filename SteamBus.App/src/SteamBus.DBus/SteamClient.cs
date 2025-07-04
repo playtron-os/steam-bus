@@ -475,42 +475,78 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Task.FromResult(0);
   }
 
-  async Task<ItemMetadata> IPluginLibraryProvider.GetAppMetadataAsync(string appIdString)
+  async Task<String> IPluginLibraryProvider.GetItemMetadataAsync(string appIdString)
   {
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
-    await session!.RequestAppInfo(appId, true);
+    var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
+    var name = CommonSection?["name"].Value?.ToString();
+    var app_type = CommonSection?["type"].Value?.ToString() ?? "";
+    app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
+    var parent_store_id = CommonSection?["parent"].Value?.ToString() ?? "";
 
-    var info = depotConfigStore.GetInstalledAppInfo(appId);
-    var name = session!.GetSteam3AppName(appId);
-    var requiresInternetConnection = session!.GetSteam3AppRequiresInternetConnection(appId);
-
-    if (info == null)
+    if (name == null)
     {
-      return new ItemMetadata
-      {
-        Name = name,
-        InstallSize = 0,
-        RequiresInternetConnection = requiresInternetConnection,
-        CloudSaveFolders = [],
-        InstalledVersion = "",
-        LatestVersion = "",
-      };
+      return "";
+    }
+    if (
+      !string.Equals(app_type, "game", StringComparison.OrdinalIgnoreCase)
+      && !string.Equals(app_type, "demo", StringComparison.OrdinalIgnoreCase)
+      && !string.Equals(app_type, "beta", StringComparison.OrdinalIgnoreCase))
+    {
+      throw DbusExceptionHelper.ThrowInvalidAppId();
     }
 
-    var latestVersion = session!.GetSteam3AppBuildNumber(appId, info!.Value.Branch);
-
-    return new ItemMetadata
+    var options = new JsonSerializerOptions
     {
-      Name = name,
-      InstallSize = info.Value.Info.DownloadedBytes,
-      RequiresInternetConnection = requiresInternetConnection,
-      // TODO: Implement cloud save folders?
-      CloudSaveFolders = [],
-      InstalledVersion = info.Value.Info.Version,
-      LatestVersion = latestVersion.ToString(),
+      PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower
     };
+
+    var provider = new PlaytronProvider
+    {
+      provider = "steam",
+      provider_app_id = appId.ToString(),
+      parent_store_id = parent_store_id,
+      store_id = appId.ToString(),
+      product_store_link = $"https://store.steampowered.com/app/{appId}",
+      known_dlc_store_ids = [],
+      Namespace = "",
+    };
+
+    var landscapeImage = new PlaytronImage
+    {
+      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
+      image_type = "capsule",
+      source = "steam",
+      alt = "",
+    };
+
+    var portraitImage = new PlaytronImage
+    {
+      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/library_600x900_2x.jpg",
+      image_type = "library",
+      source = "steam",
+      alt = "",
+    };
+
+    var metadata = new ItemMetadata
+    {
+      Id = appId.ToString(),
+      Name = name,
+      Slug = appId.ToString(),
+      Providers = [provider],
+      Developers = [],
+      Publishers = [],
+      Tags = [],
+      Description = "",
+      Summary = "",
+      Images = [landscapeImage, portraitImage],
+      app_type = app_type
+    };
+
+
+    return JsonSerializer.Serialize(metadata, options);
   }
 
   async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString, InstallOptions extraOptions)
