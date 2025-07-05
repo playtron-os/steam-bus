@@ -466,7 +466,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     await this.session!.WaitForLibrary();
-    return this.session.GetProviderItems().ToArray();
+    return [.. this.session.GetProviderItems()];
   }
 
   Task IPluginLibraryProvider.RefreshAsync()
@@ -475,7 +475,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     return Task.FromResult(0);
   }
 
-  async Task<String> IPluginLibraryProvider.GetItemMetadataAsync(string appIdString)
+  async Task<string> IPluginLibraryProvider.GetItemMetadataAsync(string appIdString)
   {
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
@@ -514,21 +514,70 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Namespace = "",
     };
 
-    var landscapeImage = new PlaytronImage
-    {
-      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
-      image_type = "capsule",
-      source = "steam",
-      alt = "",
-    };
+    List<PlaytronImage> images = [];
 
-    var portraitImage = new PlaytronImage
+    var heroImage = CommonSection?["library_assets_full"]["library_hero"]["image2x"]?["english"]?.Value?.ToString()
+      ?? CommonSection?["library_assets_full"]["library_hero"]["image"]?["english"]?.Value?.ToString();
+    if (heroImage != null)
     {
-      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/library_600x900_2x.jpg",
-      image_type = "library",
-      source = "steam",
-      alt = "",
-    };
+      images.Add(new PlaytronImage
+      {
+        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{heroImage}",
+        image_type = "hero",
+        source = "steam",
+        alt = "",
+      });
+    }
+
+    string logoPositionStr = "";
+    var pinnedPosition = CommonSection?["library_assets"]["logo_position"]?["pinned_position"]?.Value?.ToString();
+    if (pinnedPosition != null)
+    {
+      float.TryParse(
+        CommonSection?["library_assets"]?["logo_position"]?["width_pct"]?.Value?.ToString(),
+        out float widthPct
+      );
+
+      float.TryParse(
+          CommonSection?["library_assets"]?["logo_position"]?["height_pct"]?.Value?.ToString(),
+          out float heightPct
+      );
+      var position = new LogoPosition
+      {
+        pinned_position = pinnedPosition,
+        width_pct = widthPct,
+        height_pct = heightPct
+      };
+      logoPositionStr = JsonSerializer.Serialize(position);
+    }
+
+    var logoImage = CommonSection?["library_assets_full"]["library_logo"]["image2x"]?["english"]?.Value?.ToString()
+     ?? CommonSection?["library_assets_full"]["library_logo"]["image"]?["english"]?.Value?.ToString();
+    if (logoImage != null)
+    {
+      images.Add(new PlaytronImage
+      {
+        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{logoImage}",
+        image_type = "logo",
+        source = "steam",
+        alt = logoPositionStr,
+      });
+    }
+
+    var library_image = CommonSection?["library_assets_full"]["library_capsule"]["image2x"]?["english"]?.Value?.ToString()
+      ?? CommonSection?["library_assets_full"]["library_capsule"]["image"]?["english"]?.Value?.ToString();
+    if (library_image != null)
+    {
+      var portraitImage = new PlaytronImage
+      {
+        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{library_image}",
+        image_type = "library",
+        source = "steam",
+        alt = "",
+      };
+      images.Add(portraitImage);
+    }
+
 
     var metadata = new ItemMetadata
     {
@@ -541,7 +590,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       Tags = [],
       Description = "",
       Summary = "",
-      Images = [landscapeImage, portraitImage],
+      Images = [.. images],
       app_type = app_type
     };
 
@@ -596,7 +645,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         ],
         WorkingDirectory = entry["workingdir"]?.Value ?? "",
         LaunchType = (uint)LaunchType.Unknown,
-        HardwareTags = HardwareTags.ToArray()
+        HardwareTags = [.. HardwareTags]
       };
       // Perform normalization
       option.Executable = option.Executable.Replace('\\', System.IO.Path.DirectorySeparatorChar);
@@ -621,7 +670,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var downloader = new ContentDownloader(session!, depotConfigStore);
     var options = await downloader.GetInstallOptions(appId);
 
-    InstallOptionDescription[] res = options.Select((option) => option.AsTuple()).ToArray();
+    InstallOptionDescription[] res = [.. options.Select((option) => option.AsTuple())];
 
     return res;
   }
@@ -837,7 +886,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       });
     }
 
-    return result.ToArray();
+    return [.. result];
   }
 
   async Task IPluginLibraryProvider.PauseInstallAsync()
@@ -1325,7 +1374,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     catch (Exception)
     {
       Console.WriteLine("No auth sessions exist. Creating new session.");
-      authSessions = new Dictionary<string, SteamAuthSession>();
+      authSessions = [];
     }
 
     // Create a new auth session for this login
@@ -1752,9 +1801,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
           throw new Exception($"Unknown root name {root}");
       }
       var newPath = System.IO.Path.Join(mappedroot, path);
-      results.Add(new CloudPathObject { alias = alias, path = newPath, recursive = recursive, pattern = pattern, platforms = platforms.ToArray() });
+      results.Add(new CloudPathObject { alias = alias, path = newPath, recursive = recursive, pattern = pattern, platforms = [.. platforms] });
     }
-    return results.ToArray();
+    return [.. results];
   }
 
   Task<IDisposable> ICloudSaveProvider.WatchCloudSaveSyncProgressedAsync(Action<CloudSyncProgress> reply)
@@ -1929,7 +1978,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       });
     }
     // Set this to unknown for now, this shouldnt break anything afaik
-    remoteCacheFile.UpdateLocalCache(changelist.current_change_number, "-1", cachedFiles.Values.ToArray());
+    remoteCacheFile.UpdateLocalCache(changelist.current_change_number, "-1", [.. cachedFiles.Values]);
     remoteCacheFile.Save();
 
     KeyValue autocloud = new("steam_autocloud.vdf");
@@ -2031,7 +2080,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       filesToDelete.Add(file.GetRemotePath());
     }
 
-    var uploadData = await this.session.steamCloud.BeginAppUploadBatch(appidParsed, filesToUpload.ToArray(), filesToDelete.ToArray());
+    var uploadData = await this.session.steamCloud.BeginAppUploadBatch(appidParsed, [.. filesToUpload], [.. filesToDelete]);
     if (uploadData == null)
     {
       Console.WriteLine("Failed to initialize upload with steam services");
@@ -2131,7 +2180,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
     await this.session.steamCloud.CompleteAppUploadBatch(appidParsed, uploadData.batch_id, (uint)eResult);
 
-    remoteCacheFile.UpdateLocalCache(uploadData.app_change_number, "-1", cachedFiles.Values.ToArray());
+    remoteCacheFile.UpdateLocalCache(uploadData.app_change_number, "-1", [.. cachedFiles.Values]);
     remoteCacheFile.Save();
     KeyValue autocloud = new("steam_autocloud.vdf");
     autocloud.Children.Add(new KeyValue("accountid", this.session.SteamUser.SteamID.AccountID.ToString()));
