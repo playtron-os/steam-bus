@@ -187,6 +187,14 @@ public struct PlaytronImage
   public string source { get; set; }
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct LogoPosition
+{
+  public string pinned_position { get; set; }
+  public float width_pct { get; set; }
+  public float height_pct { get; set; }
+}
+
 
 [StructLayout(LayoutKind.Sequential)]
 public struct ItemMetadata
