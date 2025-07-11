@@ -568,16 +568,48 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       ?? CommonSection?["library_assets_full"]["library_capsule"]["image"]?["english"]?.Value?.ToString();
     if (library_image != null)
     {
-      var portraitImage = new PlaytronImage
+      images.Add(new PlaytronImage
       {
         url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{library_image}",
         image_type = "library",
         source = "steam",
         alt = "",
-      };
-      images.Add(portraitImage);
+      });
     }
 
+    var header_image = CommonSection?["header_image"]?["english"]?.Value?.ToString();
+    if (header_image != null)
+    {
+
+      images.Add(new PlaytronImage
+      {
+        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{header_image}",
+        image_type = "header",
+        source = "steam",
+        alt = "",
+      });
+    }
+    else
+    {
+      var logo_image = CommonSection?["logo"]?.Value?.ToString();
+      if (logo_image != null)
+      {
+        images.Add(new PlaytronImage
+        {
+          url = $"https://cdn.fastly.steamstatic.com/steamcommunity/public/images/apps/{appId}/{logo_image}.jpg",
+          image_type = "header",
+          source = "steam",
+          alt = "",
+        });
+      }
+    }
+    images.Add(new PlaytronImage
+    {
+      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
+      image_type = "capsule",
+      source = "steam",
+      alt = "",
+    });
 
     var metadata = new ItemMetadata
     {
