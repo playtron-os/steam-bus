@@ -577,19 +577,26 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       });
     }
 
-    var capsule_image = CommonSection?["header_image"]?["english"]?.Value?.ToString()
-      ?? CommonSection?["logo"]?.Value?.ToString();
-    if (capsule_image != null)
+    var header_image = CommonSection?["header_image"]?["english"]?.Value?.ToString()
+      ?? CommonSection?["logo"]?.Value?.ToString() + ".jpg";
+    if (header_image != null)
     {
 
       images.Add(new PlaytronImage
       {
-        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{capsule_image}",
-        image_type = "capsule",
+        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{header_image}",
+        image_type = "header",
         source = "steam",
         alt = "",
       });
     }
+    images.Add(new PlaytronImage
+    {
+      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
+      image_type = "capsule",
+      source = "steam",
+      alt = "",
+    });
 
     var metadata = new ItemMetadata
     {
