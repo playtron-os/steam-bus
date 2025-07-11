@@ -577,8 +577,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       });
     }
 
-    var header_image = CommonSection?["header_image"]?["english"]?.Value?.ToString()
-      ?? CommonSection?["logo"]?.Value?.ToString() + ".jpg";
+    var header_image = CommonSection?["header_image"]?["english"]?.Value?.ToString();
     if (header_image != null)
     {
 
@@ -589,6 +588,20 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         source = "steam",
         alt = "",
       });
+    }
+    else
+    {
+      var logo_image = CommonSection?["logo"]?.Value?.ToString();
+      if (logo_image != null)
+      {
+        images.Add(new PlaytronImage
+        {
+          url = $"https://cdn.fastly.steamstatic.com/steamcommunity/public/images/apps/{appId}/{logo_image}.jpg",
+          image_type = "header",
+          source = "steam",
+          alt = "",
+        });
+      }
     }
     images.Add(new PlaytronImage
     {
