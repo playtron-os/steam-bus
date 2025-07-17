@@ -1104,8 +1104,13 @@ public class SteamSession : IDisposable
             foreach (var entry in productInfo.Apps)
             {
               AppInfo[entry.Key] = entry.Value.KeyValues;
-              ProviderItemMap[entry.Key] = GetProviderItem(entry.Key.ToString(), entry.Value.KeyValues);
               appInfoCache.Save(entry.Key, entry.Value.KeyValues);
+
+              // Validate if we can install the game
+              var validOsList = entry.Value.KeyValues["extended"]?["validoslist"]?.AsString() ?? entry.Value.KeyValues["common"]?["oslist"]?.AsString();
+              if (!string.IsNullOrEmpty(validOsList) && !validOsList.Split(',').Any(os => os == "windows" || os == ContentDownloader.GetSteamOS())) continue;
+
+              ProviderItemMap[entry.Key] = GetProviderItem(entry.Key.ToString(), entry.Value.KeyValues);
 
               if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
               {
