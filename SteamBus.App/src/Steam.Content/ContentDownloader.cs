@@ -1838,6 +1838,9 @@ public class ContentDownloader
 
       if (neededChunks.Count == 0)
       {
+        // Set all files as executable
+        SetExecutable(fileFinalPath, true);
+
         // Check if install script
         if (InstallScript.IsInstallScript(fileFinalPath))
         {
@@ -1875,16 +1878,6 @@ public class ContentDownloader
         downloadCounter.previousDownloadSize += sizeOnDisk;
         downloadCounter.sizeAllocated += file.TotalSize;
       }
-    }
-
-    var fileIsExecutable = file.Flags.HasFlag(EDepotFileFlag.Executable);
-    if (fileIsExecutable && (!fileDidExist || oldManifestFile == null || !oldManifestFile.Flags.HasFlag(EDepotFileFlag.Executable)))
-    {
-      SetExecutable(fileFinalPath, true);
-    }
-    else if (!fileIsExecutable && oldManifestFile != null && oldManifestFile.Flags.HasFlag(EDepotFileFlag.Executable))
-    {
-      SetExecutable(fileFinalPath, false);
     }
 
     var fileStreamData = new FileStreamData
@@ -2062,6 +2055,9 @@ public class ContentDownloader
     {
       fileStreamData.fileStream?.Dispose();
       fileStreamData.fileLock.Dispose();
+
+      // Set all downloaded files as executable
+      SetExecutable(fileFinalPath, true);
 
       if (InstallScript.IsInstallScript(fileFinalPath))
       {
