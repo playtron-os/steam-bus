@@ -479,17 +479,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
-
     var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
-    var name = CommonSection?["name"].Value?.ToString();
+    var name = (CommonSection?["name"].Value?.ToString()) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
     var app_type = CommonSection?["type"].Value?.ToString() ?? "";
     app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
     var parent_store_id = CommonSection?["parent"].Value?.ToString() ?? "";
 
-    if (name == null)
-    {
-      return "";
-    }
     if (
       !string.Equals(app_type, "game", StringComparison.OrdinalIgnoreCase)
       && !string.Equals(app_type, "demo", StringComparison.OrdinalIgnoreCase)
