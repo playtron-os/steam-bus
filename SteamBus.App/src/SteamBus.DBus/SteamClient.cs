@@ -482,7 +482,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
     var name = (CommonSection?["name"].Value?.ToString()) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
     var app_type = CommonSection?["type"].Value?.ToString() ?? "";
-    app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
+    if (app_type.Length > 1)
+      app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
     var parent_store_id = CommonSection?["parent"].Value?.ToString() ?? "";
 
     if (
@@ -511,8 +512,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     List<PlaytronImage> images = [];
 
-    var heroImage = CommonSection?["library_assets_full"]["library_hero"]["image2x"]?["english"]?.Value?.ToString()
-      ?? CommonSection?["library_assets_full"]["library_hero"]["image"]?["english"]?.Value?.ToString();
+    var heroImage = CommonSection?["library_assets_full"]?["library_hero"]?["image2x"]?["english"]?.Value?.ToString()
+      ?? CommonSection?["library_assets_full"]?["library_hero"]?["image"]?["english"]?.Value?.ToString();
     if (heroImage != null)
     {
       images.Add(new PlaytronImage
@@ -525,7 +526,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
 
     string logoPositionStr = "";
-    var pinnedPosition = CommonSection?["library_assets"]["logo_position"]?["pinned_position"]?.Value?.ToString();
+    var pinnedPosition = CommonSection?["library_assets"]?["logo_position"]?["pinned_position"]?.Value?.ToString();
     if (pinnedPosition != null)
     {
       float.TryParse(
@@ -546,8 +547,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       logoPositionStr = JsonSerializer.Serialize(position);
     }
 
-    var logoImage = CommonSection?["library_assets_full"]["library_logo"]["image2x"]?["english"]?.Value?.ToString()
-     ?? CommonSection?["library_assets_full"]["library_logo"]["image"]?["english"]?.Value?.ToString();
+    var logoImage = CommonSection?["library_assets_full"]?["library_logo"]?["image2x"]?["english"]?.Value?.ToString()
+     ?? CommonSection?["library_assets_full"]?["library_logo"]?["image"]?["english"]?.Value?.ToString();
     if (logoImage != null)
     {
       images.Add(new PlaytronImage
@@ -559,8 +560,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       });
     }
 
-    var library_image = CommonSection?["library_assets_full"]["library_capsule"]["image2x"]?["english"]?.Value?.ToString()
-      ?? CommonSection?["library_assets_full"]["library_capsule"]["image"]?["english"]?.Value?.ToString();
+    var library_image = CommonSection?["library_assets_full"]?["library_capsule"]?["image2x"]?["english"]?.Value?.ToString()
+      ?? CommonSection?["library_assets_full"]?["library_capsule"]?["image"]?["english"]?.Value?.ToString();
     if (library_image != null)
     {
       images.Add(new PlaytronImage
