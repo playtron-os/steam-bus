@@ -13,7 +13,7 @@ static partial class Disk
 
     public static bool IsMountPointMainDisk(string mountPoint)
     {
-        return mountPoint == "/" || mountPoint.StartsWith("/home") || mountPoint.StartsWith("/var/home");
+        return mountPoint == "/" || mountPoint == "/sysroot" || mountPoint.StartsWith("/home") || mountPoint.StartsWith("/var/home");
     }
 
     public static async Task<string> GetMountPath(string? driveName = null)
