@@ -5,6 +5,7 @@ name: "🎉 Release"
 permissions: write-all
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
