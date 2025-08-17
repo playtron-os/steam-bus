@@ -5,7 +5,7 @@ Summary: SteamBus app used to interface with Steam Services
 License: GPLv2
 URL: https://github.com/playtron-os/steam-bus
 
-Requires: dotnet-sdk-8.0
+Requires: dotnet-runtime-8.0
 
 %description
 SteamBus app. Provides integration and functionality interfacing with Steam Services.
