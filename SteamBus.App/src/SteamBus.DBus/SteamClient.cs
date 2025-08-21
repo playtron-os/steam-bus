@@ -11,6 +11,7 @@ using System.Text;
 using Xdg.Directories;
 using Steam.Config;
 using Steam.Cloud;
+using System.Web;
 
 namespace SteamBus.DBus;
 
@@ -901,6 +902,13 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (id == null || url == null)
         continue;
 
+      var uri = new Uri(url);
+      var query = HttpUtility.ParseQueryString(uri.Query);
+      query["eulaLang"] = Locale.LocaleToSteamCode(locale);
+      var ub = new UriBuilder(uri);
+      ub.Query = query.ToString();
+      url = ub.Uri.ToString();
+
       result.Add(new EulaEntry
       {
         Id = id,
@@ -909,7 +917,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         Url = url,
         Body = "",
         Country = allowedCountries?.AsString() ?? "",
-        Language = "",
+        Language = locale,
       });
     }
 
