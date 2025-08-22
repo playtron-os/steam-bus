@@ -478,152 +478,164 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   async Task<string> IPluginLibraryProvider.GetItemMetadataAsync(string appIdString)
   {
-    if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
-    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
-    var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
-    var name = (CommonSection?["name"].Value?.ToString()) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
-    var app_type = CommonSection?["type"].Value?.ToString() ?? "";
-    app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
-    var parent_store_id = CommonSection?["parent"].Value?.ToString() ?? "";
-
-    if (
-      !string.Equals(app_type, "game", StringComparison.OrdinalIgnoreCase)
-      && !string.Equals(app_type, "demo", StringComparison.OrdinalIgnoreCase)
-      && !string.Equals(app_type, "beta", StringComparison.OrdinalIgnoreCase))
+    try
     {
-      throw DbusExceptionHelper.ThrowInvalidAppId();
-    }
 
-    var options = new JsonSerializerOptions
-    {
-      PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower
-    };
 
-    var provider = new PlaytronProvider
-    {
-      provider = "steam",
-      provider_app_id = appId.ToString(),
-      parent_store_id = parent_store_id,
-      store_id = appId.ToString(),
-      product_store_link = $"https://store.steampowered.com/app/{appId}",
-      known_dlc_store_ids = [],
-      Namespace = "",
-    };
+      if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
+      if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
+      var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
+      var name = (CommonSection?["name"].Value?.ToString()) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
+      var app_type = CommonSection?["type"].Value?.ToString() ?? "";
+      if (app_type.Length > 1)
+        app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
+      var parent_store_id = CommonSection?["parent"].Value?.ToString() ?? "";
 
-    List<PlaytronImage> images = [];
-
-    var heroImage = CommonSection?["library_assets_full"]["library_hero"]["image2x"]?["english"]?.Value?.ToString()
-      ?? CommonSection?["library_assets_full"]["library_hero"]["image"]?["english"]?.Value?.ToString();
-    if (heroImage != null)
-    {
-      images.Add(new PlaytronImage
+      if (
+        !string.Equals(app_type, "game", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(app_type, "demo", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(app_type, "beta", StringComparison.OrdinalIgnoreCase))
       {
-        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{heroImage}",
-        image_type = "hero",
-        source = "steam",
-        alt = "",
-      });
-    }
+        throw DbusExceptionHelper.ThrowInvalidAppId();
+      }
 
-    string logoPositionStr = "";
-    var pinnedPosition = CommonSection?["library_assets"]["logo_position"]?["pinned_position"]?.Value?.ToString();
-    if (pinnedPosition != null)
-    {
-      float.TryParse(
-        CommonSection?["library_assets"]?["logo_position"]?["width_pct"]?.Value?.ToString(),
-        out float widthPct
-      );
-
-      float.TryParse(
-          CommonSection?["library_assets"]?["logo_position"]?["height_pct"]?.Value?.ToString(),
-          out float heightPct
-      );
-      var position = new LogoPosition
+      var options = new JsonSerializerOptions
       {
-        pinned_position = pinnedPosition,
-        width_pct = widthPct,
-        height_pct = heightPct
+        PropertyNamingPolicy = JsonNamingPolicy.KebabCaseLower
       };
-      logoPositionStr = JsonSerializer.Serialize(position);
-    }
 
-    var logoImage = CommonSection?["library_assets_full"]["library_logo"]["image2x"]?["english"]?.Value?.ToString()
-     ?? CommonSection?["library_assets_full"]["library_logo"]["image"]?["english"]?.Value?.ToString();
-    if (logoImage != null)
-    {
-      images.Add(new PlaytronImage
+      var provider = new PlaytronProvider
       {
-        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{logoImage}",
-        image_type = "logo",
-        source = "steam",
-        alt = logoPositionStr,
-      });
-    }
+        provider = "steam",
+        provider_app_id = appId.ToString(),
+        parent_store_id = parent_store_id,
+        store_id = appId.ToString(),
+        product_store_link = $"https://store.steampowered.com/app/{appId}",
+        known_dlc_store_ids = [],
+        Namespace = "",
+      };
 
-    var library_image = CommonSection?["library_assets_full"]["library_capsule"]["image2x"]?["english"]?.Value?.ToString()
-      ?? CommonSection?["library_assets_full"]["library_capsule"]["image"]?["english"]?.Value?.ToString();
-    if (library_image != null)
-    {
-      images.Add(new PlaytronImage
-      {
-        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{library_image}",
-        image_type = "library",
-        source = "steam",
-        alt = "",
-      });
-    }
+      List<PlaytronImage> images = [];
 
-    var header_image = CommonSection?["header_image"]?["english"]?.Value?.ToString();
-    if (header_image != null)
-    {
-
-      images.Add(new PlaytronImage
-      {
-        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{header_image}",
-        image_type = "header",
-        source = "steam",
-        alt = "",
-      });
-    }
-    else
-    {
-      var logo_image = CommonSection?["logo"]?.Value?.ToString();
-      if (logo_image != null)
+      var heroImage = CommonSection?["library_assets_full"]?["library_hero"]?["image2x"]?["english"]?.Value?.ToString()
+        ?? CommonSection?["library_assets_full"]?["library_hero"]?["image"]?["english"]?.Value?.ToString();
+      if (heroImage != null)
       {
         images.Add(new PlaytronImage
         {
-          url = $"https://cdn.fastly.steamstatic.com/steamcommunity/public/images/apps/{appId}/{logo_image}.jpg",
+          url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{heroImage}",
+          image_type = "hero",
+          source = "steam",
+          alt = "",
+        });
+      }
+
+      string logoPositionStr = "";
+      var pinnedPosition = CommonSection?["library_assets"]?["logo_position"]?["pinned_position"]?.Value?.ToString();
+      if (pinnedPosition != null)
+      {
+        float.TryParse(
+          CommonSection?["library_assets"]?["logo_position"]?["width_pct"]?.Value?.ToString(),
+          out float widthPct
+        );
+
+        float.TryParse(
+            CommonSection?["library_assets"]?["logo_position"]?["height_pct"]?.Value?.ToString(),
+            out float heightPct
+        );
+        var position = new LogoPosition
+        {
+          pinned_position = pinnedPosition,
+          width_pct = widthPct,
+          height_pct = heightPct
+        };
+        logoPositionStr = JsonSerializer.Serialize(position);
+      }
+
+      var logoImage = CommonSection?["library_assets_full"]?["library_logo"]?["image2x"]?["english"]?.Value?.ToString()
+       ?? CommonSection?["library_assets_full"]?["library_logo"]?["image"]?["english"]?.Value?.ToString();
+      if (logoImage != null)
+      {
+        images.Add(new PlaytronImage
+        {
+          url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{logoImage}",
+          image_type = "logo",
+          source = "steam",
+          alt = logoPositionStr,
+        });
+      }
+
+      var library_image = CommonSection?["library_assets_full"]?["library_capsule"]?["image2x"]?["english"]?.Value?.ToString()
+        ?? CommonSection?["library_assets_full"]?["library_capsule"]?["image"]?["english"]?.Value?.ToString();
+      if (library_image != null)
+      {
+        images.Add(new PlaytronImage
+        {
+          url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{library_image}",
+          image_type = "library",
+          source = "steam",
+          alt = "",
+        });
+      }
+
+      var header_image = CommonSection?["header_image"]?["english"]?.Value?.ToString();
+      if (header_image != null)
+      {
+
+        images.Add(new PlaytronImage
+        {
+          url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/{header_image}",
           image_type = "header",
           source = "steam",
           alt = "",
         });
       }
+      else
+      {
+        var logo_image = CommonSection?["logo"]?.Value?.ToString();
+        if (logo_image != null)
+        {
+          images.Add(new PlaytronImage
+          {
+            url = $"https://cdn.fastly.steamstatic.com/steamcommunity/public/images/apps/{appId}/{logo_image}.jpg",
+            image_type = "header",
+            source = "steam",
+            alt = "",
+          });
+        }
+      }
+      images.Add(new PlaytronImage
+      {
+        url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
+        image_type = "capsule",
+        source = "steam",
+        alt = "",
+      });
+
+      var metadata = new ItemMetadata
+      {
+        Id = appId.ToString(),
+        Name = name,
+        Slug = appId.ToString(),
+        Providers = [provider],
+        Developers = [],
+        Publishers = [],
+        Tags = [],
+        Description = "",
+        Summary = "",
+        Images = [.. images],
+        app_type = app_type
+      };
+
+
+      return JsonSerializer.Serialize(metadata, options);
     }
-    images.Add(new PlaytronImage
+    catch (Exception exception)
     {
-      url = $"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{appId}/capsule_616x353.jpg",
-      image_type = "capsule",
-      source = "steam",
-      alt = "",
-    });
-
-    var metadata = new ItemMetadata
-    {
-      Id = appId.ToString(),
-      Name = name,
-      Slug = appId.ToString(),
-      Providers = [provider],
-      Developers = [],
-      Publishers = [],
-      Tags = [],
-      Description = "",
-      Summary = "",
-      Images = [.. images],
-      app_type = app_type
-    };
-
-
-    return JsonSerializer.Serialize(metadata, options);
+      Console.WriteLine(exception.ToString());
+      Console.WriteLine(exception.StackTrace);
+      throw exception;
+    }
   }
 
   async Task<LaunchOption[]> IPluginLibraryProvider.GetLaunchOptionsAsync(string appIdString, InstallOptions extraOptions)
