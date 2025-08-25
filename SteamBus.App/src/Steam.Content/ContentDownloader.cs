@@ -267,7 +267,10 @@ public class ContentDownloader
         if (supported == null || supported.AsString() != "true")
           continue;
 
-        languageOptions.Add(language);
+        var localeCode = Locale.SteamCodeToLocale(language);
+        if (localeCode == null)
+          continue;
+        languageOptions.Add(localeCode);
       }
     }
 
