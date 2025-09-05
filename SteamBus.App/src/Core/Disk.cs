@@ -6,82 +6,71 @@ using SteamKit2;
 
 static partial class Disk
 {
-  [GeneratedRegex(@"^(\/dev\/[\w\d]+p?\d*) on (\/[^\(]+) type")]
-  private static partial Regex MountDriveRegex();
-
-  public static string _homeDrive = "";
-
   public static bool IsMountPointMainDisk(string mountPoint)
   {
     return mountPoint == "/" || mountPoint.StartsWith("/home") || mountPoint.StartsWith("/var/home");
   }
 
-  public static async Task<string> GetMountPath(string? driveName = null)
+  public static async Task<string> GetMountPath(string? deviceName = null)
   {
+    // If no drive is specified, use the home directory
+    if (deviceName == null)
+    {
+      return Environment.GetEnvironmentVariable("HOME") ?? "/var/home/playtron";
+    }
+
+    // Read the mount points directly from '/proc/mounts'
+    string text = string.Empty;
     try
     {
-      ProcessStartInfo psi = new ProcessStartInfo
+      using StreamReader reader = new("/proc/mounts");
+      text = await reader.ReadToEndAsync();
+    }
+    catch (IOException ex)
+    {
+      Console.WriteLine($"Error reading mount points: {ex.Message}");
+      return string.Empty;
+    }
+    string[] lines = text.Split('\n');
+
+    string bestMatch = string.Empty;
+    int bestScore = -1;
+
+    // Each line in the output is:
+    // <device> <mount point> <filesystem> <options>
+    foreach (string line in lines)
+    {
+      string[] parts = line.Split(" ");
+      if (parts.Length < 3)
       {
-        FileName = "/bin/bash",
-        Arguments = "-c \"mount\"",
-        RedirectStandardOutput = true,
-        UseShellExecute = false,
-        CreateNoWindow = true
-      };
-
-      using Process? process = Process.Start(psi);
-      if (process == null) return string.Empty;
-
-      using StreamReader reader = process.StandardOutput;
-      string output = await reader.ReadToEndAsync();
-      await process.WaitForExitAsync();
-
-      string[] lines = output.Split('\n');
-
-      string bestMatch = string.Empty;
-      int bestScore = -1;
-
-      foreach (string line in lines)
-      {
-        Match match = MountDriveRegex().Match(line);
-        if (!match.Success) continue;
-
-        string device = match.Groups[1].Value;
-        string mountPoint = match.Groups[2].Value.Trim(); // Remove trailing spaces
-
-        // Ignore paths starting with /etc
-        if (mountPoint.StartsWith("/etc")) continue;
-
-        if (driveName == null)
-        {
-          // If no specific drive is requested, return the most relevant home-related mount
-          if (IsMountPointMainDisk(mountPoint))
-          {
-            return mountPoint;
-          }
-        }
-        else if (device == driveName)
-        {
-          // Score the mount point based on priority
-          int score = GetMountPointScore(mountPoint);
-
-          // Pick the best match with the highest score
-          if (score > bestScore)
-          {
-            bestMatch = mountPoint;
-            bestScore = score;
-          }
-        }
+        continue;
       }
 
-      return bestMatch;
-    }
-    catch (Exception ex)
-    {
-      Console.WriteLine($"Error running mount: {ex.Message}");
+      string device = parts[0];
+      string mountPoint = parts[1];
+      string filesystem = parts[2];
+      string options = parts[3];
+
+      if (device != deviceName)
+      {
+        continue;
+      }
+
+      // Ignore paths starting with '/etc/'
+      if (mountPoint.StartsWith("/etc")) continue;
+
+      // Score the mount point based on priority
+      int score = GetMountPointScore(mountPoint);
+
+      // Pick the best match with the highest score
+      if (score > bestScore)
+      {
+        bestMatch = mountPoint;
+        bestScore = score;
+      }
     }
 
-    return string.Empty;
+    return bestMatch;
   }
 
   private static int GetMountPointScore(string mountPoint)
