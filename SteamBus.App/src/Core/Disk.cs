@@ -47,7 +47,7 @@ static partial class Disk
       }
 
       string device = parts[0];
-      string mountPoint = parts[1];
+      string mountPoint = parts[1].Replace("\\040", " ").Replace("\\011", "\t").Replace("\\012", "\n").Replace("\\134", "\\");
       string filesystem = parts[2];
       string options = parts[3];
 
