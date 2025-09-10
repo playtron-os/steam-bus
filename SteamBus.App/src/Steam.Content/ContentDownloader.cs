@@ -264,7 +264,7 @@ public class ContentDownloader
           continue;
 
         var supported = languageSection["supported"];
-        if (supported == null || supported.AsString() != "true")
+        if (supported == null || (supported.AsString() != "true" && supported.AsString() != "1"))
           continue;
 
         languageOptions.Add(language);
