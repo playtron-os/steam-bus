@@ -128,8 +128,7 @@ public class LibraryCache
             var appType = uint.TryParse(child[PROVIDER_ITEM_APP_TYPE].Value ?? "", out var at) ? at : (uint)AppType.Game;
             if (id == null) continue;
 
-            var releaseTimestamp = DateTimeOffset.TryParse(child[PROVIDER_ITEM_RELEASE_DATE].Value!, out var releaseDate) ? releaseDate.ToUnixTimeMilliseconds() : 0;
-            var releaseTimestampUlong = releaseTimestamp >= 0 ? (ulong)releaseTimestamp : 0;
+            var releaseTimestampUlong = ulong.TryParse(child[PROVIDER_ITEM_RELEASE_DATE].Value!, out var ts) ? ts : 0;
             var releaseState = Enum.TryParse<ReleaseState>(child[PROVIDER_ITEM_RELEASE_STATE]?.AsString(), out var state) ? state : ReleaseState.Released;
 
             result.Add(new ProviderItem
