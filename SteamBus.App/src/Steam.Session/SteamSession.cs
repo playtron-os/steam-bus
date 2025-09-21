@@ -1273,11 +1273,32 @@ public class SteamSession : IDisposable
       name = appKeyValues["common"]["name"]?.AsString() ?? "",
       provider = "Steam",
       app_type = (uint)app_type,
-      release_date = (appKeyValues["common"]["steam_release_date"]?.AsUnsignedLong() ?? 0) * 1000,
+      release_date = GetSafeReleaseDate(appKeyValues["common"]["steam_release_date"]?.AsUnsignedLong()),
       release_state = appKeyValues["common"]["releasestate"]?.AsEnum<ReleaseState>() ?? ReleaseState.Released,
     };
   }
 
+  /// <summary>
+  /// Safely converts a Steam release date in seconds to milliseconds, avoiding overflow.
+  /// </summary>
+  private static ulong GetSafeReleaseDate(ulong? seconds)
+  {
+    if (seconds == null)
+      return 0;
+    // Max value for ulong before multiplying by 1000 would overflow
+    const ulong maxSeconds = ulong.MaxValue / 1000;
+    if (seconds > maxSeconds)
+      return 0; // or ulong.MaxValue, or log a warning
+    try
+    {
+      return checked(seconds.Value * 1000);
+    }
+    catch (OverflowException)
+    {
+      // Optionally log the overflow
+      return 0;
+    }
+  }
   public uint GetSteam3AppBuildNumber(uint appId, string branch)
   {
     if (appId == INVALID_APP_ID)
