@@ -14,6 +14,8 @@ public class LibraryCache
 
     public const string PROVIDER_ITEM_NAME = "name";
     public const string PROVIDER_ITEM_APP_TYPE = "apptype";
+    public const string PROVIDER_ITEM_RELEASE_STATE = "release_state";
+    public const string PROVIDER_ITEM_RELEASE_DATE = "release_date";
 
     private KeyValue? data;
     public string path;
@@ -108,6 +110,8 @@ public class LibraryCache
             this.data[identifierStr][APPS][key] = new KeyValue(key);
             this.data[identifierStr][APPS][key][PROVIDER_ITEM_NAME] = new KeyValue(PROVIDER_ITEM_NAME, item.name);
             this.data[identifierStr][APPS][key][PROVIDER_ITEM_APP_TYPE] = new KeyValue(PROVIDER_ITEM_APP_TYPE, item.app_type.ToString());
+            this.data[identifierStr][APPS][key][PROVIDER_ITEM_RELEASE_STATE] = new KeyValue(PROVIDER_ITEM_RELEASE_STATE, item.release_state.ToString());
+            this.data[identifierStr][APPS][key][PROVIDER_ITEM_RELEASE_DATE] = new KeyValue(PROVIDER_ITEM_RELEASE_DATE, item.release_date.ToString());
         }
     }
 
@@ -119,13 +123,25 @@ public class LibraryCache
         if (children == null) return result;
 
         foreach (var child in children)
+        {
+            var id = child.Name;
+            var appType = uint.TryParse(child[PROVIDER_ITEM_APP_TYPE].Value ?? "", out var at) ? at : (uint)AppType.Game;
+            if (id == null) continue;
+
+            var releaseTimestamp = DateTimeOffset.TryParse(child[PROVIDER_ITEM_RELEASE_DATE].Value!, out var releaseDate) ? releaseDate.ToUnixTimeMilliseconds() : 0;
+            var releaseTimestampUlong = releaseTimestamp >= 0 ? (ulong)releaseTimestamp : 0;
+            var releaseState = Enum.TryParse<ReleaseState>(child[PROVIDER_ITEM_RELEASE_STATE]?.AsString(), out var state) ? state : ReleaseState.Released;
+
             result.Add(new ProviderItem
             {
-                id = child.Name!,
-                app_type = uint.Parse(child[PROVIDER_ITEM_APP_TYPE].Value!),
+                id = id,
+                app_type = appType,
                 name = child[PROVIDER_ITEM_NAME].Value!,
-                provider = "Steam"
+                provider = "Steam",
+                release_state = releaseState,
+                release_date = releaseTimestampUlong,
             });
+        }
 
         return result;
     }

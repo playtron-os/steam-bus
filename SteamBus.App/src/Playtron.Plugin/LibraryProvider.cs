@@ -150,6 +150,13 @@ public enum AppType
   Beta = 7,
 }
 
+public enum ReleaseState : uint
+{
+  Released = 0,
+  PreloadOnly = 1,
+  Unreleased = 2,
+}
+
 [Dictionary]
 public class LibraryProviderProperties
 {
@@ -163,6 +170,8 @@ public struct ProviderItem
   public string name;
   public string provider;
   public uint app_type;
+  public ReleaseState release_state;
+  public ulong release_date;
 }
 
 [StructLayout(LayoutKind.Sequential)]

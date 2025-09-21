@@ -1144,6 +1144,7 @@ public class SteamSession : IDisposable
       catch (Exception exception)
       {
         Console.Error.WriteLine($"Error when getting product list for licenses, ex: {exception.Message}", exception);
+        Console.Error.WriteLine(exception.StackTrace);
       }
       Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
       isLoadingLibrary = false;
@@ -1269,9 +1270,11 @@ public class SteamSession : IDisposable
     return new ProviderItem
     {
       id = appId,
-      name = appKeyValues["common"]["name"].Value?.ToString() ?? "",
+      name = appKeyValues["common"]["name"]?.AsString() ?? "",
       provider = "Steam",
       app_type = (uint)app_type,
+      release_date = (appKeyValues["common"]["steam_release_date"]?.AsUnsignedLong() ?? 0) * 1000,
+      release_state = appKeyValues["common"]["releasestate"]?.AsEnum<ReleaseState>() ?? ReleaseState.Released,
     };
   }
 
