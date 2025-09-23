@@ -284,6 +284,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       app_type = (uint)AppType.Tool,
       name = "Steam",
       provider = "Steam",
+      release_date = 0,
+      release_state = ReleaseState.Released,
     });
   }
 
@@ -297,6 +299,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         app_type = (uint)AppType.Tool,
         name = "Steam",
         provider = "Steam",
+        release_date = 0,
+        release_state = ReleaseState.Released,
       }
     ]);
   }
@@ -480,12 +484,15 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     try
     {
-
+      Console.WriteLine("GetItemMetadataAsync called for appIdString: {0}", appIdString);
 
       if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
       if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
       var CommonSection = session!.GetSteam3AppSection(appId, EAppInfoSection.Common);
-      var name = (CommonSection?["name"].Value?.ToString()) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
+      var name = CommonSection?["name"].Value?.ToString();
+      Console.WriteLine("Getting item metadata for game: {0}", name);
+      if (string.IsNullOrEmpty(name)) throw DbusExceptionHelper.ThrowInvalidAppId();
+
       var app_type = CommonSection?["type"].Value?.ToString() ?? "";
       if (app_type.Length > 1)
         app_type = char.ToUpper(app_type[0]) + app_type.ToLower()[1..];
@@ -634,7 +641,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       Console.WriteLine(exception.ToString());
       Console.WriteLine(exception.StackTrace);
-      throw exception;
+      throw;
     }
   }
 
