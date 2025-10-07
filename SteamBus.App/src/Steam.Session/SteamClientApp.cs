@@ -192,7 +192,7 @@ public class SteamClientApp
         if (string.IsNullOrEmpty(e.Data)) return;
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
 
-        var hasRunningString = e.Data.Contains("BuildCompleteAppOverviewChange") || e.Data.Contains("steam-runtime-launcher-service is running");
+        var hasRunningString = e.Data.Contains("Desktop state changed");
 
         // Client starting up, so reset initial variables
         if (e.Data.Contains("Running Steam on"))
