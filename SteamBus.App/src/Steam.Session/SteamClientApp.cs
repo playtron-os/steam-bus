@@ -192,7 +192,7 @@ public class SteamClientApp
         if (string.IsNullOrEmpty(e.Data)) return;
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
 
-        var hasRunningString = e.Data.Contains("Desktop state changed");
+        var hasRunningString = e.Data.Contains("Desktop state changed") || e.Data.Contains("reaping pid:");
 
         // Client starting up, so reset initial variables
         if (e.Data.Contains("Running Steam on"))
