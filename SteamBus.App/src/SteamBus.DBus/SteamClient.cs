@@ -662,7 +662,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       if (installedInfo is not null)
       {
-        if (entry["config"]?["betakey"]?.Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value)
+        if (entry["config"]?["betakey"]?.Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value && entry["type"]?.Value?.ToString() != "default")
         {
           continue;
         }
