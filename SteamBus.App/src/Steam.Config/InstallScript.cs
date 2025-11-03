@@ -234,7 +234,7 @@ public class InstallScript
                             {
                                 dwords.Add(new PostInstallRegistryValue
                                 {
-                                    Language = keyOrLanguage.Name,
+                                    Language = Locale.SteamCodeToLocale(keyOrLanguage.Name),
                                     Group = groupName!,
                                     Key = key.Name ?? "",
                                     Value = ReplaceDynamicVariables(installDir, key.AsString() ?? "", true)!,
@@ -244,7 +244,7 @@ public class InstallScript
                             {
                                 strings.Add(new PostInstallRegistryValue
                                 {
-                                    Language = keyOrLanguage.Name,
+                                    Language = Locale.SteamCodeToLocale(keyOrLanguage.Name),
                                     Group = groupName!,
                                     Key = key.Name ?? "",
                                     Value = ReplaceDynamicVariables(installDir, key.AsString() ?? "", true)!,

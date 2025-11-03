@@ -990,7 +990,7 @@ public class DepotConfigStore
             appId = appId,
             installDir = installDir,
             branch = branch,
-            language = data[KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE]?.AsString() ?? "english",
+            language = Locale.SteamCodeToLocale(data[KEY_USER_CONFIG][KEY_CONFIG_LANGUAGE]?.AsString()) ?? "en-US",
             version = data[KEY_BUILD_ID].AsString() ?? "",
             os = os,
             architecture = "",
@@ -1022,8 +1022,8 @@ public class DepotConfigStore
                 var installPath = GetInstallDirectory(entry.Key)!;
                 var disabledDlc = (entry.Value[KEY_USER_CONFIG]?[KEY_CONFIG_DISABLED_DLC]?.AsString() ?? "").Split(',');
                 var branch = entry.Value[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_BETA_KEY]?.AsString() ?? AppDownloadOptions.DEFAULT_BRANCH;
-                var language = entry.Value[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_LANGUAGE]?.AsString() ?? "english";
-
+                var language = entry.Value[KEY_MOUNTED_CONFIG]?[KEY_CONFIG_LANGUAGE]?.AsString();
+                language = Locale.SteamCodeToLocale(language) ?? "en-US";
                 var contentDownloader = new ContentDownloader(steamSession, this);
                 var installOptions = new InstallOptions
                 {

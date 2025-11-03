@@ -123,7 +123,7 @@ public class InstallOption
 public class InstallOptions
 {
   public string branch = "public";
-  public string language = "english";
+  public string language = "en-US";
   public string version = "";
   public string os = "";
   public string architecture = "";
