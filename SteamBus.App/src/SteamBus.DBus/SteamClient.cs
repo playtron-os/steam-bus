@@ -657,12 +657,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var info = session!.GetSteam3AppSection(appId, EAppInfoSection.Config) ?? throw DbusExceptionHelper.ThrowInvalidAppId();
     var installedInfo = depotConfigStore.GetInstalledAppInfo(appId);
     List<LaunchOption> options = [];
+    List<KeyValue> matchingOptions = [];
 
+    // Collect options that match our initial criteria
     foreach (var entry in info["launch"].Children)
     {
       if (installedInfo is not null)
       {
-        if (entry["config"]?["betakey"]?.Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value && entry["type"]?.Value?.ToString() != "default")
+        if (entry["config"]?["betakey"]?.Value != null && installedInfo.Value.Branch != entry["config"]["betakey"].Value)
         {
           continue;
         }
@@ -671,7 +673,16 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
           continue;
         }
       }
+      // Put default options first
+      if (entry["type"]?.Value?.ToString() == "default")
+        matchingOptions.Insert(0, entry);
+      else
+        matchingOptions.Add(entry);
+    }
 
+    // Map entries into 
+    foreach (var entry in matchingOptions)
+    {
       List<string> HardwareTags = [];
       if (entry["config"]?["steamdeck"]?.Value == "1")
       {
