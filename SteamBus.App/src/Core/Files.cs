@@ -2,7 +2,7 @@ public static class FileUtils
 {
     public static string CaseInsensitiveLookup(string filePath, string root)
     {
-        if (Path.Exists(filePath))
+        if (Path.Exists(filePath) || !Path.Exists(root))
         {
             return filePath;
         }
@@ -10,7 +10,7 @@ public static class FileUtils
         List<string> pathElements = [];
         while (true)
         {
-            if (enumerator == null || String.Equals(enumerator, root))
+            if (enumerator == null)
             {
                 return filePath;
             }
