@@ -567,9 +567,15 @@ public class ContentDownloader
   public async Task<List<RequiredDepot>> GetAppRequiredDepots(uint appId, AppDownloadOptions options, bool forceRefreshDepots = true, bool log = true)
   {
     if (!session.IsAppOwned(appId))
-      return [];
+    {
+      var granted = await session.RequestFreeAppLicense(appId);
+      if (!granted)
+        return [];
+      if (log)
+        Console.WriteLine("Successfully obtained free license for app {0}", appId);
+    }
 
-    await this.session.RequestAppInfo(appId);
+    await this.session.RequestAppInfo(appId, forceRefreshDepots);
 
     var os = options.Os ?? GetSteamOS();
     var arch = options.Arch;
@@ -581,6 +587,17 @@ public class ContentDownloader
     var depotIdsFound = new List<uint>();
     var depotIdsExpected = requiredDepots.Select(x => x.DepotId).ToList();
     var depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
+
+    // If no depots section but we own the app, the cached app info might be public_only
+    // Force refresh and try again
+    if (depots == null && session.IsAppOwned(appId) && forceRefreshDepots)
+    {
+      if (log)
+        Console.WriteLine("No depots found for owned app {0}, forcing app info refresh...", appId);
+
+      await this.session.RequestAppInfo(appId, true);
+      depots = session.GetSteam3AppSection(appId, EAppInfoSection.Depots);
+    }
     var disabledDlcIds = depotConfigStore.GetDisabledDlcIds(appId);
 
     // List of dlcs found in depots config but are not owned
