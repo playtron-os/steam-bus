@@ -297,6 +297,29 @@ public class SteamSession : IDisposable
     {
       request.AccessToken = token;
     }
+    else
+    {
+      // Try to find a package token for this app
+      foreach (var package in PackageInfo.Values)
+      {
+        if (package == null) continue;
+        var appids = package.KeyValues["appids"].Children;
+        foreach (var appidKv in appids)
+        {
+          if (appidKv.AsUnsignedInteger() == appId)
+          {
+            ulong packageToken = PackageTokens.GetValueOrDefault(package.ID);
+            if (packageToken > 0)
+            {
+              Console.WriteLine("Using package token {0} from package {1} for app {2}", packageToken, package.ID, appId);
+              request.AccessToken = packageToken;
+              break;
+            }
+          }
+        }
+        if (request.AccessToken > 0) break;
+      }
+    }
 
     var appInfoMultiple = await steamApps.PICSGetProductInfo([request], []);
 
@@ -378,7 +401,29 @@ public class SteamSession : IDisposable
   {
     var resultInfo = await steamApps.RequestFreeLicense(appId);
 
-    return resultInfo.GrantedApps.Contains(appId);
+    if (resultInfo.GrantedApps.Contains(appId))
+    {
+      Console.WriteLine("Granted free license for app {0}, granted packages: {1}", appId, string.Join(", ", resultInfo.GrantedPackages));
+
+      // Fetch package info for the newly granted packages to get the package token
+      if (resultInfo.GrantedPackages.Count > 0)
+      {
+        await RequestPackageInfo(resultInfo.GrantedPackages, true);
+
+        // Now request app info with the package token
+        await RequestAppInfo(appId, true);
+
+        // Update ProviderItemMap so IsAppOwned returns true
+        if (AppInfo.TryGetValue(appId, out var appInfo))
+        {
+          ProviderItemMap[appId] = GetProviderItem(appId.ToString(), appInfo);
+        }
+      }
+
+      return true;
+    }
+
+    return false;
   }
 
 
