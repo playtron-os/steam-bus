@@ -2034,7 +2034,8 @@ public class ContentDownloader
       try
       {
         await fileStreamData.fileLock.WaitAsync().ConfigureAwait(false);
-
+        // We do the lookup while in the lock here, to avoid issues in case other task creates this file
+        fileFinalPath = FileUtils.CaseInsensitiveLookup(fileFinalPath, depot.InstallDir);
         if (fileStreamData.fileStream == null)
           fileStreamData.fileStream = File.Open(fileFinalPath, FileMode.Open);
 
