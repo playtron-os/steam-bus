@@ -133,9 +133,9 @@ public class SteamClientApp
             // Required for Steam to run on Arm
             startInfo.EnvironmentVariables["STEAMOS"] = "1";
             startInfo.EnvironmentVariables["STEAM_RUNTIME"] = "1";
-            startInfo.EnvironmentVariables["DBUS_FATAL_WARNINGS"] = "0";
         }
 
+        startInfo.EnvironmentVariables["DBUS_FATAL_WARNINGS"] = "0";
         startInfo.EnvironmentVariables["DISPLAY"] = display;
         startInfo.EnvironmentVariables["LANG"] = "C";
         process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
