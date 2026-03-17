@@ -67,6 +67,8 @@ public class SteamSession : IDisposable
   bool bExpectingDisconnectRemote;
   bool bDidDisconnect;
   bool bIsConnectionRecovery;
+  bool bSuppressReconnect; // Suppresses OnDisconnected's delayed reconnect during controlled recovery
+  TaskCompletionSource? disconnectedTcs; // Signaled by OnDisconnected so callers can await disconnect
   int connectionBackoff;
   int seq; // more hack fixes
   bool isLoadingLibrary = true;
@@ -232,17 +234,26 @@ public class SteamSession : IDisposable
 
   public async Task WaitForLibrary()
   {
+    Console.WriteLine($"WaitForLibrary: IsPendingLogin={IsPendingLogin}, isLoadingLibrary={isLoadingLibrary}, PackageIDs count={PackageIDs?.Count}, bAborted={bAborted}");
     if (IsPendingLogin)
+    {
+      Console.WriteLine("WaitForLibrary: Returning early - IsPendingLogin=true");
       return;
+    }
 
     if (!isLoadingLibrary && PackageIDs?.Count == 0)
+    {
+      Console.WriteLine("WaitForLibrary: Returning early - not loading and no packages");
       return;
+    }
 
+    Console.WriteLine("WaitForLibrary: Waiting for library to finish loading...");
     while (!bAborted)
     {
       if (!isLoadingLibrary) break;
       await Task.Delay(1);
     }
+    Console.WriteLine($"WaitForLibrary: Done. bAborted={bAborted}, PackageIDs count={PackageIDs?.Count}, PackageInfo count={PackageInfo.Count}");
   }
 
 
@@ -399,7 +410,9 @@ public class SteamSession : IDisposable
 
   public async Task<bool> RequestFreeAppLicense(uint appId)
   {
+    Console.WriteLine($"RequestFreeAppLicense({appId}): Sending request. PackageIDs count={PackageIDs?.Count}, PackageInfo count={PackageInfo.Count}");
     var resultInfo = await steamApps.RequestFreeLicense(appId);
+    Console.WriteLine($"RequestFreeAppLicense({appId}): Result: GrantedApps=[{string.Join(", ", resultInfo.GrantedApps)}], GrantedPackages=[{string.Join(", ", resultInfo.GrantedPackages)}]");
 
     if (resultInfo.GrantedApps.Contains(appId))
     {
@@ -516,7 +529,7 @@ public class SteamSession : IDisposable
 
   private void ResetConnectionFlags()
   {
-    Console.WriteLine("Resetting connection flags");
+    Console.WriteLine($"ResetConnectionFlags: bExpectingDisconnectRemote {bExpectingDisconnectRemote}->false, bDidDisconnect {bDidDisconnect}->false");
 
     bExpectingDisconnectRemote = false;
     bDidDisconnect = false;
@@ -571,7 +584,7 @@ public class SteamSession : IDisposable
 
   void Connect()
   {
-    Console.WriteLine("Starting steam connection");
+    Console.WriteLine($"Connect: called. bIsConnectionRecovery={bIsConnectionRecovery}, bAborted={bAborted}, bConnecting={bConnecting}, IsConnected={SteamClient.IsConnected}");
 
     waitingToRetry = false;
     bAborted = false;
@@ -586,6 +599,7 @@ public class SteamSession : IDisposable
 
     ResetConnectionFlags();
     this.SteamClient.Connect();
+    Console.WriteLine("Connect: SteamClient.Connect() called");
   }
 
 
@@ -629,12 +643,14 @@ public class SteamSession : IDisposable
 
   private void Reconnect()
   {
+    Console.WriteLine($"Reconnect: called. waitingToRetry={waitingToRetry}, bIsConnectionRecovery={bIsConnectionRecovery}, IsConnected={SteamClient.IsConnected}");
     waitingToRetry = false;
     bIsConnectionRecovery = true;
     bExpectingDisconnectRemote = true;
     IsPendingLogin = true;
     loggingInTask ??= new TaskCompletionSource();
     SteamClient.Disconnect();
+    Console.WriteLine("Reconnect: SteamClient.Disconnect() called");
   }
 
   private async void OnConnected(SteamClient.ConnectedCallback connected)
@@ -852,6 +868,7 @@ public class SteamSession : IDisposable
   public async Task OnOnline()
   {
     isOnline = true;
+    Console.WriteLine($"OnOnline: IsPendingLogin={IsPendingLogin}, IsLoggedOn={IsLoggedOn}, bIsConnectionRecovery={bIsConnectionRecovery}, bAborted={bAborted}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, IsConnected={SteamClient.IsConnected}");
 
     if (IsPendingLogin)
     {
@@ -860,23 +877,71 @@ public class SteamSession : IDisposable
 
       if (bIsConnectionRecovery)
       {
-        // If expecting to reconnect, just connect to steam client
-        ResetConnectionFlags();
-        SteamClient.Connect();
+        // If expecting to reconnect, disconnect the stale connection first
+        // then establish a fresh one
+        Console.WriteLine("OnOnline: Connection recovery path - will disconnect stale session and reconnect");
+        bExpectingDisconnectRemote = true;
+        bSuppressReconnect = true; // Prevent OnDisconnected from starting a second reconnect
+        Console.WriteLine($"OnOnline: Set bExpectingDisconnectRemote=true, bSuppressReconnect=true. IsConnected={SteamClient.IsConnected}");
+        if (SteamClient.IsConnected)
+        {
+          Console.WriteLine("OnOnline: Calling SteamClient.Disconnect() on stale connection");
+          disconnectedTcs = new TaskCompletionSource();
+          SteamClient.Disconnect();
+
+          // Wait for the disconnect callback with a bounded timeout
+          Console.WriteLine("OnOnline: Waiting for disconnect callback...");
+          var completed = await Task.WhenAny(disconnectedTcs.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+          if (completed == disconnectedTcs.Task)
+          {
+            Console.WriteLine("OnOnline: Disconnect callback received");
+          }
+          else
+          {
+            Console.WriteLine("OnOnline: Timed out waiting for disconnect callback, proceeding anyway");
+          }
+          disconnectedTcs = null;
+        }
+        else
+        {
+          Console.WriteLine("OnOnline: SteamClient already disconnected, skipping Disconnect()");
+        }
+
+        // Now reset everything and connect fresh
+        bSuppressReconnect = false;
+        Connect();
         return;
       }
 
-      Console.WriteLine("Previous session exists, trying to re-login to steam");
+      Console.WriteLine("OnOnline: Previous session exists (not recovery), trying to re-login to steam");
 
       await Login();
       if (IsLoggedOn)
         OnAuthUpdated?.Invoke();
+    }
+    else
+    {
+      Console.WriteLine($"OnOnline: No pending login, skipping reconnect. IsLoggedOn={IsLoggedOn}, IsConnected={SteamClient.IsConnected}");
     }
   }
 
   public void OnOffline()
   {
     isOnline = false;
+    Console.WriteLine($"OnOffline: IsLoggedOn={IsLoggedOn}, IsPendingLogin={IsPendingLogin}, IsConnected={SteamClient.IsConnected}");
+
+    // If we are currently logged on, mark the session for reconnection
+    // so that OnOnline() will re-establish a fresh connection when the
+    // network returns. Without this, a stale SteamClient connection can
+    // persist across sleep/wake cycles causing CDN server list fetches
+    // to silently time out.
+    if (IsLoggedOn)
+    {
+      Console.WriteLine("Network went offline while logged on, marking session for reconnection");
+      IsLoggedOn = false;
+      IsPendingLogin = true;
+      bIsConnectionRecovery = true;
+    }
   }
 
   // Invoked when the steam client is disconnected
@@ -885,17 +950,28 @@ public class SteamSession : IDisposable
     bDidDisconnect = true;
     IsLoggedOn = false;
 
-    Console.WriteLine($"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
+    Console.WriteLine($"OnDisconnected: bIsConnectionRecovery={bIsConnectionRecovery}, UserInitiated={disconnected.UserInitiated}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, bAborted={bAborted}, bSuppressReconnect={bSuppressReconnect}, bConnecting={bConnecting}, isOnline={isOnline}, connectionBackoff={connectionBackoff}");
+
+    // Signal any caller awaiting this disconnect
+    disconnectedTcs?.TrySetResult();
+
+    // If OnOnline recovery is driving the reconnect, skip all reconnect logic here
+    if (bSuppressReconnect)
+    {
+      Console.WriteLine("OnDisconnected: bSuppressReconnect=true, skipping reconnect (OnOnline is handling it)");
+      return;
+    }
 
     // When recovering the connection, we want to reconnect even if the remote disconnects us
     if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
     {
+      Console.WriteLine("OnDisconnected: User-initiated or expected disconnect (not recovery) - aborting operations");
       // Any operations outstanding need to be aborted
       bAborted = true;
     }
     else if (connectionBackoff >= 12)
     {
-      Console.WriteLine("Could not connect to Steam after 7 tries");
+      Console.WriteLine("OnDisconnected: Could not connect to Steam after 12 backoff attempts");
       Abort(false);
       OnAuthError?.Invoke(DbusErrors.Timeout);
     }
@@ -909,11 +985,11 @@ public class SteamSession : IDisposable
       {
         if (bConnecting)
         {
-          Console.WriteLine($"Connection to Steam failed. Trying again (#{connectionBackoff})...");
+          Console.WriteLine($"OnDisconnected: Connection to Steam failed. Trying again (#{connectionBackoff})...");
         }
         else
         {
-          Console.WriteLine($"Lost connection to Steam. Reconnecting (#{connectionBackoff})");
+          Console.WriteLine($"OnDisconnected: Lost connection to Steam. Reconnecting (#{connectionBackoff})");
         }
 
         loggingInTask ??= new TaskCompletionSource();
@@ -921,9 +997,15 @@ public class SteamSession : IDisposable
 
         _ = Task.Run(async () =>
         {
+          Console.WriteLine($"OnDisconnected: Waiting 3s before reconnect attempt...");
           await Task.Delay(3000);
-          if (bAborted) return;
+          if (bAborted)
+          {
+            Console.WriteLine("OnDisconnected: Reconnect cancelled (bAborted=true)");
+            return;
+          }
 
+          Console.WriteLine($"OnDisconnected: Executing delayed reconnect. bIsConnectionRecovery={bIsConnectionRecovery}, IsConnected={SteamClient.IsConnected}");
           // Any connection related flags need to be reset here to match the state after Connect
           ResetConnectionFlags();
           SteamClient.Connect();
@@ -931,9 +1013,13 @@ public class SteamSession : IDisposable
       }
       else
       {
-        Console.WriteLine("Skipping reconnection for now because no internet connectivity found");
+        Console.WriteLine("OnDisconnected: Skipping reconnection - no internet connectivity");
         IsPendingLogin = true;
       }
+    }
+    else
+    {
+      Console.WriteLine("OnDisconnected: bAborted=true, skipping reconnect logic");
     }
 
     if (bAborted)
@@ -1037,7 +1123,7 @@ public class SteamSession : IDisposable
     SaveToken();
     steamConnectionConfig.SaveCellId(loggedOn.CellID);
 
-    Console.WriteLine("OnLogIn: Done!");
+    Console.WriteLine($"OnLogIn: Done! Setting IsLoggedOn=true, IsPendingLogin=false. PackageIDs count={PackageIDs?.Count}, PackageInfo count={PackageInfo.Count}");
 
     this.seq++;
     IsLoggedOn = true;
@@ -1192,6 +1278,7 @@ public class SteamSession : IDisposable
         Console.Error.WriteLine(exception.StackTrace);
       }
       Console.WriteLine("Obtained app info for {0} apps", AppInfo.Count);
+      Console.WriteLine($"OnLicenseList: Library loading complete. PackageIDs={PackageIDs?.Count}, PackageInfo={PackageInfo.Count}, ProviderItemMap={ProviderItemMap.Count}");
       isLoadingLibrary = false;
 
       if (!firstCallback)

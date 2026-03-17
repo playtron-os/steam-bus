@@ -65,11 +65,14 @@ class CDNClientPool
         Console.WriteLine("Failed to get content handler from steam client");
         return null;
       }
+      Console.WriteLine($"Fetching CDN server list for cellId={cellId}, IsConnected={this.steamClient.IsConnected}");
       var cdnServers = await steamContent!.GetServersForSteamPipe(cellId);
       if (cdnServers != null)
       {
+        Console.WriteLine($"Got {cdnServers.Count} CDN servers");
         return cdnServers;
       }
+      Console.WriteLine("GetServersForSteamPipe returned null");
     }
     catch (Exception ex)
     {

@@ -218,20 +218,36 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
   private async Task OnOnline()
   {
-    if (this.session == null) return;
+    if (this.session == null)
+    {
+      Console.WriteLine("SteamClient.OnOnline: session is null, skipping");
+      return;
+    }
 
     var wasPendingLogin = this.session.IsPendingLogin;
+    Console.WriteLine($"SteamClient.OnOnline: wasPendingLogin={wasPendingLogin}, IsLoggedOn={this.session.IsLoggedOn}, IsConnected={this.session.SteamClient.IsConnected}");
 
     await this.session.OnOnline();
 
+    Console.WriteLine($"SteamClient.OnOnline: After session.OnOnline() - wasPendingLogin={wasPendingLogin}, IsLoggedOn={this.session.IsLoggedOn}");
     if (!wasPendingLogin)
       await LaunchSteamClientToSyncTokens(session.GetLogonDetails());
   }
 
   private void OnOffline()
   {
-    if (this.session == null || this.session.IsPendingLogin) return;
+    if (this.session == null)
+    {
+      Console.WriteLine("SteamClient.OnOffline: session is null, skipping");
+      return;
+    }
+    if (this.session.IsPendingLogin)
+    {
+      Console.WriteLine($"SteamClient.OnOffline: IsPendingLogin=true, skipping. IsLoggedOn={this.session.IsLoggedOn}");
+      return;
+    }
 
+    Console.WriteLine($"SteamClient.OnOffline: calling session.OnOffline(). IsLoggedOn={this.session.IsLoggedOn}, IsConnected={this.session.SteamClient.IsConnected}");
     this.session.OnOffline();
   }
 
