@@ -367,14 +367,29 @@ public class SteamSession : IDisposable
 
   public async Task RequestPackageInfo(IEnumerable<uint> packageIds, bool force = true)
   {
-    if (!force && packageIds.Any((x) => !PackageInfo.ContainsKey(x)))
+    if (bAborted)
+    {
+      Console.WriteLine($"RequestPackageInfo: Early return - bAborted=true, PackageInfo count={PackageInfo.Count}");
       return;
+    }
+
+    if (!force && !packageIds.Any((x) => !PackageInfo.ContainsKey(x)))
+    {
+      Console.WriteLine($"RequestPackageInfo: Early return - all packages already known (force={force}, PackageInfo count={PackageInfo.Count})");
+      return;
+    }
 
     var packages = packageIds.ToList();
+    var beforeRemove = packages.Count;
     packages.RemoveAll(PackageInfo.ContainsKey);
 
-    if (packages.Count == 0 || bAborted)
+    if (packages.Count == 0)
+    {
+      Console.WriteLine($"RequestPackageInfo: Early return - 0 packages after filtering (started with {beforeRemove}, PackageInfo count={PackageInfo.Count})");
       return;
+    }
+
+    Console.WriteLine($"RequestPackageInfo: Requesting {packages.Count} packages (had {beforeRemove}, filtered {beforeRemove - packages.Count}, force={force}, bAborted={bAborted})");
 
     var packageRequests = new List<SteamApps.PICSRequest>();
 
@@ -392,19 +407,27 @@ public class SteamSession : IDisposable
 
     var packageInfoMultiple = await steamApps.PICSGetProductInfo([], packageRequests);
 
+    Console.WriteLine($"RequestPackageInfo: PICSGetProductInfo returned. Results count={packageInfoMultiple.Results?.Count ?? -1}, Complete={packageInfoMultiple.Complete}");
+
+    int addedCount = 0;
+    int unknownCount = 0;
     foreach (var packageInfo in packageInfoMultiple.Results)
     {
       foreach (var package_value in packageInfo.Packages)
       {
         var package = package_value.Value;
         PackageInfo[package.ID] = package;
+        addedCount++;
       }
 
       foreach (var package in packageInfo.UnknownPackages)
       {
         PackageInfo[package] = null;
+        unknownCount++;
       }
     }
+
+    Console.WriteLine($"RequestPackageInfo: Done. Added={addedCount}, Unknown={unknownCount}, Total PackageInfo={PackageInfo.Count}");
   }
 
 
@@ -658,6 +681,7 @@ public class SteamSession : IDisposable
     Console.WriteLine("OnConnected: Done!");
     bConnecting = false;
     bDidDisconnect = false;
+    bSuppressReconnect = false;
 
     if (!AuthenticatedUser())
     {
@@ -886,7 +910,7 @@ public class SteamSession : IDisposable
         if (SteamClient.IsConnected)
         {
           Console.WriteLine("OnOnline: Calling SteamClient.Disconnect() on stale connection");
-          disconnectedTcs = new TaskCompletionSource();
+          disconnectedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
           SteamClient.Disconnect();
 
           // Wait for the disconnect callback with a bounded timeout
@@ -908,7 +932,9 @@ public class SteamSession : IDisposable
         }
 
         // Now reset everything and connect fresh
-        bSuppressReconnect = false;
+        // Keep bSuppressReconnect=true — it will be cleared in OnConnected
+        // so any late-arriving disconnect callbacks are still suppressed
+        bExpectingDisconnectRemote = false;
         Connect();
         return;
       }
@@ -950,20 +976,27 @@ public class SteamSession : IDisposable
     bDidDisconnect = true;
     IsLoggedOn = false;
 
+    // Capture flags before TrySetResult, which schedules the TCS continuation on
+    // the thread pool. That continuation may call Connect() → OnConnected, which
+    // clears bSuppressReconnect. Without capturing here we have a race where the
+    // check below sees the already-cleared value and falls through to the abort path.
+    var suppressReconnect = bSuppressReconnect;
+    var isConnectionRecovery = bIsConnectionRecovery;
+
     Console.WriteLine($"OnDisconnected: bIsConnectionRecovery={bIsConnectionRecovery}, UserInitiated={disconnected.UserInitiated}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, bAborted={bAborted}, bSuppressReconnect={bSuppressReconnect}, bConnecting={bConnecting}, isOnline={isOnline}, connectionBackoff={connectionBackoff}");
 
     // Signal any caller awaiting this disconnect
     disconnectedTcs?.TrySetResult();
 
     // If OnOnline recovery is driving the reconnect, skip all reconnect logic here
-    if (bSuppressReconnect)
+    if (suppressReconnect)
     {
       Console.WriteLine("OnDisconnected: bSuppressReconnect=true, skipping reconnect (OnOnline is handling it)");
       return;
     }
 
     // When recovering the connection, we want to reconnect even if the remote disconnects us
-    if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
+    if (!isConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
     {
       Console.WriteLine("OnDisconnected: User-initiated or expected disconnect (not recovery) - aborting operations");
       // Any operations outstanding need to be aborted
@@ -978,7 +1011,7 @@ public class SteamSession : IDisposable
     else if (!bAborted)
     {
       // Only increment connection backoff if this is not a connection recovery
-      if (!bIsConnectionRecovery)
+      if (!isConnectionRecovery)
         connectionBackoff += 1;
 
       if (isOnline)
@@ -1119,6 +1152,7 @@ public class SteamSession : IDisposable
     }
 
     bIsConnectionRecovery = false;
+    bAborted = false;
     connectionBackoff = 0;
     SaveToken();
     steamConnectionConfig.SaveCellId(loggedOn.CellID);
