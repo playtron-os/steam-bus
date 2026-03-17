@@ -91,7 +91,6 @@ class CDNClientPool
       populatePoolEvent.WaitOne(TimeSpan.FromSeconds(1));
 
       // We want the Steam session so we can take the CellID from the session and pass it through to the ContentServer Directory Service
-      Console.WriteLine($"CDN pool monitor: endpoints={availableServerEndpoints.Count}, IsConnected={this.steamClient.IsConnected}, appId={appId}");
       if (availableServerEndpoints.Count < ServerEndpointMinimumSize && this.steamClient.IsConnected)
       {
         var servers = await FetchBootstrapServerListAsync().ConfigureAwait(false);

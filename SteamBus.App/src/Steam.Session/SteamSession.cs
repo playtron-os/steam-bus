@@ -67,6 +67,8 @@ public class SteamSession : IDisposable
   bool bExpectingDisconnectRemote;
   bool bDidDisconnect;
   bool bIsConnectionRecovery;
+  bool bSuppressReconnect; // Suppresses OnDisconnected's delayed reconnect during controlled recovery
+  TaskCompletionSource? disconnectedTcs; // Signaled by OnDisconnected so callers can await disconnect
   int connectionBackoff;
   int seq; // more hack fixes
   bool isLoadingLibrary = true;
@@ -879,19 +881,26 @@ public class SteamSession : IDisposable
         // then establish a fresh one
         Console.WriteLine("OnOnline: Connection recovery path - will disconnect stale session and reconnect");
         bExpectingDisconnectRemote = true;
-        bAborted = true; // Prevent OnDisconnected from starting a second reconnect
+        bSuppressReconnect = true; // Prevent OnDisconnected from starting a second reconnect
+        Console.WriteLine($"OnOnline: Set bExpectingDisconnectRemote=true, bSuppressReconnect=true. IsConnected={SteamClient.IsConnected}");
         if (SteamClient.IsConnected)
         {
           Console.WriteLine("OnOnline: Calling SteamClient.Disconnect() on stale connection");
+          disconnectedTcs = new TaskCompletionSource();
           SteamClient.Disconnect();
 
-          // Wait for the disconnect callback to fire
-          Console.WriteLine("OnOnline: Waiting for bDidDisconnect...");
-          while (!bDidDisconnect)
+          // Wait for the disconnect callback with a bounded timeout
+          Console.WriteLine("OnOnline: Waiting for disconnect callback...");
+          var completed = await Task.WhenAny(disconnectedTcs.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+          if (completed == disconnectedTcs.Task)
           {
-            await Task.Delay(50);
+            Console.WriteLine("OnOnline: Disconnect callback received");
           }
-          Console.WriteLine("OnOnline: bDidDisconnect received");
+          else
+          {
+            Console.WriteLine("OnOnline: Timed out waiting for disconnect callback, proceeding anyway");
+          }
+          disconnectedTcs = null;
         }
         else
         {
@@ -899,13 +908,8 @@ public class SteamSession : IDisposable
         }
 
         // Now reset everything and connect fresh
-        bAborted = false;
-        bIsConnectionRecovery = false;
-        bConnecting = true;
-        connectionBackoff = 0;
-        ResetConnectionFlags();
-        Console.WriteLine("OnOnline: Calling SteamClient.Connect() for fresh connection");
-        SteamClient.Connect();
+        bSuppressReconnect = false;
+        Connect();
         return;
       }
 
@@ -946,7 +950,17 @@ public class SteamSession : IDisposable
     bDidDisconnect = true;
     IsLoggedOn = false;
 
-    Console.WriteLine($"OnDisconnected: bIsConnectionRecovery={bIsConnectionRecovery}, UserInitiated={disconnected.UserInitiated}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, bAborted={bAborted}, bConnecting={bConnecting}, isOnline={isOnline}, connectionBackoff={connectionBackoff}");
+    Console.WriteLine($"OnDisconnected: bIsConnectionRecovery={bIsConnectionRecovery}, UserInitiated={disconnected.UserInitiated}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, bAborted={bAborted}, bSuppressReconnect={bSuppressReconnect}, bConnecting={bConnecting}, isOnline={isOnline}, connectionBackoff={connectionBackoff}");
+
+    // Signal any caller awaiting this disconnect
+    disconnectedTcs?.TrySetResult();
+
+    // If OnOnline recovery is driving the reconnect, skip all reconnect logic here
+    if (bSuppressReconnect)
+    {
+      Console.WriteLine("OnDisconnected: bSuppressReconnect=true, skipping reconnect (OnOnline is handling it)");
+      return;
+    }
 
     // When recovering the connection, we want to reconnect even if the remote disconnects us
     if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
