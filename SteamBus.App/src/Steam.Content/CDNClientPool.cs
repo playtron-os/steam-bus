@@ -65,11 +65,14 @@ class CDNClientPool
         Console.WriteLine("Failed to get content handler from steam client");
         return null;
       }
+      Console.WriteLine($"Fetching CDN server list for cellId={cellId}, IsConnected={this.steamClient.IsConnected}");
       var cdnServers = await steamContent!.GetServersForSteamPipe(cellId);
       if (cdnServers != null)
       {
+        Console.WriteLine($"Got {cdnServers.Count} CDN servers");
         return cdnServers;
       }
+      Console.WriteLine("GetServersForSteamPipe returned null");
     }
     catch (Exception ex)
     {
@@ -88,6 +91,7 @@ class CDNClientPool
       populatePoolEvent.WaitOne(TimeSpan.FromSeconds(1));
 
       // We want the Steam session so we can take the CellID from the session and pass it through to the ContentServer Directory Service
+      Console.WriteLine($"CDN pool monitor: endpoints={availableServerEndpoints.Count}, IsConnected={this.steamClient.IsConnected}, appId={appId}");
       if (availableServerEndpoints.Count < ServerEndpointMinimumSize && this.steamClient.IsConnected)
       {
         var servers = await FetchBootstrapServerListAsync().ConfigureAwait(false);

@@ -447,6 +447,7 @@ public class ContentDownloader
 
         await this.session.RequestAppInfo(appId);
 
+        Console.WriteLine($"DownloadAppAsync({appId}): Checking account access. IsLoggedOn={session.IsLoggedOn}, PackageIDs count={session.PackageIDs?.Count}, PackageInfo count={session.PackageInfo.Count}");
         if (!await AccountHasAccess(appId))
         {
           if (await this.session.RequestFreeAppLicense(appId))
@@ -465,6 +466,7 @@ public class ContentDownloader
         }
 
         var requiredDepots = await GetAppRequiredDepots(appId, options);
+        Console.WriteLine($"DownloadAppAsync({appId}): Got {requiredDepots.Count} required depots");
         var requiresInternetConnection = session.GetSteam3AppRequiresInternetConnection(appId);
         var version = session.GetSteam3AppBuildNumber(appId, options.Branch);
         Console.WriteLine($"Downloading version {version}");
@@ -836,6 +838,7 @@ public class ContentDownloader
     var steamUser = this.session.SteamClient.GetHandler<SteamUser>();
     if (steamUser == null || steamUser.SteamID == null || (this.session.PackageIDs == null && steamUser.SteamID.AccountType != EAccountType.AnonUser))
     {
+      Console.WriteLine($"AccountHasAccess({depotId}): returning false - steamUser={steamUser != null}, steamID={steamUser?.SteamID != null}, PackageIDs={this.session.PackageIDs?.Count}, AccountType={steamUser?.SteamID?.AccountType}");
       return false;
     }
 
@@ -849,7 +852,10 @@ public class ContentDownloader
       licenseQuery = this.session.PackageIDs?.Distinct() ?? [];
     }
 
+    var licenseCount = licenseQuery.Count();
+    Console.WriteLine($"AccountHasAccess({depotId}): Checking {licenseCount} licenses, PackageInfo count={this.session.PackageInfo.Count}, forceRefresh={forceRefresh}");
     await this.session.RequestPackageInfo(licenseQuery, forceRefresh);
+    Console.WriteLine($"AccountHasAccess({depotId}): After RequestPackageInfo, PackageInfo count={this.session.PackageInfo.Count}");
 
     foreach (var license in licenseQuery)
     {
@@ -863,6 +869,7 @@ public class ContentDownloader
       }
     }
 
+    Console.WriteLine($"AccountHasAccess({depotId}): No matching license found, returning false");
     return false;
   }
 
