@@ -507,7 +507,10 @@ public class DepotConfigStore
     public List<(uint DepotId, string Path)> GetInstallScripts(uint appId)
     {
         if (!manifestMap.TryGetValue(appId, out var manifest)) return [];
-        return manifest[KEY_INSTALL_SCRIPTS].Children.Select(x => (uint.Parse(x.Name!), x.AsString()!)).ToList();
+        return manifest[KEY_INSTALL_SCRIPTS].Children
+            .Where(x => uint.TryParse(x.Name, out _))
+            .Select(x => (uint.Parse(x.Name!), x.AsString()!))
+            .ToList();
     }
 
     /// <summary>
