@@ -1156,8 +1156,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     // Create a new Steam session using the given login details and the DBus interface
     // as an authenticator implementation.
-    var session = new SteamSession(login, depotConfigStore, steamGuardData, this);
-    session.isOnline = isOnline;
+    var session = new SteamSession(login, depotConfigStore, steamGuardData, this, isOnline: isOnline);
     session.OnLibraryUpdated = OnLibraryUpdated;
     session.OnAppNewVersionFound = OnAppNewVersionFound;
     session.InstalledAppsUpdated = InstalledAppsUpdated;
@@ -1324,7 +1323,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (isValid)
     {
       Console.WriteLine("No internet connection when changing user, skipping login");
-      this.session.IsPendingLogin = true;
+      this.session.SetPendingLoginOffline();
       OnUserPropsChanged?.Invoke(new PropertyChanges([], ["Avatar", "Username", "Identifier", "Status"]));
       return true;
     }
