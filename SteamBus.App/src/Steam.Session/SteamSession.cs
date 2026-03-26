@@ -932,10 +932,14 @@ public class SteamSession : IDisposable
         }
 
         // Now reset everything and connect fresh
-        // Keep bSuppressReconnect=true — it will be cleared in OnConnected
-        // so any late-arriving disconnect callbacks are still suppressed
         bExpectingDisconnectRemote = false;
         Connect();
+        // Clear bSuppressReconnect *after* Connect() so that if the new
+        // connection attempt itself fails (OnDisconnected fires without
+        // OnConnected ever being reached), the normal reconnect-with-backoff
+        // logic in OnDisconnected is allowed to run instead of being
+        // suppressed forever.
+        bSuppressReconnect = false;
         return;
       }
 
