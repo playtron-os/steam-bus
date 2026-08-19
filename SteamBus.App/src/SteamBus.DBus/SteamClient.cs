@@ -423,6 +423,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
+  // Bound on how long D-Bus calls wait for an in-progress (re-)login: during
+  // a Steam outage the session retries indefinitely, and D-Bus calls should
+  // fail fast rather than block for the whole outage
+  static readonly TimeSpan LoginWaitTimeout = TimeSpan.FromSeconds(20);
+
   async Task<bool> EnsureConnected()
   {
     // Ensure that a Steam session exists
@@ -432,9 +437,14 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       return false;
     }
 
-    // Bounded wait: during a Steam outage the session retries indefinitely,
-    // and D-Bus calls should fail fast rather than block for the whole outage
-    await this.session!.WaitLoggingInTask(TimeSpan.FromSeconds(20));
+    if (!await this.session!.WaitLoggingInTask(LoginWaitTimeout))
+    {
+      // The login is still in progress, not failed; report a timeout rather
+      // than a misleading NotLoggedIn so the UI does not show an auth loss
+      // for a transient blip
+      Console.WriteLine("EnsureConnected: Timed out waiting for login to complete");
+      throw DbusExceptionHelper.ThrowTimeout("Timed out waiting for Steam login to complete");
+    }
 
     if (!this.session.IsLoggedOn)
     {
@@ -858,7 +868,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     Console.WriteLine($"Installing app: {appIdString}");
     // Wait until fully logged in if login pending (might be reconnecting)
     if (session != null && session.IsPendingLogin)
-      await Task.WhenAny([session.WaitForReconnect(), Task.Delay(20000)]);
+      // Timeout passed into the wait itself so its callback-pumping loop
+      // exits too, instead of spinning abandoned for the whole outage
+      await session.WaitForReconnect(LoginWaitTimeout);
 
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
@@ -990,7 +1002,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     // Wait until fully logged in if login pending (might be reconnecting)
     if (!wantsOfflineMode && session != null && session.IsPendingLogin)
-      await Task.WhenAny([session.WaitForReconnect(), Task.Delay(20000)]);
+      // Timeout passed into the wait itself so its callback-pumping loop
+      // exits too, instead of spinning abandoned for the whole outage
+      await session.WaitForReconnect(LoginWaitTimeout);
 
     if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
     if (steamClientApp.updating)

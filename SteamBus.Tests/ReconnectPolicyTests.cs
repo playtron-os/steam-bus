@@ -53,23 +53,34 @@ public class ReconnectPolicyTests
   }
 
   [Test]
-  public void TestCurrentDelayDoesNotRecordFailure()
+  public void TestInteractiveDelayIsClamped()
   {
     var policy = NewPolicy();
 
-    policy.RecordFailureAndGetDelay();
-    policy.RecordFailureAndGetDelay();
+    for (var attempt = 0; attempt < 20; attempt++)
+    {
+      var delay = policy.RecordFailureAndGetDelay(interactive: true);
+      Assert.That(delay, Is.LessThanOrEqualTo(ReconnectPolicy.InteractiveMaxDelay),
+        $"Attempt #{policy.Attempts}: interactive delay {delay} should never exceed the clamp");
+      Assert.That(delay, Is.GreaterThan(TimeSpan.Zero));
+    }
+  }
+
+  [Test]
+  public void TestInteractiveClampStillRecordsFailures()
+  {
+    var policy = NewPolicy();
+
+    policy.RecordFailureAndGetDelay(interactive: true);
+    policy.RecordFailureAndGetDelay(interactive: true);
     Assert.That(policy.Attempts, Is.EqualTo(2));
 
-    policy.CurrentDelay();
-    policy.CurrentDelay();
-    Assert.That(policy.Attempts, Is.EqualTo(2));
-
-    // Before any failure it falls back to the first attempt's delay
-    var fresh = NewPolicy();
-    var (min, max) = JitterBounds(ReconnectPolicy.BaseDelay);
-    Assert.That(fresh.CurrentDelay(), Is.InRange(min, max));
-    Assert.That(fresh.Attempts, Is.EqualTo(0));
+    // Switching back to non-interactive continues the escalated curve
+    for (var attempt = 0; attempt < 10; attempt++)
+      policy.RecordFailureAndGetDelay(interactive: true);
+    var delay = policy.RecordFailureAndGetDelay();
+    Assert.That(delay, Is.GreaterThan(ReconnectPolicy.InteractiveMaxDelay),
+      "Non-interactive delay should follow the full exponential curve");
   }
 
   [Test]

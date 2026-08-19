@@ -21,6 +21,11 @@ public sealed class ReconnectPolicy
   /// Upper bound for the delay between reconnect attempts
   public static readonly TimeSpan MaxDelay = TimeSpan.FromMinutes(5);
 
+  /// Upper bound for the delay during an interactive login, where a user is
+  /// actively waiting at a login screen and minute-long gaps between the
+  /// capped attempts would read as a hang
+  public static readonly TimeSpan InteractiveMaxDelay = TimeSpan.FromSeconds(10);
+
   const double BackoffMultiplier = 2.0;
 
   // Randomizes each delay by up to +/-20% so that a fleet of devices does not
@@ -49,22 +54,17 @@ public sealed class ReconnectPolicy
     get { lock (attemptsLock) return attempts >= InteractiveMaxAttempts; }
   }
 
-  /// Records a failed attempt and returns how long to wait before the next one
-  public TimeSpan RecordFailureAndGetDelay()
+  /// Records a failed attempt and returns how long to wait before the next
+  /// one. Interactive attempts are clamped to InteractiveMaxDelay.
+  public TimeSpan RecordFailureAndGetDelay(bool interactive = false)
   {
     lock (attemptsLock)
     {
       attempts += 1;
-      return DelayForAttempt(attempts);
-    }
-  }
-
-  /// The delay for the current attempt count, without recording a new failure
-  public TimeSpan CurrentDelay()
-  {
-    lock (attemptsLock)
-    {
-      return DelayForAttempt(Math.Max(attempts, 1));
+      var delay = DelayForAttempt(attempts);
+      if (interactive && delay > InteractiveMaxDelay)
+        delay = InteractiveMaxDelay;
+      return delay;
     }
   }
 

@@ -69,12 +69,28 @@ public class SteamSession : IDisposable
   bool bIsConnectionRecovery;
   bool bSuppressReconnect; // Suppresses OnDisconnected's delayed reconnect during controlled recovery
   bool bReconnectScheduled; // A delayed reconnect task is waiting to run
+  // True once this session completed a logon, or was constructed from a saved
+  // refresh token; reconnection then needs no user interaction and retries
+  // indefinitely. Unlike checking logonDetails.AccessToken (which is assigned
+  // mid-login before the logon completes), this stays false while a user is
+  // still waiting at a login screen, so interactive logins keep their bounded
+  // give-up behavior.
+  bool bSessionEstablished;
   TaskCompletionSource? disconnectedTcs; // Signaled by OnDisconnected so callers can await disconnect
   readonly ReconnectPolicy reconnectPolicy = new();
+  // Serializes reconnect initiation so two initiators (delayed backoff task,
+  // OnLogIn retry, watchdog) can never stomp each other's in-flight handshake
+  readonly object reconnectLock = new();
+  // Cancelled only in Dispose(), unlike abortedToken which is cancelled by the
+  // first Disconnect() and never renewed even when the session is revived
+  readonly CancellationTokenSource disposedToken = new();
   // Interval between reconnect watchdog checks
   static readonly TimeSpan WatchdogInterval = TimeSpan.FromSeconds(60);
   // Wait before retrying a logon rejected with AlreadyLoggedInElsewhere
   static readonly TimeSpan AlreadyLoggedInRetryDelay = TimeSpan.FromSeconds(10);
+  // Bound on how long OnOnline waits for a re-login to complete; reconnection
+  // keeps retrying in the background after it elapses
+  static readonly TimeSpan ReloginWaitTimeout = TimeSpan.FromSeconds(60);
   int seq; // more hack fixes
   bool isLoadingLibrary = true;
   bool loggingInWithQrCode = false;
@@ -118,6 +134,7 @@ public class SteamSession : IDisposable
   {
     details.ShouldRememberPassword = true;
     this.logonDetails = details;
+    this.bSessionEstablished = details.AccessToken != null;
     this.authenticator = authenticator;
     this.SteamGuardData = steamGuardData;
     this.depotConfigStore = depotConfigStore;
@@ -178,6 +195,7 @@ public class SteamSession : IDisposable
   public void Dispose()
   {
     Abort(false);
+    disposedToken.Cancel();
 
     foreach (var sub in subscriptions)
       sub.Dispose();
@@ -193,15 +211,15 @@ public class SteamSession : IDisposable
     return this.logonDetails.Username != null;
   }
 
-  // True when we hold a refresh token from a previously established session,
-  // meaning reconnection can proceed without any user interaction. Such
-  // sessions retry indefinitely instead of giving up after a bounded number
-  // of attempts.
-  private bool HasStoredCredentials => this.logonDetails.AccessToken != null;
-
-  public async Task<bool> WaitUntilCallback(Action submitter, WaitCondition waiter)
+  // With a timeout, the wait gives up once the deadline passes even if the
+  // condition never became true; without one it only exits on the condition
+  // or bAborted, which for an established session retrying indefinitely can
+  // mean blocking for an entire Steam outage.
+  public async Task<bool> WaitUntilCallback(Action submitter, WaitCondition waiter, TimeSpan? timeout = null)
   {
-    while (!bAborted && !waiter())
+    var deadline = timeout == null ? DateTime.MaxValue : DateTime.UtcNow + timeout.Value;
+
+    while (!bAborted && !waiter() && DateTime.UtcNow < deadline)
     {
       lock (steamLock)
       {
@@ -216,7 +234,7 @@ public class SteamSession : IDisposable
           Callbacks.RunWaitCallbacks(TimeSpan.FromSeconds(1));
         }
         await Task.Delay(1);
-      } while (!bAborted && this.seq == seq && !waiter());
+      } while (!bAborted && this.seq == seq && !waiter() && DateTime.UtcNow < deadline);
 
       await Task.Delay(1);
     }
@@ -229,18 +247,18 @@ public class SteamSession : IDisposable
     subscriptions.Add(Callbacks.Subscribe(callback));
   }
 
-  public async Task<bool> WaitForReconnect()
+  public async Task<bool> WaitForReconnect(TimeSpan? timeout = null)
   {
-    await WaitUntilCallback(() => { }, () => (IsLoggedOn && !IsPendingLogin) || bAborted);
+    await WaitUntilCallback(() => { }, () => (IsLoggedOn && !IsPendingLogin) || bAborted, timeout);
     return IsLoggedOn;
   }
 
-  public async Task<bool> WaitForCredentials()
+  public async Task<bool> WaitForCredentials(TimeSpan? timeout = null)
   {
     if ((IsLoggedOn && !IsPendingLogin) || bAborted)
       return IsLoggedOn;
 
-    await WaitUntilCallback(() => { }, () => IsLoggedOn && !IsPendingLogin);
+    await WaitUntilCallback(() => { }, () => IsLoggedOn && !IsPendingLogin, timeout);
 
     return IsLoggedOn;
   }
@@ -572,15 +590,24 @@ public class SteamSession : IDisposable
   }
 
 
-  public async Task Login()
+  // Parameterless overload kept so method-group callers (Task.Run(session.Login))
+  // still compile
+  public Task Login() => Login(null);
+
+  // A bounded credentialsTimeout stops the wait, not the login itself: the
+  // reconnect machinery keeps retrying in the background, which for an
+  // established session can outlast any caller's patience during an outage.
+  public async Task Login(TimeSpan? credentialsTimeout)
   {
     Console.WriteLine("Connecting to Steam...");
     this.Connect();
     OnAuthUpdated?.Invoke();
 
-    if (!await this.WaitForCredentials())
+    if (!await this.WaitForCredentials(credentialsTimeout))
     {
-      Console.WriteLine("Unable to get Steam credentials");
+      Console.WriteLine(credentialsTimeout == null
+        ? "Unable to get Steam credentials"
+        : $"Login: Not logged on after {credentialsTimeout.Value.TotalSeconds:F0}s, reconnection continues in the background");
       return;
     }
 
@@ -605,17 +632,31 @@ public class SteamSession : IDisposable
 
   // Waits for any in-progress login to finish. Since an established session
   // retries indefinitely while Steam is unreachable, callers can pass a
-  // timeout to fail fast instead of blocking for the whole outage.
-  public async Task WaitLoggingInTask(TimeSpan? timeout = null)
+  // timeout to fail fast instead of blocking for the whole outage. Returns
+  // false when the timeout elapsed with the login still in progress, so
+  // callers can distinguish "login pending" from "login finished but failed".
+  public async Task<bool> WaitLoggingInTask(TimeSpan? timeout = null)
   {
     var task = loggingInTask?.Task;
     if (task == null)
-      return;
+      return true;
 
     if (timeout == null)
+    {
       await task;
-    else
-      await Task.WhenAny(task, Task.Delay(timeout.Value));
+      return true;
+    }
+
+    try
+    {
+      await task.WaitAsync(timeout.Value);
+      return true;
+    }
+    catch (TimeoutException)
+    {
+      Console.WriteLine($"WaitLoggingInTask: Login still in progress after {timeout.Value.TotalSeconds:F0}s");
+      return false;
+    }
   }
 
   void FinishLoggingInTask()
@@ -627,22 +668,65 @@ public class SteamSession : IDisposable
 
   void Connect()
   {
-    Console.WriteLine($"Connect: called. bIsConnectionRecovery={bIsConnectionRecovery}, bAborted={bAborted}, bConnecting={bConnecting}, IsConnected={SteamClient.IsConnected}");
+    lock (reconnectLock)
+    {
+      Console.WriteLine($"Connect: called. bIsConnectionRecovery={bIsConnectionRecovery}, bAborted={bAborted}, bConnecting={bConnecting}, IsConnected={SteamClient.IsConnected}");
 
-    waitingToRetry = false;
-    bAborted = false;
-    bConnecting = true;
-    authSession = null;
-    loggingInTask ??= new TaskCompletionSource();
+      waitingToRetry = false;
+      bAborted = false;
+      bConnecting = true;
+      authSession = null;
+      loggingInTask ??= new TaskCompletionSource();
 
-    if (!bIsConnectionRecovery)
-      reconnectPolicy.Reset();
+      if (!bIsConnectionRecovery)
+        reconnectPolicy.Reset();
 
-    bIsConnectionRecovery = false;
+      bIsConnectionRecovery = false;
 
-    ResetConnectionFlags();
-    this.SteamClient.Connect();
-    Console.WriteLine("Connect: SteamClient.Connect() called");
+      ResetConnectionFlags();
+      this.SteamClient.Connect();
+      Console.WriteLine("Connect: SteamClient.Connect() called");
+    }
+  }
+
+
+  // Single entry point for background-initiated reconnect attempts (the
+  // delayed backoff task, the OnLogIn retry and the watchdog). Atomically
+  // claims the in-flight slot via bConnecting and performs the same flag
+  // bookkeeping as Connect(), so two initiators can never stomp each other's
+  // handshake — SteamKit surfaces a Connect() over a pending connection as a
+  // user-initiated disconnect, which would permanently abort the session.
+  private bool TryStartReconnect(string source)
+  {
+    lock (reconnectLock)
+    {
+      if (bAborted || bSuppressReconnect || bConnecting || SteamClient.IsConnected)
+      {
+        Console.WriteLine($"{source}: Skipping reconnect. bAborted={bAborted}, bSuppressReconnect={bSuppressReconnect}, bConnecting={bConnecting}, IsConnected={SteamClient.IsConnected}");
+        return false;
+      }
+
+      bConnecting = true;
+      waitingToRetry = false;
+      // This attempt is an organic retry: if it fails, OnDisconnected must
+      // escalate the backoff rather than loop on the short recovery delay
+      bIsConnectionRecovery = false;
+      loggingInTask ??= new TaskCompletionSource();
+      ResetConnectionFlags();
+
+      Console.WriteLine($"{source}: Starting reconnect attempt");
+      try
+      {
+        SteamClient.Connect();
+        return true;
+      }
+      catch (Exception exception)
+      {
+        Console.Error.WriteLine($"{source}: SteamClient.Connect() failed, err:{exception}");
+        bConnecting = false;
+        return false;
+      }
+    }
   }
 
 
@@ -707,29 +791,37 @@ public class SteamSession : IDisposable
 
   // Last-resort recovery loop: if the session should be connected but no
   // reconnect is in flight (e.g. a state-flag race dropped the retry chain),
-  // kick one off. Runs until the session is aborted/disposed.
+  // kick one off. Runs until the session is disposed — deliberately not tied
+  // to abortedToken, which the first Disconnect() cancels permanently even
+  // when the session is later revived (e.g. the Steam Guard re-login path).
   private async Task RunReconnectWatchdog()
   {
-    while (!abortedToken.IsCancellationRequested)
+    while (!disposedToken.IsCancellationRequested)
     {
       try
       {
-        await Task.Delay(WatchdogInterval, abortedToken.Token);
+        await Task.Delay(WatchdogInterval, disposedToken.Token);
       }
       catch (OperationCanceledException)
       {
         return;
       }
 
-      if (bAborted || IsLoggedOn || bConnecting || bReconnectScheduled || bSuppressReconnect || waitingToRetry)
-        continue;
-      if (!isOnline || !HasStoredCredentials || SteamClient.IsConnected)
-        continue;
+      try
+      {
+        if (bAborted || IsLoggedOn || bConnecting || bReconnectScheduled || bSuppressReconnect || waitingToRetry)
+          continue;
+        if (!isOnline || !bSessionEstablished || SteamClient.IsConnected)
+          continue;
 
-      Console.WriteLine("ReconnectWatchdog: Session is disconnected with no reconnect in flight, forcing a reconnect");
-      loggingInTask ??= new TaskCompletionSource();
-      ResetConnectionFlags();
-      SteamClient.Connect();
+        Console.WriteLine("ReconnectWatchdog: Session is disconnected with no reconnect in flight, forcing a reconnect");
+        TryStartReconnect("ReconnectWatchdog");
+      }
+      catch (Exception exception)
+      {
+        // The watchdog is the safety net; it must outlive any single failure
+        Console.Error.WriteLine($"ReconnectWatchdog: Unexpected error, err:{exception}");
+      }
     }
   }
 
@@ -1015,7 +1107,10 @@ public class SteamSession : IDisposable
 
       Console.WriteLine("OnOnline: Previous session exists (not recovery), trying to re-login to steam");
 
-      await Login();
+      // Bounded wait so the OnOnline handler (and whatever awaits it in
+      // playserve) is not blocked for a whole Steam outage while the session
+      // keeps retrying in the background
+      await Login(ReloginWaitTimeout);
       if (IsLoggedOn)
         OnAuthUpdated?.Invoke();
     }
@@ -1056,8 +1151,14 @@ public class SteamSession : IDisposable
     // check below sees the already-cleared value and falls through to the abort path.
     var suppressReconnect = bSuppressReconnect;
     var isConnectionRecovery = bIsConnectionRecovery;
+    var wasConnecting = bConnecting;
 
-    Console.WriteLine($"OnDisconnected: bIsConnectionRecovery={bIsConnectionRecovery}, UserInitiated={disconnected.UserInitiated}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, bAborted={bAborted}, bSuppressReconnect={bSuppressReconnect}, bConnecting={bConnecting}, isOnline={isOnline}, reconnectAttempts={reconnectPolicy.Attempts}");
+    // The attempt (if any) that produced this disconnect is over. Left
+    // latched, every later reconnect initiator would treat the dead
+    // connection as an attempt in flight and skip forever.
+    bConnecting = false;
+
+    Console.WriteLine($"OnDisconnected: bIsConnectionRecovery={isConnectionRecovery}, UserInitiated={disconnected.UserInitiated}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, bAborted={bAborted}, bSuppressReconnect={suppressReconnect}, bConnecting={wasConnecting}, isOnline={isOnline}, waitingToRetry={waitingToRetry}, reconnectAttempts={reconnectPolicy.Attempts}");
 
     // Signal any caller awaiting this disconnect
     disconnectedTcs?.TrySetResult();
@@ -1076,12 +1177,12 @@ public class SteamSession : IDisposable
       // Any operations outstanding need to be aborted
       bAborted = true;
     }
-    else if (!HasStoredCredentials && reconnectPolicy.HasExceededInteractiveAttempts)
+    else if (!bSessionEstablished && reconnectPolicy.HasExceededInteractiveAttempts)
     {
       // Only interactive logins give up: a user is waiting at the login
-      // screen. Established sessions (stored refresh token) retry
-      // indefinitely below, because Steam outages such as the weekly CM
-      // maintenance can last far longer than any bounded retry window.
+      // screen. Established sessions retry indefinitely below, because Steam
+      // outages such as the weekly CM maintenance can last far longer than
+      // any bounded retry window.
       Console.WriteLine($"OnDisconnected: Could not connect to Steam after {ReconnectPolicy.InteractiveMaxAttempts} attempts during interactive login");
       Abort(false);
       OnAuthError?.Invoke(DbusErrors.Timeout);
@@ -1090,11 +1191,25 @@ public class SteamSession : IDisposable
     {
       if (isOnline)
       {
+        if (waitingToRetry)
+        {
+          // An OnLogIn retry task owns this cycle — the CM often drops the
+          // socket right after rejecting a logon. Recording a second failure
+          // here would double-escalate the backoff, and scheduling a second
+          // reconnect would race the pending retry.
+          Console.WriteLine("OnDisconnected: OnLogIn retry pending, deferring reconnection to it");
+          loggingInTask ??= new TaskCompletionSource();
+          OnAuthUpdated?.Invoke();
+          return;
+        }
+
         // A recovery reconnect keeps the short base delay; only organic
         // failures escalate the backoff
-        var delay = isConnectionRecovery ? ReconnectPolicy.BaseDelay : reconnectPolicy.RecordFailureAndGetDelay();
+        var delay = isConnectionRecovery
+          ? ReconnectPolicy.BaseDelay
+          : reconnectPolicy.RecordFailureAndGetDelay(interactive: !bSessionEstablished);
 
-        if (bConnecting)
+        if (wasConnecting)
         {
           Console.WriteLine($"OnDisconnected: Connection to Steam failed. Trying again (#{reconnectPolicy.Attempts})...");
         }
@@ -1112,29 +1227,33 @@ public class SteamSession : IDisposable
           try
           {
             Console.WriteLine($"OnDisconnected: Waiting {delay.TotalSeconds:F1}s before reconnect attempt...");
-            await Task.Delay(delay);
+            try
+            {
+              await Task.Delay(delay, disposedToken.Token);
+            }
+            catch (OperationCanceledException)
+            {
+              Console.WriteLine("OnDisconnected: Reconnect cancelled (session disposed)");
+              return;
+            }
+
             if (bAborted)
             {
               Console.WriteLine("OnDisconnected: Reconnect cancelled (bAborted=true)");
               return;
             }
 
-            // With backoff delays up to minutes, another path (e.g. OnOnline
-            // recovery) may have re-established the connection while we
-            // waited; connecting again would tear down the healthy connection
-            if (SteamClient.IsConnected || bConnecting || bSuppressReconnect)
-            {
-              Console.WriteLine($"OnDisconnected: Skipping delayed reconnect - connection already being re-established. IsConnected={SteamClient.IsConnected}, bConnecting={bConnecting}, bSuppressReconnect={bSuppressReconnect}");
-              return;
-            }
-
             if (reconnectPolicy.ShouldRefreshServerList())
               await RefreshServerList();
 
-            Console.WriteLine($"OnDisconnected: Executing delayed reconnect. bIsConnectionRecovery={bIsConnectionRecovery}, IsConnected={SteamClient.IsConnected}");
-            // Any connection related flags need to be reset here to match the state after Connect
-            ResetConnectionFlags();
-            SteamClient.Connect();
+            // TryStartReconnect atomically skips if another path (e.g.
+            // OnOnline recovery) re-established the connection while we
+            // waited; connecting again would tear down the healthy connection
+            TryStartReconnect("OnDisconnected");
+          }
+          catch (Exception exception)
+          {
+            Console.Error.WriteLine($"OnDisconnected: Delayed reconnect failed, err:{exception}");
           }
           finally
           {
@@ -1211,7 +1330,7 @@ public class SteamSession : IDisposable
     var isRetryableLogOnResult = loggedOn.Result == EResult.TryAnotherCM
       || loggedOn.Result == EResult.AlreadyLoggedInElsewhere
       || loggedOn.Result == EResult.NoConnection
-      || (loggedOn.Result == EResult.ServiceUnavailable && HasStoredCredentials);
+      || (loggedOn.Result == EResult.ServiceUnavailable && bSessionEstablished);
 
     if (isRetryableLogOnResult)
     {
@@ -1220,16 +1339,50 @@ public class SteamSession : IDisposable
         if (waitingToRetry) return;
 
         waitingToRetry = true;
-        var delay = loggedOn.Result == EResult.AlreadyLoggedInElsewhere
-          ? AlreadyLoggedInRetryDelay
-          : reconnectPolicy.RecordFailureAndGetDelay();
+
+        TimeSpan delay;
+        if (loggedOn.Result == EResult.AlreadyLoggedInElsewhere)
+        {
+          delay = AlreadyLoggedInRetryDelay;
+        }
+        else
+        {
+          delay = reconnectPolicy.RecordFailureAndGetDelay(interactive: !bSessionEstablished);
+          if (!bSessionEstablished && reconnectPolicy.HasExceededInteractiveAttempts)
+          {
+            // Same bounded give-up as OnDisconnected: a user is waiting at
+            // the login screen and must eventually see an error
+            Console.WriteLine($"OnLogIn: Could not log in to Steam after {ReconnectPolicy.InteractiveMaxAttempts} attempts during interactive login ({loggedOn.Result})");
+            Abort(false);
+            OnAuthError?.Invoke(DbusErrors.Timeout);
+            return;
+          }
+        }
+
         Console.WriteLine($"OnLogIn: Waiting {delay.TotalSeconds:F1}s before retrying ({loggedOn.Result}, attempt #{reconnectPolicy.Attempts})...");
-        await Task.Delay(delay);
-        if (!waitingToRetry || bAborted) return;
+        try
+        {
+          await Task.Delay(delay, disposedToken.Token);
+        }
+        catch (OperationCanceledException)
+        {
+          return;
+        }
+
+        // IsLoggedOn check: another reconnect path may have re-established
+        // the session during the delay; tearing it down again would cause
+        // periodic churn
+        if (!waitingToRetry || bAborted || IsLoggedOn) return;
 
         Console.WriteLine($"Retrying Steam3 connection ({loggedOn.Result})...");
 
-        Reconnect();
+        // Reconnect() relies on the disconnect callback to drive the retry,
+        // which never fires if the CM already dropped the socket while we
+        // waited; connect directly in that case
+        if (SteamClient.IsConnected)
+          Reconnect();
+        else
+          TryStartReconnect("OnLogIn");
       });
 
       return;
@@ -1263,6 +1416,7 @@ public class SteamSession : IDisposable
 
     bIsConnectionRecovery = false;
     bAborted = false;
+    bSessionEstablished = true;
     reconnectPolicy.Reset();
     SaveToken();
     steamConnectionConfig.SaveCellId(loggedOn.CellID);
