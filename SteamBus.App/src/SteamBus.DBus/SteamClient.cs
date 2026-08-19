@@ -432,7 +432,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       return false;
     }
 
-    await this.session!.WaitLoggingInTask();
+    // Bounded wait: during a Steam outage the session retries indefinitely,
+    // and D-Bus calls should fail fast rather than block for the whole outage
+    await this.session!.WaitLoggingInTask(TimeSpan.FromSeconds(20));
 
     if (!this.session.IsLoggedOn)
     {
