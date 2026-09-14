@@ -15,6 +15,7 @@ public class SteamClientApp
 
     private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan STEAM_UPDATE_RESTART_TIMEOUT = TimeSpan.FromMinutes(2);
 
     private const string COMMAND = "steam";
     private static string[] ARGUMENTS = [
@@ -43,6 +44,8 @@ public class SteamClientApp
     private TaskCompletionSource? startingTask;
     public TaskCompletionSource? readyTask { get; private set; }
     private TaskCompletionSource? endingTask;
+    private Task? updateInstalledWatchdog;
+    private readonly object updateLock = new();
 
     private DisplayManager displayManager;
     private DepotConfigStore appsDepotConfigStore;
@@ -68,6 +71,21 @@ public class SteamClientApp
         return $"{BaseDirectory.DataHome}/steambus/tools/steam";
     }
 
+    // Only printed once a logged in client shows its UI
+    public static bool IsClientUiLine(string line) =>
+        line.Contains("Desktop state changed") || line.Contains("reaping pid:");
+
+    public static bool IsClientStartedLine(string line) =>
+        IsClientUiLine(line) || line.Contains("Starting steamwebhelper");
+
+    // Also printed on a headless display with no account logged in (fresh install)
+    public static bool IsClientRunningLine(string line) =>
+        IsClientStartedLine(line) || line.Contains("steam-runtime-launcher-service is running");
+
+    // Printed by the bootstrapper right before it restarts the updated client
+    public static bool IsUpdateInstalledLine(string line) =>
+        line.Contains("Update complete");
+
     public async Task Start(uint accountId, string forAppId, string username, bool offlineMode)
     {
         this.forAppId = forAppId;
@@ -88,6 +106,7 @@ public class SteamClientApp
         startingTask = new();
         updateStartedTask = new();
         updateEndedTask = new();
+        updateInstalledWatchdog = null;
 
         running = true;
         isReady = false;
@@ -192,7 +211,7 @@ public class SteamClientApp
         if (string.IsNullOrEmpty(e.Data)) return;
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
 
-        var hasRunningString = e.Data.Contains("Desktop state changed") || e.Data.Contains("reaping pid:");
+        var hasRunningString = IsClientUiLine(e.Data);
 
         // Client starting up, so reset initial variables
         if (e.Data.Contains("Running Steam on"))
@@ -206,23 +225,17 @@ public class SteamClientApp
             if (readyTask == null) readyTask = new();
         }
 
+        // Mark update as complete once the restarted client runs, a client without an account never prints the UI lines
+        if (updating && IsClientRunningLine(e.Data))
+            OnUpdateCompleted();
+
+        // Fallback in case the restarted client output is not recognised
+        if (updating && IsUpdateInstalledLine(e.Data))
+            StartUpdateInstalledWatchdog();
+
         // Mark steam client as started when it outputs this string
-        if (startingTask != null && (hasRunningString || e.Data.Contains("Starting steamwebhelper")))
+        if (startingTask != null && IsClientStartedLine(e.Data))
         {
-            // If an update was happening, mark it as complete
-            if (updating)
-            {
-                toolsDepotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
-                toolsDepotConfigStore.Save(STEAM_CLIENT_APP_ID);
-
-                Console.WriteLine("Steam client update has completed");
-                updating = false;
-                OnDependencyInstallCompleted?.Invoke(STEAM_CLIENT_APP_ID.ToString());
-
-                updateEndedTask?.TrySetResult();
-                updateEndedTask = null;
-            }
-
             Console.WriteLine("Steam client has started");
 
             startingTask.TrySetResult();
@@ -390,6 +403,43 @@ public class SteamClientApp
         }
     }
 
+    private void OnUpdateCompleted()
+    {
+        lock (updateLock)
+        {
+            if (!updating) return;
+            updating = false;
+        }
+
+        toolsDepotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, null);
+        toolsDepotConfigStore.Save(STEAM_CLIENT_APP_ID);
+
+        Console.WriteLine("Steam client update has completed");
+        OnDependencyInstallCompleted?.Invoke(STEAM_CLIENT_APP_ID.ToString());
+
+        updateInstalledWatchdog = null;
+        updateEndedTask?.TrySetResult();
+        updateEndedTask = null;
+    }
+
+    private void StartUpdateInstalledWatchdog()
+    {
+        if (updateInstalledWatchdog != null) return;
+
+        var endedTask = updateEndedTask;
+        updateInstalledWatchdog = Task.Run(async () =>
+        {
+            await Task.Delay(STEAM_UPDATE_RESTART_TIMEOUT);
+
+            // Client is still alive after the update was installed, an exit would have failed it in OnExited
+            if (updating && running && endedTask != null && ReferenceEquals(updateEndedTask, endedTask))
+            {
+                Console.Error.WriteLine("Timed out waiting for the restarted steam client to report it is running, assuming the update completed");
+                OnUpdateCompleted();
+            }
+        });
+    }
+
     private void OnExited(object? sender, EventArgs e)
     {
         // Reload depot config store in case steam client changed the manifests
@@ -398,10 +448,16 @@ public class SteamClientApp
         Console.WriteLine($"Steam client exited with code {process?.ExitCode}");
         process = null;
 
-        if (updating)
+        updateInstalledWatchdog = null;
+        bool wasUpdating;
+        lock (updateLock)
+        {
+            wasUpdating = updating;
+            updating = false;
+        }
+        if (wasUpdating)
         {
             Console.WriteLine("Steam client update has failed");
-            updating = false;
             OnDependencyInstallFailed?.Invoke((STEAM_CLIENT_APP_ID.ToString(), DbusErrors.DownloadFailed));
         }
 
