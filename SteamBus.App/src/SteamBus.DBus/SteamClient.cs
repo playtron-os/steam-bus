@@ -330,6 +330,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     {
       Console.WriteLine("Triggering steam client update");
 
+      // Set once the update is in progress, an exit of the client from then on is reported as failed by the client itself
+      var awaitingUpdateEnd = false;
+
       try
       {
         try
@@ -339,6 +342,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
           if (!steamClientApp.updating)
           {
             Console.WriteLine("No update is needed for steam client");
+
+            // Wait for the client to exit before reporting, so a launch right after does not run into a client that is shutting down
+            await steamClientApp.ShutdownSteamWithTimeoutAsync(SteamClientApp.STEAM_HEADLESS_SHUTDOWN_TIMEOUT);
             OnDependencyInstallCompleted?.Invoke(SteamClientApp.STEAM_CLIENT_APP_ID.ToString());
             return;
           }
@@ -349,6 +355,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
             throw;
         }
 
+        awaitingUpdateEnd = true;
         if (steamClientApp.updateEndedTask != null) await steamClientApp.updateEndedTask.Task;
 
         Console.WriteLine("Steam client update finished successfully");
@@ -357,8 +364,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       {
         Console.Error.WriteLine($"Error occurred when performing steam client update, err:{exception}");
 
-        // A cancelled update was already reported as failed when the client exited
-        if (exception is not TaskCanceledException)
+        // A cancelled update was already reported as failed when the client exited, any other cancellation was not
+        if (!(awaitingUpdateEnd && exception is TaskCanceledException))
           OnDependencyInstallFailed?.Invoke((SteamClientApp.STEAM_CLIENT_APP_ID.ToString(), exception is DBusException dbusException ? dbusException.ErrorName : DbusErrors.DependencyError));
       }
       finally

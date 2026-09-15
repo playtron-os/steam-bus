@@ -16,6 +16,7 @@ public class SteamClientApp
     private static readonly TimeSpan STEAM_FORCEFULLY_QUIT_TIMEOUT = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan STEAM_START_TIMEOUT = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan STEAM_UPDATE_RESTART_TIMEOUT = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan STEAM_HEADLESS_SHUTDOWN_TIMEOUT = TimeSpan.FromSeconds(8);
 
     private const string COMMAND = "steam";
     private static string[] ARGUMENTS = [
@@ -47,6 +48,7 @@ public class SteamClientApp
     private TaskCompletionSource? endingTask;
     private Task? updateInstalledWatchdog;
     private readonly object updateLock = new();
+    private bool waitForUi = true;
 
     private DisplayManager displayManager;
     private DepotConfigStore appsDepotConfigStore;
@@ -91,6 +93,7 @@ public class SteamClientApp
     public async Task Start(uint accountId, string forAppId, string username, bool offlineMode, bool waitForUi = true)
     {
         this.forAppId = forAppId;
+        this.waitForUi = waitForUi;
 
         if (startingTask != null) await startingTask.Task;
         if (endingTask != null) await endingTask.Task;
@@ -229,13 +232,15 @@ public class SteamClientApp
             if (readyTask == null) readyTask = new();
         }
 
-        // Mark update as complete once the restarted client runs, a client without an account never prints the UI lines
+        // Mark update as complete once the restarted client runs, a client without an account never prints the UI lines.
+        // startingTask is only set while a client is (re)starting, so a background update of an already running
+        // client is not completed by the lines that client prints before it restarts
         if (IsClientRunningLine(e.Data))
         {
             runningTask?.TrySetResult();
             runningTask = null;
 
-            if (updating)
+            if (updating && startingTask != null)
                 OnUpdateCompleted();
         }
 
@@ -243,8 +248,8 @@ public class SteamClientApp
         if (updating && IsUpdateInstalledLine(e.Data))
             StartUpdateInstalledWatchdog();
 
-        // Mark steam client as started when it outputs this string
-        if (startingTask != null && IsClientStartedLine(e.Data))
+        // Mark steam client as started when it outputs this string, a client that never shows a UI is started once it runs
+        if (startingTask != null && (IsClientStartedLine(e.Data) || (!waitForUi && IsClientRunningLine(e.Data))))
         {
             Console.WriteLine("Steam client has started");
 
