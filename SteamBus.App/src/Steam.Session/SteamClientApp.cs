@@ -42,6 +42,7 @@ public class SteamClientApp
     private TaskCompletionSource? updateStartedTask;
     public TaskCompletionSource? updateEndedTask { get; private set; }
     private TaskCompletionSource? startingTask;
+    private TaskCompletionSource? runningTask;
     public TaskCompletionSource? readyTask { get; private set; }
     private TaskCompletionSource? endingTask;
     private Task? updateInstalledWatchdog;
@@ -86,7 +87,8 @@ public class SteamClientApp
     public static bool IsUpdateInstalledLine(string line) =>
         line.Contains("Update complete");
 
-    public async Task Start(uint accountId, string forAppId, string username, bool offlineMode)
+    // waitForUi: false returns as soon as the client runs, a client without an account never shows a UI
+    public async Task Start(uint accountId, string forAppId, string username, bool offlineMode, bool waitForUi = true)
     {
         this.forAppId = forAppId;
 
@@ -104,6 +106,7 @@ public class SteamClientApp
         }
 
         startingTask = new();
+        runningTask = new();
         updateStartedTask = new();
         updateEndedTask = new();
         updateInstalledWatchdog = null;
@@ -175,7 +178,8 @@ public class SteamClientApp
         using var cts = new CancellationTokenSource(STEAM_START_TIMEOUT);
         var timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
 
-        var completedTask = await Task.WhenAny(startingTask.Task, updateStartedTask.Task, processEndTask, timeoutTask);
+        var startedTask = waitForUi ? startingTask.Task : runningTask.Task;
+        var completedTask = await Task.WhenAny(startedTask, updateStartedTask.Task, processEndTask, timeoutTask);
 
         if (completedTask == updateStartedTask?.Task)
         {
@@ -226,8 +230,14 @@ public class SteamClientApp
         }
 
         // Mark update as complete once the restarted client runs, a client without an account never prints the UI lines
-        if (updating && IsClientRunningLine(e.Data))
-            OnUpdateCompleted();
+        if (IsClientRunningLine(e.Data))
+        {
+            runningTask?.TrySetResult();
+            runningTask = null;
+
+            if (updating)
+                OnUpdateCompleted();
+        }
 
         // Fallback in case the restarted client output is not recognised
         if (updating && IsUpdateInstalledLine(e.Data))
@@ -466,6 +476,8 @@ public class SteamClientApp
         endingTask = null;
         startingTask?.TrySetCanceled();
         startingTask = null;
+        runningTask?.TrySetCanceled();
+        runningTask = null;
         readyTask?.TrySetResult();
         readyTask = null;
         updateEndedTask?.TrySetCanceled();

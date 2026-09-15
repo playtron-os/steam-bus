@@ -334,13 +334,12 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       {
         try
         {
-          await steamClientApp.Start(0, "", "", false);
+          await steamClientApp.Start(0, "", "", false, waitForUi: false);
 
           if (!steamClientApp.updating)
           {
             Console.WriteLine("No update is needed for steam client");
             OnDependencyInstallCompleted?.Invoke(SteamClientApp.STEAM_CLIENT_APP_ID.ToString());
-            steamClientApp.RunSteamShutdown();
             return;
           }
         }
@@ -357,6 +356,10 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       catch (Exception exception)
       {
         Console.Error.WriteLine($"Error occurred when performing steam client update, err:{exception}");
+
+        // A cancelled update was already reported as failed when the client exited
+        if (exception is not TaskCanceledException)
+          OnDependencyInstallFailed?.Invoke((SteamClientApp.STEAM_CLIENT_APP_ID.ToString(), exception is DBusException dbusException ? dbusException.ErrorName : DbusErrors.DependencyError));
       }
       finally
       {
