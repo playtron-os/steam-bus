@@ -1136,7 +1136,7 @@ public class ContentDownloader
       for (var i = depotsToDownload.Count - 1; i >= 0; i--)
       {
         // For each depot, remove all files from the list that have been claimed by a later depot
-        depotsToDownload[i].filteredFiles.RemoveAll(file => claimedFileNames.Contains(file.FileName));
+        depotsToDownload[i].filteredFiles.RemoveAll(file => claimedFileNames.Contains(file.FileName, StringComparer.OrdinalIgnoreCase));
 
         claimedFileNames.UnionWith(depotsToDownload[i].allFileNames);
       }
@@ -1408,8 +1408,8 @@ public class ContentDownloader
     {
       allFileNames.Add(file.FileName);
 
-      var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-      var fileStagingPath = Path.Combine(stagingDir, file.FileName);
+      var fileFinalPath = FileUtils.CaseInsensitiveLookup(Path.Combine(depot.InstallDir, file.FileName), depot.InstallDir);
+      var fileStagingPath = FileUtils.CaseInsensitiveLookup(Path.Combine(stagingDir, file.FileName), stagingDir);
 
       if (file.Flags.HasFlag(EDepotFileFlag.Directory))
       {
@@ -1685,11 +1685,11 @@ public class ContentDownloader
     DepotManifest.FileData? oldManifestFile = null;
     if (oldProtoManifest != null)
     {
-      oldManifestFile = oldProtoManifest.Files?.SingleOrDefault(f => f.FileName == file.FileName);
+      oldManifestFile = oldProtoManifest.Files?.SingleOrDefault(f => String.Equals(f.FileName, file.FileName, StringComparison.OrdinalIgnoreCase));
     }
 
-    var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-    var fileStagingPath = Path.Combine(stagingDir, file.FileName);
+    var fileFinalPath = FileUtils.CaseInsensitiveLookup(Path.Combine(depot.InstallDir, file.FileName), depot.InstallDir);
+    var fileStagingPath = FileUtils.CaseInsensitiveLookup(Path.Combine(stagingDir, file.FileName), stagingDir);
 
     // This may still exist if the previous run exited before cleanup
     if (File.Exists(fileStagingPath))
@@ -2058,7 +2058,8 @@ public class ContentDownloader
       try
       {
         await fileStreamData.fileLock.WaitAsync().ConfigureAwait(false);
-
+        // We do the lookup while in the lock here, to avoid issues in case other task creates this file
+        fileFinalPath = FileUtils.CaseInsensitiveLookup(fileFinalPath, depot.InstallDir);
         if (fileStreamData.fileStream == null)
           fileStreamData.fileStream = File.Open(fileFinalPath, FileMode.Open);
 
@@ -2175,7 +2176,7 @@ public class ContentDownloader
 
     filename = filename.Replace('\\', '/');
 
-    if (this.options.FilesToDownload?.Contains(filename) == true)
+    if (this.options.FilesToDownload?.Contains(filename, StringComparer.OrdinalIgnoreCase) == true)
     {
       return true;
     }

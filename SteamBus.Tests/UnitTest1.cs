@@ -97,4 +97,27 @@ public class Tests
       Console.WriteLine("Value: {0}", value.AsUnsignedInteger());
     }
   }
+
+  [Test]
+  public void TestCaseLookup()
+  {
+    var filePath1 = $"{GetTestDataDirectory()}/tmp";
+    var filePath2 = $"{GetTestDataDirectory()}/Tmp";
+
+    var nestedPath1 = $"{GetTestDataDirectory()}/tmp2/test123/";
+    var nestedPath2 = $"{GetTestDataDirectory()}/tmp2/Test123/dirEctory4";
+
+    Directory.CreateDirectory(filePath1);
+    Directory.CreateDirectory(nestedPath1);
+    var casefoldpath1 = FileUtils.CaseInsensitiveLookup(filePath2, GetTestDataDirectory());
+    var casefoldpath2 = FileUtils.CaseInsensitiveLookup(nestedPath2, GetTestDataDirectory());
+
+    Directory.Delete(filePath1);
+    Directory.Delete($"{GetTestDataDirectory()}/tmp2", true);
+    Assert.Multiple(() =>
+    {
+      Assert.That(casefoldpath1, Is.EqualTo(filePath1));
+      Assert.That(casefoldpath2, Does.StartWith(casefoldpath1));
+    });
+  }
 }
