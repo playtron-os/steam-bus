@@ -1197,7 +1197,12 @@ public class DepotConfigStore
         Action<(string appId, string installFolder)>? OnMoveItemCompleted,
         Action<(string appId, string error)>? OnMoveItemFailed)
     {
-        if (_moveCancellationTokenMap.ContainsKey(appId)) return;
+        if (_moveCancellationTokenMap.ContainsKey(appId))
+        {
+            Console.Error.WriteLine($"Move already in progress for app:{appId}");
+            OnMoveItemFailed?.Invoke((appId.ToString(), DbusErrors.DownloadInProgress));
+            return;
+        }
         var cts = new CancellationTokenSource();
         _moveCancellationTokenMap.Add(appId, cts);
 
