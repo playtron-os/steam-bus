@@ -142,19 +142,21 @@ public class LibraryFoldersConfig
         else
             installPath = Path.Join(mountPoint, "SteamLibrary");
 
-        var child = data!.Children.Find((child) => child["path"].AsString() == installPath);
-        if (child != null) return;
-
-        var index = data!.Children.Count.ToString();
-        var newEntry = new KeyValue(index);
-        newEntry["path"] = new KeyValue("path", installPath);
-        newEntry["label"] = new KeyValue("label", "");
-        newEntry["contentid"] = new KeyValue("contentid", "");
-        newEntry["totalsize"] = new KeyValue("totalsize", "0");
-        newEntry["update_clean_bytes_tally"] = new KeyValue("update_clean_bytes_tally", "0");
-        newEntry["time_last_update_verified"] = new KeyValue("time_last_update_verified", "0");
-        newEntry["apps"] = new KeyValue("apps");
-        data[index] = newEntry;
+        // The folder and its config are still created for an existing entry, a previous attempt may have failed
+        var isNewEntry = data!.Children.Find((child) => child["path"].AsString() == installPath) == null;
+        if (isNewEntry)
+        {
+            var index = data!.Children.Count.ToString();
+            var newEntry = new KeyValue(index);
+            newEntry["path"] = new KeyValue("path", installPath);
+            newEntry["label"] = new KeyValue("label", "");
+            newEntry["contentid"] = new KeyValue("contentid", "");
+            newEntry["totalsize"] = new KeyValue("totalsize", "0");
+            newEntry["update_clean_bytes_tally"] = new KeyValue("update_clean_bytes_tally", "0");
+            newEntry["time_last_update_verified"] = new KeyValue("time_last_update_verified", "0");
+            newEntry["apps"] = new KeyValue("apps");
+            data[index] = newEntry;
+        }
 
         string baseDir = SteamConfig.GetConfigDirectory();
         var steamappsFolder = Path.Join(baseDir, "steamapps");
@@ -174,7 +176,8 @@ public class LibraryFoldersConfig
             }
         }
 
-        Console.WriteLine($"Added {mountPoint} to steam library folder");
+        if (isNewEntry)
+            Console.WriteLine($"Added {mountPoint} to steam library folder");
     }
 
     /// <summary>

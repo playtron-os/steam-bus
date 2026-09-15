@@ -906,13 +906,34 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   async Task IPluginLibraryProvider.MoveItemAsync(string appIdString, string disk)
   {
     Console.WriteLine($"Moving app: {appIdString}");
-    if (ParseAppId(appIdString) is not uint appId) throw DbusExceptionHelper.ThrowInvalidAppId();
 
-    var installDir = depotConfigStore.GetInstallDirectory(appId);
-    if (installDir == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
+    uint appId;
+    string newInstallDirectory;
+    try
+    {
+      if (ParseAppId(appIdString) is not uint parsedAppId) throw DbusExceptionHelper.ThrowInvalidAppId();
+      appId = parsedAppId;
 
-    var installFolderName = new DirectoryInfo(installDir).Name;
-    var newInstallDirectory = await Disk.GetInstallRootFromDevice(disk, installFolderName);
+      var installDir = depotConfigStore.GetInstallDirectory(appId);
+      if (installDir == null) throw DbusExceptionHelper.ThrowAppNotInstalled();
+
+      var installFolderName = new DirectoryInfo(installDir).Name;
+      newInstallDirectory = await Disk.GetInstallRootFromDevice(disk, installFolderName);
+    }
+    catch (Exception exception)
+    {
+      // Also signal the failure, the caller may not wait for the reply
+      var error = exception switch
+      {
+        DBusException dbusException => dbusException.ErrorName,
+        UnauthorizedAccessException => DbusErrors.Permission,
+        _ => DbusErrors.Generic,
+      };
+      Console.Error.WriteLine($"Failed to start move of app:{appIdString} to disk:{disk}, err:{exception}");
+      OnMoveItemFailed?.Invoke((appIdString, error));
+      if (exception is DBusException) throw;
+      throw new DBusException(error, exception.Message);
+    }
 
     _ = Task.Run(() => depotConfigStore.MoveInstalledApp(appId, newInstallDirectory, OnMoveItemProgressed, OnMoveItemCompleted, OnMoveItemFailed));
   }
