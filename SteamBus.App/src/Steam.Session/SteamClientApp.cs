@@ -93,11 +93,12 @@ public class SteamClientApp
     public async Task Start(uint accountId, string forAppId, string username, bool offlineMode, bool waitForUi = true)
     {
         this.forAppId = forAppId;
-        this.waitForUi = waitForUi;
 
         if (startingTask != null) await startingTask.Task;
         if (endingTask != null) await endingTask.Task;
         if (running) return;
+
+        this.waitForUi = waitForUi;
 
         // Kill current steam processes if any exist
         var processes = Process.GetProcessesByName("steam");
