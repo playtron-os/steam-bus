@@ -1,0 +1,20 @@
+name: "🧪 Test"
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 1.x
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build & Test (Docker)
+        run: make in-docker TARGET=test
