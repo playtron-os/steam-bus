@@ -60,7 +60,24 @@ public class SteamSession : IDisposable
 
   TaskCompletionSource? loggingInTask;
 
-  public bool IsReconnecting => !bAborted && !IsLoggedOn && loggingInTask != null;
+  public bool IsReconnecting => !bAborted && !IsLoggedOn && (loggingInTask != null || bSlowReconnect);
+
+  public const int QuickReconnectAttempts = 12;
+
+  public enum ReconnectStep { Quick, Slow, GiveUp }
+
+  // Only a session without a saved token gives up; one with a token keeps retrying.
+  public static ReconnectStep NextReconnectStep(int connectionBackoff, bool hasToken) =>
+    connectionBackoff < QuickReconnectAttempts ? ReconnectStep.Quick
+    : hasToken ? ReconnectStep.Slow
+    : ReconnectStep.GiveUp;
+
+  public static TimeSpan SlowReconnectDelay(int attempt) =>
+    TimeSpan.FromSeconds(15 << Math.Clamp(attempt, 0, 2));
+
+  bool bSlowReconnect;
+  int slowReconnectAttempt;
+  int slowReconnectGeneration;
 
   bool bConnecting;
   bool bAborted;
@@ -605,9 +622,9 @@ public class SteamSession : IDisposable
   }
 
 
-  void Connect()
+  void Connect(bool keepBackoff = false)
   {
-    Console.WriteLine($"Connect: called. bIsConnectionRecovery={bIsConnectionRecovery}, bAborted={bAborted}, bConnecting={bConnecting}, IsConnected={SteamClient.IsConnected}");
+    Console.WriteLine($"Connect: called. bIsConnectionRecovery={bIsConnectionRecovery}, bAborted={bAborted}, bConnecting={bConnecting}, IsConnected={SteamClient.IsConnected}, keepBackoff={keepBackoff}");
 
     waitingToRetry = false;
     bAborted = false;
@@ -615,8 +632,11 @@ public class SteamSession : IDisposable
     authSession = null;
     loggingInTask ??= new TaskCompletionSource();
 
-    if (!bIsConnectionRecovery)
+    if (!bIsConnectionRecovery && !keepBackoff)
+    {
       connectionBackoff = 0;
+      slowReconnectAttempt = 0;
+    }
 
     bIsConnectionRecovery = false;
 
@@ -643,6 +663,7 @@ public class SteamSession : IDisposable
 
     bAborted = true;
     bConnecting = false;
+    bSlowReconnect = false;
     FinishLoggingInTask();
 
     if (!bExpectingDisconnectRemote)
@@ -986,6 +1007,7 @@ public class SteamSession : IDisposable
     // check below sees the already-cleared value and falls through to the abort path.
     var suppressReconnect = bSuppressReconnect;
     var isConnectionRecovery = bIsConnectionRecovery;
+    var reconnectStep = NextReconnectStep(connectionBackoff, logonDetails.AccessToken != null);
 
     Console.WriteLine($"OnDisconnected: bIsConnectionRecovery={bIsConnectionRecovery}, UserInitiated={disconnected.UserInitiated}, bExpectingDisconnectRemote={bExpectingDisconnectRemote}, bAborted={bAborted}, bSuppressReconnect={bSuppressReconnect}, bConnecting={bConnecting}, isOnline={isOnline}, connectionBackoff={connectionBackoff}");
 
@@ -1006,11 +1028,16 @@ public class SteamSession : IDisposable
       // Any operations outstanding need to be aborted
       bAborted = true;
     }
-    else if (connectionBackoff >= 12)
+    else if (reconnectStep == ReconnectStep.GiveUp)
     {
-      Console.WriteLine("OnDisconnected: Could not connect to Steam after 12 backoff attempts");
+      Console.WriteLine($"OnDisconnected: Could not connect to Steam after {QuickReconnectAttempts} backoff attempts");
       Abort(false);
       OnAuthError?.Invoke(DbusErrors.Timeout);
+    }
+    else if (reconnectStep == ReconnectStep.Slow)
+    {
+      if (!bAborted)
+        ScheduleSlowReconnect();
     }
     else if (!bAborted)
     {
@@ -1061,6 +1088,36 @@ public class SteamSession : IDisposable
 
     if (bAborted)
       FinishLoggingInTask();
+  }
+
+  // A connection failure is not an auth failure: keep the saved session pending and retry until Steam answers.
+  private void ScheduleSlowReconnect()
+  {
+    var delay = SlowReconnectDelay(slowReconnectAttempt++);
+    var generation = ++slowReconnectGeneration;
+    Console.WriteLine($"OnDisconnected: Could not connect to Steam after {QuickReconnectAttempts} backoff attempts, keeping the session and retrying in {delay.TotalSeconds}s");
+
+    IsPendingLogin = true;
+    bConnecting = false;
+    bSlowReconnect = true;
+    FinishLoggingInTask();
+    OnAuthUpdated?.Invoke();
+
+    _ = Task.Run(async () =>
+    {
+      await Task.Delay(delay);
+      if (generation != slowReconnectGeneration || bAborted || bConnecting || IsLoggedOn)
+        return;
+
+      if (!isOnline)
+      {
+        Console.WriteLine("OnDisconnected: Still offline, waiting for the network before reconnecting");
+        return;
+      }
+
+      Console.WriteLine($"OnDisconnected: Retrying Steam connection (slow attempt #{slowReconnectAttempt})");
+      Connect(keepBackoff: true);
+    });
   }
 
 
@@ -1158,6 +1215,8 @@ public class SteamSession : IDisposable
     bIsConnectionRecovery = false;
     bAborted = false;
     connectionBackoff = 0;
+    slowReconnectAttempt = 0;
+    bSlowReconnect = false;
     SaveToken();
     steamConnectionConfig.SaveCellId(loggedOn.CellID);
 
