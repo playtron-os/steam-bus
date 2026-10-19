@@ -1971,7 +1971,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (this.session?.steamCloud == null)
     {
       Console.WriteLine("Steam Cloud not initialized");
-      return;
+      throw CloudSyncCompletion.Failure(appIdString, failure => OnCloudSyncFailed?.Invoke(failure), SyncState.Download);
     }
     var platformToSync = GetRemoteStoragePlatform(platform);
     Console.WriteLine("CloudDownload for {0}", appidParsed);
@@ -1983,7 +1983,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (changelist == null)
     {
       Console.WriteLine("Failed to get changelist");
-      return;
+      throw CloudSyncCompletion.Failure(appIdString, failure => OnCloudSyncFailed?.Invoke(failure), SyncState.Download);
     }
     Console.WriteLine("Current change: {0}", changelist.current_change_number);
 
@@ -1995,6 +1995,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (changelist.current_change_number == changeNumber && analysis.missingLocal.Count == 0)
     {
       Console.WriteLine("files are synced");
+      await CloudSyncCompletion.CompleteDownloadAsync(appIdString, null, () => { },
+        progress => OnCloudSaveSyncProgressed?.Invoke(progress), failure => OnCloudSyncFailed?.Invoke(failure));
       return;
     }
 
@@ -2087,7 +2089,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         OnCloudSaveSyncProgressed?.Invoke(new CloudSyncProgress
         {
           AppdId = appIdString,
-          Progress = (double)downloaded / totalSize * 100,
+          Progress = CloudSyncCompletion.TransferProgress(downloaded, totalSize),
           SyncState = (uint)SyncState.Download,
         });
       }
@@ -2102,28 +2104,25 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       cachedFiles[file.GetRemotePath()] = file;
     }
 
-    if (currentError != null)
-    {
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure
+    await CloudSyncCompletion.CompleteDownloadAsync(appIdString, currentError,
+      () =>
       {
-        AppdId = appIdString,
-        Error = currentError,
-        SyncState = (uint)SyncState.Download,
-      });
-    }
-    // Set this to unknown for now, this shouldnt break anything afaik
-    remoteCacheFile.UpdateLocalCache(changelist.current_change_number, "-1", [.. cachedFiles.Values]);
-    remoteCacheFile.Save();
+        // Set this to unknown for now, this shouldnt break anything afaik
+        remoteCacheFile.UpdateLocalCache(changelist.current_change_number, "-1", [.. cachedFiles.Values]);
+        remoteCacheFile.Save();
 
-    KeyValue autocloud = new("steam_autocloud.vdf");
-    autocloud.Children.Add(new KeyValue("accountid", this.session.SteamUser.SteamID.AccountID.ToString()));
-    foreach (var location in paths)
-    {
-      if (location.alias.Length == 0) continue;
-      var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
-      Disk.EnsureParentFolderExists(path);
-      autocloud.SaveToFileWithAtomicRename(path);
-    }
+        KeyValue autocloud = new("steam_autocloud.vdf");
+        autocloud.Children.Add(new KeyValue("accountid", this.session.SteamUser.SteamID.AccountID.ToString()));
+        foreach (var location in paths)
+        {
+          if (location.alias.Length == 0) continue;
+          var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
+          Disk.EnsureParentFolderExists(path);
+          autocloud.SaveToFileWithAtomicRename(path);
+        }
+      },
+      progress => OnCloudSaveSyncProgressed?.Invoke(progress),
+      failure => OnCloudSyncFailed?.Invoke(failure));
     Console.WriteLine("Download complete");
   }
 
@@ -2153,7 +2152,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (this.session?.steamCloud == null)
     {
       Console.WriteLine("Steam Cloud not initialized");
-      return;
+      throw CloudSyncCompletion.Failure(appid, failure => OnCloudSyncFailed?.Invoke(failure));
     }
 
     var platformToSync = GetRemoteStoragePlatform(platform);
@@ -2165,7 +2164,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     var changelist = await this.session.steamCloud.GetFilesChangelistAsync(appidParsed, changeNumber);
     if (changelist == null)
     {
-      return;
+      throw CloudSyncCompletion.Failure(appid, failure => OnCloudSyncFailed?.Invoke(failure));
     }
     var cachedFiles = remoteCacheFile.MapRemoteCacheFiles();
     var analysis = CloudUtils.AnalyzeSaves(changelist, cachedFiles, localFiles, platformToSync);
@@ -2194,12 +2193,8 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (analysis.changedLocal.Count == 0 && analysis.missingLocal.Count == 0)
     {
       Console.WriteLine("Nothing to do");
-      OnCloudSaveSyncProgressed?.Invoke(new CloudSyncProgress
-      {
-        AppdId = appid,
-        Progress = 100,
-        SyncState = (uint)SyncState.Upload,
-      });
+      await CloudSyncCompletion.CompleteUploadAsync(appid, null, () => Task.FromResult(true), () => { },
+        progress => OnCloudSaveSyncProgressed?.Invoke(progress), failure => OnCloudSyncFailed?.Invoke(failure));
       return;
     }
     // Begin upload
@@ -2218,13 +2213,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     if (uploadData == null)
     {
       Console.WriteLine("Failed to initialize upload with steam services");
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure
-      {
-        AppdId = appid,
-        Error = DbusErrors.CloudFileUpload,
-        SyncState = (uint)SyncState.Upload,
-      });
-      return;
+      throw CloudSyncCompletion.Failure(appid, failure => OnCloudSyncFailed?.Invoke(failure));
     }
 
     Console.WriteLine("New change number is {0}", uploadData.app_change_number);
@@ -2280,7 +2269,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         OnCloudSaveSyncProgressed?.Invoke(new CloudSyncProgress
         {
           AppdId = appid,
-          Progress = (double)uploaded / totalSize * 100,
+          Progress = CloudSyncCompletion.TransferProgress(uploaded, totalSize),
           SyncState = (uint)SyncState.Upload,
         });
       }
@@ -2303,28 +2292,30 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
       if (delRes == null)
       {
         Console.WriteLine("Failed to call delete on a file");
+        currentError ??= DbusErrors.CloudFileUpload;
+        continue;
       }
       cachedFiles.Remove(file.GetRemotePath());
     }
-    EResult eResult = EResult.OK;
-    if (currentError != null)
-    {
-      OnCloudSyncFailed?.Invoke(new CloudSyncFailure { AppdId = appid, Error = currentError, SyncState = (uint)SyncState.Upload });
-      eResult = EResult.Fail;
-    }
-    await this.session.steamCloud.CompleteAppUploadBatch(appidParsed, uploadData.batch_id, (uint)eResult);
-
-    remoteCacheFile.UpdateLocalCache(uploadData.app_change_number, "-1", [.. cachedFiles.Values]);
-    remoteCacheFile.Save();
-    KeyValue autocloud = new("steam_autocloud.vdf");
-    autocloud.Children.Add(new KeyValue("accountid", this.session.SteamUser.SteamID.AccountID.ToString()));
-    foreach (var location in paths)
-    {
-      if (location.alias.Length == 0) continue;
-      var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
-      Disk.EnsureParentFolderExists(path);
-      autocloud.SaveToFileWithAtomicRename(path);
-    }
+    var eResult = currentError == null ? EResult.OK : EResult.Fail;
+    await CloudSyncCompletion.CompleteUploadAsync(appid, currentError,
+      async () => await this.session.steamCloud.CompleteAppUploadBatch(appidParsed, uploadData.batch_id, (uint)eResult) != null,
+      () =>
+      {
+        remoteCacheFile.UpdateLocalCache(uploadData.app_change_number, "-1", [.. cachedFiles.Values]);
+        remoteCacheFile.Save();
+        KeyValue autocloud = new("steam_autocloud.vdf");
+        autocloud.Children.Add(new KeyValue("accountid", this.session.SteamUser.SteamID.AccountID.ToString()));
+        foreach (var location in paths)
+        {
+          if (location.alias.Length == 0) continue;
+          var path = System.IO.Path.Join(location.path, "steam_autocloud.vdf");
+          Disk.EnsureParentFolderExists(path);
+          autocloud.SaveToFileWithAtomicRename(path);
+        }
+      },
+      progress => OnCloudSaveSyncProgressed?.Invoke(progress),
+      failure => OnCloudSyncFailed?.Invoke(failure));
     Console.WriteLine("Upload complete");
   }
 
