@@ -128,12 +128,8 @@ public class SessionReconnectTests
   [Test, Timeout(60_000), Repeat(5)]
   public async Task RejectionFollowedByADropCountsOnce()
   {
-    // A retry well past SteamKit's 100 ms socket poll, so the drop is handled before the retry starts.
-    var slowRetry = SessionHarness.Fast with
-    {
-      NewReconnectPolicy = () => new ReconnectPolicy(new Random(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1)),
-    };
-    await using var h = await Create(timings: slowRetry);
+    // The drop is handled before the retry starts.
+    await using var h = await Create(timings: SlowRetry);
     var logons = h.Server.Logons;
     var login = h.Session.Login();
 
@@ -370,4 +366,393 @@ public class SessionReconnectTests
     Assert.That(aborted, Is.False, "the session was aborted at some point");
     Assert.That(h.AuthErrors, Is.Empty);
   }
+
+  // The outage that grew the backoff may be over, so a network change retries at once.
+  [Test, Timeout(60_000)]
+  public async Task NetworkChangeDuringAnOutageRetriesAtOnce()
+  {
+    var slowBackoff = SessionHarness.Fast with
+    {
+      NewReconnectPolicy = () => new ReconnectPolicy(new Random(1), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(1)),
+    };
+    await using var h = await Create(timings: slowBackoff);
+    await h.LogOn();
+
+    h.Server.Stop();
+    h.Server.DropAll();
+    await WaitUntil(() => h.Session.ReconnectAttempts >= 2, "the backoff grows to 6 s", 15);
+
+    var connections = h.Server.Connections;
+    var logons = h.Server.Logons;
+    h.Server.Start();
+    await h.Session.OnOnline();
+    Assert.That(h.Session.ReconnectAttempts, Is.Zero, "the network change restarts the backoff");
+    await WaitUntil(() => h.Server.Connections > connections, "it reconnects well before the 6 s backoff ends", 3);
+
+    await h.AnswerNextLogon(EResult.OK, logons);
+    await WaitUntil(() => h.Session.IsLoggedOn, "it logs back on");
+    Assert.That(h.AuthErrors, Is.Empty);
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task NetworkChangeWhileLoggedOnKeepsTheConnection()
+  {
+    await using var h = await Create();
+    await h.LogOn();
+
+    await h.Session.OnOnline();
+    await Holds(() => h.Session.IsLoggedOn && h.Server.Connections == 1, "the connection stays", 0.5);
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task DropWhileOfflineWaitsForTheNetwork()
+  {
+    await using var h = await Create();
+    await h.LogOn();
+
+    h.Session.OnOffline();
+    var connections = h.Server.Connections;
+    h.Server.DropAll();
+    await WaitUntil(() => !h.Session.SteamClient.IsConnected, "the session sees the drop");
+    await Holds(() => h.Server.Connections == connections, "no attempt while offline", 1);
+
+    var logons = h.Server.Logons;
+    await h.Session.OnOnline();
+    await h.AnswerNextLogon(EResult.OK, logons);
+    await WaitUntil(() => h.Session.IsLoggedOn, "it logs back on");
+    Assert.That(h.Session.ReconnectAttempts, Is.Zero);
+    Assert.That(h.AuthErrors, Is.Empty);
+  }
+
+  // The watchdog's safety net: the network came back but nothing reported it.
+  [Test, Timeout(60_000)]
+  public async Task WatchdogReconnectsASessionNothingElseRetries()
+  {
+    await using var h = await Create();
+    await h.LogOn();
+
+    h.Session.isOnline = false;
+    var connections = h.Server.Connections;
+    h.Server.DropAll();
+    await Holds(() => h.Server.Connections == connections, "no attempt while offline", 1);
+
+    var logons = h.Server.Logons;
+    h.Session.isOnline = true;
+    await h.AnswerNextLogon(EResult.OK, logons);
+    await WaitUntil(() => h.Session.IsLoggedOn, "it logs back on");
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task InteractiveLogonRejectionsGiveUpAfterTheCap()
+  {
+    await using var h = await Create(interactive: true);
+    var login = h.Session.Login();
+
+    for (var rejection = 0; rejection < ReconnectPolicy.InteractiveMaxAttempts; rejection++)
+      await h.AnswerNextLogon(EResult.TryAnotherCM, rejection);
+    await login.WaitAsync(TimeSpan.FromSeconds(10));
+
+    Assert.That(h.AuthErrors, Is.EqualTo(new[] { DbusErrors.Timeout }));
+    Assert.That(h.Session.IsAborted, Is.True);
+    var connections = h.Server.Connections;
+    await Holds(() => h.Server.Connections == connections, "no retry after giving up", 1);
+    Assert.That(h.AuthErrors, Is.EqualTo(new[] { DbusErrors.Timeout }), "the error is reported once");
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task InteractiveLoginGivesUpOnASilentCm()
+  {
+    await using var h = await Create(interactive: true, timings: SessionHarness.Fast with { StalledAttempt = TimeSpan.FromMilliseconds(300) });
+    h.Server.Behaviour = FakeCmServer.Mode.Silent;
+
+    var login = h.Session.Login();
+    await WaitUntil(() => h.AuthErrorCount > 0, "the login gives up", 30);
+    await login.WaitAsync(TimeSpan.FromSeconds(5));
+
+    Assert.That(h.Server.Connections, Is.EqualTo(ReconnectPolicy.InteractiveMaxAttempts), "each stalled attempt was replaced");
+    Assert.That(h.Session.IsAborted, Is.True);
+    await Holds(() => h.AuthErrorCount == 1, "the error is reported once", 0.5);
+  }
+
+  // Steam being down: a saved session waits it out, a user at the login screen gets an error.
+  [TestCase(false), TestCase(true), Timeout(60_000)]
+  public async Task ServiceUnavailableIsRetriedOnlyForASavedSession(bool interactive)
+  {
+    await using var h = await Create(interactive: interactive);
+    var login = h.Session.Login();
+    await h.AnswerNextLogon(EResult.ServiceUnavailable, 0);
+
+    if (interactive)
+    {
+      await login.WaitAsync(TimeSpan.FromSeconds(10));
+      Assert.That(h.Session.IsAborted, Is.True);
+      var connections = h.Server.Connections;
+      await Holds(() => h.Server.Connections == connections, "no retry", 1);
+      return;
+    }
+
+    await h.AnswerNextLogon(EResult.OK, 1);
+    await login.WaitAsync(TimeSpan.FromSeconds(10));
+    Assert.That(h.Session.IsLoggedOn, Is.True);
+    Assert.That(h.AuthErrors, Is.Empty);
+  }
+
+  // A stale rejection from a replaced connection while a retry waits must not schedule a second one.
+  [Test, Timeout(60_000)]
+  public async Task RejectionWhileARetryWaitsCountsOnce()
+  {
+    await using var h = await Create(timings: SlowRetry);
+    var login = h.Session.Login();
+    await WaitUntil(() => h.Server.Logons > 0, "the session sends its logon");
+
+    h.Post(LoggedOn(EResult.TryAnotherCM));
+    h.Post(LoggedOn(EResult.TryAnotherCM));
+    await Task.Delay(300);
+    Assert.That(h.Session.ReconnectAttempts, Is.EqualTo(1));
+
+    await h.AnswerNextLogon(EResult.OK, 1);
+    await login.WaitAsync(TimeSpan.FromSeconds(10));
+    await Holds(() => h.Session.IsLoggedOn && h.Server.Connections == 2, "one retry", 1.5);
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task DisconnectDuringARetryWaitCancelsIt()
+  {
+    await using var h = await Create(timings: SlowRetry);
+    var login = h.Session.Login();
+    await h.AnswerNextLogon(EResult.TryAnotherCM, 0);
+    await WaitUntil(() => h.Session.ReconnectAttempts == 1, "the retry is scheduled");
+
+    await Task.Run(() => h.Session.Disconnect()).WaitAsync(TimeSpan.FromSeconds(5));
+    await login.WaitAsync(TimeSpan.FromSeconds(5));
+    var connections = h.Server.Connections;
+    await Holds(() => h.Server.Connections == connections && !h.Session.IsReconnecting, "the retry never runs", 2);
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task DisconnectDuringAStalledHandshakeReturns()
+  {
+    await using var h = await Create();
+    h.Server.Behaviour = FakeCmServer.Mode.Silent;
+    var login = h.Session.Login();
+    await WaitUntil(() => h.Server.Connections > 0, "an attempt is in flight");
+
+    await Task.Run(() => h.Session.Disconnect()).WaitAsync(TimeSpan.FromSeconds(5));
+    await login.WaitAsync(TimeSpan.FromSeconds(5));
+    Assert.That(h.Session.IsAborted, Is.True);
+    var connections = h.Server.Connections;
+    await Holds(() => h.Server.Connections == connections, "no attempt after the disconnect", 1);
+  }
+
+  // Logout during an outage: Disconnect() then Dispose(), as DBusSteamClient.LogoutAsync does.
+  [Test, Timeout(60_000)]
+  public async Task LogoutDuringAnOutageStopsEverything()
+  {
+    await using var h = await Create();
+    await h.LogOn();
+    h.Server.Stop();
+    h.Server.DropAll();
+    await WaitUntil(() => h.Session.ReconnectAttempts >= 2, "it is reconnecting");
+
+    await Task.Run(() =>
+    {
+      h.Session.Disconnect();
+      h.Session.Dispose();
+    }).WaitAsync(TimeSpan.FromSeconds(5));
+    await h.Session.BackgroundWork.WaitAsync(TimeSpan.FromSeconds(5));
+
+    var connections = h.Server.Connections;
+    h.Server.Start();
+    await Holds(() => h.Server.Connections == connections, "nothing reconnects after logout", 1);
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task DisposeEndsAPendingLogin()
+  {
+    await using var h = await Create();
+    h.Server.Behaviour = FakeCmServer.Mode.Silent;
+    var login = h.Session.Login();
+    await WaitUntil(() => h.Server.Connections > 0, "an attempt is in flight");
+
+    await Task.Run(h.Session.Dispose).WaitAsync(TimeSpan.FromSeconds(5));
+    await login.WaitAsync(TimeSpan.FromSeconds(5));
+    Assert.That(h.Session.IsLoggedOn, Is.False);
+  }
+
+  // A connection that drops before its callback is handled gets no logon, which would fail as NoConnection.
+  [Test, Timeout(60_000)]
+  public async Task ConnectionLostBeforeItsCallbackIsNotLoggedOn()
+  {
+    await using var h = await Create();
+    using var release = new ManualResetEventSlim();
+    h.Session.SubscribeCallback<Stall>(_ => release.Wait(TimeSpan.FromSeconds(10)));
+    h.Post(new Stall());
+
+    var login = h.Session.Login();
+    await WaitUntil(() => h.Session.SteamClient.IsConnected, "the attempt connects");
+    h.Server.DropAll();
+    await WaitUntil(() => !h.Session.SteamClient.IsConnected, "the session sees the drop");
+    var logons = h.Server.Logons;
+    release.Set();
+
+    await h.AnswerNextLogon(EResult.OK, logons);
+    await login.WaitAsync(TimeSpan.FromSeconds(10));
+    Assert.That(h.Session.IsLoggedOn, Is.True);
+    Assert.That(h.Session.LastLogOnRetryDelay, Is.EqualTo(TimeSpan.Zero), "no logon went to the dropped connection");
+    Assert.That(h.Server.Connections, Is.EqualTo(2));
+  }
+
+  // A connected attempt whose callback is late is waiting for the pump, not stuck.
+  [Test, Timeout(60_000)]
+  public async Task ConnectedAttemptAwaitingItsCallbackIsKept()
+  {
+    await using var h = await Create(timings: SessionHarness.Fast with { StalledAttempt = TimeSpan.FromMilliseconds(300) });
+    using var release = new ManualResetEventSlim();
+    h.Session.SubscribeCallback<Stall>(_ => release.Wait(TimeSpan.FromSeconds(10)));
+    h.Post(new Stall());
+
+    var login = h.Session.Login();
+    await WaitUntil(() => h.Session.SteamClient.IsConnected, "the attempt connects");
+    await Holds(() => h.Server.Connections == 1, "the watchdog keeps it", 1.5);
+    release.Set();
+
+    await h.AnswerNextLogon(EResult.OK, 0);
+    await login.WaitAsync(TimeSpan.FromSeconds(10));
+    Assert.That(h.Session.IsLoggedOn, Is.True);
+    Assert.That(h.Server.Connections, Is.EqualTo(1));
+  }
+
+  // A CM restart can leave every cached endpoint stale; the refreshed list leads to the new CM.
+  [Test, Timeout(60_000)]
+  public async Task ServerListRefreshFindsARestartedCm()
+  {
+    using var directory = new FakeDirectory();
+    using var restarted = new FakeCmServer();
+    await using var h = await Create(configure: config => config.WithDirectoryFetch(true).WithWebAPIBaseAddress(directory.Address), timings: PatientRefresh);
+    directory.Servers = [h.Server.EndPoint];
+    await h.LogOn();
+
+    directory.Servers = [restarted.EndPoint];
+    h.Server.Stop();
+    h.Server.DropAll();
+    await WaitUntil(() => restarted.Logons > 0, "it finds the new CM", 15);
+    Assert.That(h.Session.ReconnectAttempts, Is.EqualTo(ReconnectPolicy.AttemptsPerServerListRefresh), "the list is refreshed after the fourth failure");
+
+    h.Post(LoggedOn(EResult.OK));
+    await WaitUntil(() => h.Session.IsLoggedOn, "it logs on through the new CM");
+    Assert.That(h.AuthErrors, Is.Empty);
+  }
+
+  [TestCase(false), TestCase(true), Timeout(60_000)]
+  public async Task ServerListRefreshKeepsTheCacheOnAnEmptyOrFailedAnswer(bool apiFails)
+  {
+    using var directory = new FakeDirectory { Fails = apiFails };
+    await using var h = await Create(configure: config => config.WithDirectoryFetch(true).WithWebAPIBaseAddress(directory.Address), timings: PatientRefresh);
+
+    var requests = directory.Requests;
+    var clock = Stopwatch.StartNew();
+    await h.Session.RefreshServerList().WaitAsync(TimeSpan.FromSeconds(20));
+    Assert.That(directory.Requests, Is.GreaterThan(requests), "the refresh did ask the Web API");
+    Assert.That(clock.Elapsed, Is.LessThan(PatientRefresh.ServerListRefresh), "the refresh had its answer, not a timeout");
+
+    var servers = h.Session.SteamClient.Configuration.ServerList.GetAllEndPoints();
+    Assert.That(servers.Select(server => server.EndPoint), Is.EqualTo(new[] { h.Server.EndPoint }));
+  }
+
+  // A QR login's rejected logon reconnects as a recovery: no backoff, nothing counted against the cap.
+  [Test, Timeout(60_000)]
+  public async Task QrLogonErrorReconnectsWithoutBackingOff()
+  {
+    await using var h = await Create(interactive: true);
+    h.SetField("loggingInWithQrCode", true);
+    var login = h.Session.Login();
+
+    await h.AnswerNextLogon(EResult.Fail, 0);
+    await WaitUntil(() => h.Server.Logons > 1, "it reconnects and logs on again");
+    Assert.That(h.Session.ReconnectAttempts, Is.Zero);
+
+    h.Post(LoggedOn(EResult.OK));
+    await login.WaitAsync(TimeSpan.FromSeconds(10));
+    Assert.That(h.Session.IsLoggedOn, Is.True);
+    Assert.That(h.AuthErrors, Is.Empty);
+  }
+
+  // OnLogIn's Steam Guard path disconnects from inside a callback, then connects again.
+  [Test, Timeout(60_000)]
+  public async Task SteamGuardRejectionStartsANewAttempt()
+  {
+    await using var h = await Create();
+    var login = h.Session.Login();
+    await h.AnswerNextLogon(EResult.AccountLogonDenied, 0);
+
+    await h.AnswerNextLogon(EResult.OK, 1);
+    await login.WaitAsync(TimeSpan.FromSeconds(10));
+    Assert.That(h.Session.IsLoggedOn, Is.True);
+    Assert.That(h.Server.Connections, Is.EqualTo(2));
+  }
+
+  // Disconnect() is not Dispose(): a session logged on again afterwards still reconnects.
+  [Test, Timeout(60_000)]
+  public async Task SessionLoggedOnAgainAfterDisconnectKeepsReconnecting()
+  {
+    await using var h = await Create();
+    await h.LogOn();
+    await Task.Run(() => h.Session.Disconnect()).WaitAsync(TimeSpan.FromSeconds(5));
+    await h.LogOn();
+
+    var logons = h.Server.Logons;
+    h.Server.DropAll();
+    await h.AnswerNextLogon(EResult.OK, logons);
+    await WaitUntil(() => h.Session.IsLoggedOn, "it logs back on");
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task TokenRejectedDuringAReconnectStopsIt()
+  {
+    await using var h = await Create();
+    await h.LogOn();
+
+    var logons = h.Server.Logons;
+    h.Server.DropAll();
+    await h.AnswerNextLogon(EResult.Expired, logons);
+    await WaitUntil(() => h.Session.IsAborted, "the session is aborted");
+    var connections = h.Server.Connections;
+    await Holds(() => h.Server.Connections == connections && !h.Session.IsReconnecting, "no retry with an expired token", 1);
+  }
+
+  // A disconnect SteamKit never reports must not hang Disconnect(), and with it logout.
+  [Test, Timeout(60_000)]
+  public async Task DisconnectReturnsWhenItsDisconnectNeverComes()
+  {
+    await using var h = await Create(online: false);
+    h.SetField("liveConnections", 1);
+
+    var clock = Stopwatch.StartNew();
+    await Task.Run(() => h.Session.Disconnect()).WaitAsync(TimeSpan.FromSeconds(10));
+    Assert.That(clock.Elapsed, Is.GreaterThanOrEqualTo(SessionHarness.Fast.DisconnectWait));
+    Assert.That(h.Session.IsAborted, Is.True);
+  }
+
+  [Test, Timeout(60_000)]
+  public async Task DisposeEndsAServerListRefresh()
+  {
+    using var silentApi = new TcpListener(IPAddress.Loopback, 0);
+    silentApi.Start();
+    var api = new Uri($"http://{silentApi.LocalEndpoint}/");
+    await using var h = await Create(configure: config => config.WithDirectoryFetch(true).WithWebAPIBaseAddress(api), timings: PatientRefresh);
+
+    var refresh = h.Session.RefreshServerList();
+    await Task.Delay(200);
+    h.Session.Dispose();
+    await refresh.WaitAsync(TimeSpan.FromSeconds(2));
+  }
+
+  // A retry well past SteamKit's 100 ms socket poll.
+  static readonly SessionTimings SlowRetry = SessionHarness.Fast with
+  {
+    NewReconnectPolicy = () => new ReconnectPolicy(new Random(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1)),
+  };
+
+  // Lets a loaded machine finish a refresh the Web API does answer.
+  static readonly SessionTimings PatientRefresh = SessionHarness.Fast with { ServerListRefresh = TimeSpan.FromSeconds(10) };
 }

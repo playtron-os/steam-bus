@@ -28,7 +28,8 @@ sealed class SessionHarness : IAsyncDisposable
   public SteamSession Session { get; private set; } = null!;
   public List<string> AuthErrors { get; } = [];
 
-  public static async Task<SessionHarness> Create(bool savedToken = true, bool online = true, Action<ISteamConfigurationBuilder>? configure = null, SessionTimings? timings = null)
+  // interactive: a login still in progress, holding the token its auth flow just returned but never logged on.
+  public static async Task<SessionHarness> Create(bool savedToken = true, bool online = true, Action<ISteamConfigurationBuilder>? configure = null, SessionTimings? timings = null, bool interactive = false)
   {
     // STEAMBUS_TEST_TRACE=1 adds SteamKit's own connection log to the test output.
     if (Environment.GetEnvironmentVariable("STEAMBUS_TEST_TRACE") == "1" && !DebugLog.Enabled)
@@ -66,8 +67,13 @@ sealed class SessionHarness : IAsyncDisposable
     {
       lock (harness.AuthErrors) harness.AuthErrors.Add(error);
     };
+    if (interactive)
+      harness.SetField("bSessionEstablished", false);
     return harness;
   }
+
+  public void SetField(string name, object value) =>
+    typeof(SteamSession).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(Session, value);
 
   // Log on through the fake CM: the session connects and sends its logon, and the test answers it.
   public async Task LogOn()

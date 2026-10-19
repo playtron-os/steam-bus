@@ -66,6 +66,8 @@ public class SteamSession : IDisposable
   internal int ReconnectAttempts => reconnectPolicy.Attempts;
   internal bool IsAborted => bAborted;
   internal TimeSpan LastLogOnRetryDelay { get; private set; }
+  // The watchdog and the callback pump, which run until Dispose().
+  internal Task BackgroundWork => Task.WhenAll(watchdog, loginTask ?? Task.CompletedTask);
 
   bool bConnecting; // The newest attempt has not connected yet
   DateTime attemptStartedUtc;
@@ -121,6 +123,7 @@ public class SteamSession : IDisposable
   public bool isOnline;
 
   private Task? loginTask;
+  readonly Task watchdog;
   private List<IDisposable> subscriptions = [];
 
   public SteamSession(SteamUser.LogOnDetails details, DepotConfigStore depotConfigStore, string? steamGuardData = null, IAuthenticator? authenticator = null)
@@ -189,7 +192,7 @@ public class SteamSession : IDisposable
       this.Callbacks.Subscribe<SteamFriends.PersonaStateCallback>(OnPersonaState),
     ]);
 
-    _ = Task.Run(RunReconnectWatchdog);
+    watchdog = Task.Run(RunReconnectWatchdog);
   }
 
   public void Dispose()
@@ -873,9 +876,10 @@ public class SteamSession : IDisposable
 
 
   // A user waiting at a login screen gets an error after the cap; an established session never gives up.
+  // Abort() handles the connection's disconnect, which must not report the error a second time.
   bool GiveUpInteractiveLogin(string source)
   {
-    if (bSessionEstablished || !reconnectPolicy.HasExceededInteractiveAttempts)
+    if (bAborted || bSessionEstablished || !reconnectPolicy.HasExceededInteractiveAttempts)
       return false;
 
     Console.WriteLine($"{source}: Could not connect to Steam after {ReconnectPolicy.InteractiveMaxAttempts} attempts during interactive login");
