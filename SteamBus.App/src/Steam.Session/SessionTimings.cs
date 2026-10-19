@@ -6,6 +6,8 @@ internal sealed record SessionTimings(
   TimeSpan Watchdog,
   // Minimum wait before retrying a logon rejected with AlreadyLoggedInElsewhere
   TimeSpan AlreadyLoggedInRetry,
+  // Minimum wait before an established session retries a rate-limited logon
+  TimeSpan RateLimitRetry,
   // How long OnOnline waits for a re-login; reconnection continues after it
   TimeSpan ReloginWait,
   // How long a CM server list fetch may take before the cached list is kept
@@ -19,6 +21,7 @@ internal sealed record SessionTimings(
   public static readonly SessionTimings Default = new(
     Watchdog: TimeSpan.FromSeconds(60),
     AlreadyLoggedInRetry: TimeSpan.FromSeconds(10),
+    RateLimitRetry: TimeSpan.FromMinutes(5),
     ReloginWait: TimeSpan.FromSeconds(60),
     ServerListRefresh: TimeSpan.FromSeconds(15),
     StalledAttempt: TimeSpan.FromSeconds(30),

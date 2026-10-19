@@ -14,6 +14,7 @@ sealed class SessionHarness : IAsyncDisposable
   public static readonly SessionTimings Fast = new(
     Watchdog: TimeSpan.FromMilliseconds(200),
     AlreadyLoggedInRetry: TimeSpan.FromMilliseconds(150),
+    RateLimitRetry: TimeSpan.FromMilliseconds(300),
     ReloginWait: TimeSpan.FromSeconds(1),
     ServerListRefresh: TimeSpan.FromMilliseconds(500),
     // Long enough that a loaded machine's slow handshake is not taken for a stuck one
