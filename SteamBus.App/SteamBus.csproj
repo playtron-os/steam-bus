@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="SteamBus.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="pluginmanifest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

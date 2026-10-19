@@ -433,9 +433,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     }
   }
 
-  // Bound on how long D-Bus calls wait for an in-progress (re-)login: during
-  // a Steam outage the session retries indefinitely, and D-Bus calls should
-  // fail fast rather than block for the whole outage
+  // D-Bus calls wait this long for a login in progress; during an outage it never ends
   static readonly TimeSpan LoginWaitTimeout = TimeSpan.FromSeconds(20);
 
   async Task<bool> EnsureConnected()
@@ -449,9 +447,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     if (!await this.session!.WaitLoggingInTask(LoginWaitTimeout))
     {
-      // The login is still in progress, not failed; report a timeout rather
-      // than a misleading NotLoggedIn so the UI does not show an auth loss
-      // for a transient blip
+      // Still logging in, not failed: a timeout, so the UI shows no sign-out for a blip
       Console.WriteLine("EnsureConnected: Timed out waiting for login to complete");
       throw DbusExceptionHelper.ThrowTimeout("Timed out waiting for Steam login to complete");
     }
@@ -878,8 +874,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
     Console.WriteLine($"Installing app: {appIdString}");
     // Wait until fully logged in if login pending (might be reconnecting)
     if (session != null && session.IsPendingLogin)
-      // Timeout passed into the wait itself so its callback-pumping loop
-      // exits too, instead of spinning abandoned for the whole outage
+      // The wait takes the timeout itself, so its callback pump stops too
       await session.WaitForReconnect(LoginWaitTimeout);
 
     if (!await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
@@ -1033,8 +1028,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
     // Wait until fully logged in if login pending (might be reconnecting)
     if (!wantsOfflineMode && session != null && session.IsPendingLogin)
-      // Timeout passed into the wait itself so its callback-pumping loop
-      // exits too, instead of spinning abandoned for the whole outage
+      // The wait takes the timeout itself, so its callback pump stops too
       await session.WaitForReconnect(LoginWaitTimeout);
 
     if ((session == null || !session.IsPendingLogin) && !await EnsureConnected()) throw DbusExceptionHelper.ThrowNotLoggedIn();
@@ -1389,8 +1383,9 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
   {
     if (session is not null && session.GetLogonDetails().Username == userId)
     {
-      // get the steamuser handler, which is used for logging on after successfully connecting
-      session?.Disconnect();
+      // Disconnect() logs off; Dispose() also stops the reconnect watchdog and callback pump.
+      session.Disconnect();
+      session.Dispose();
       session = null;
     }
 

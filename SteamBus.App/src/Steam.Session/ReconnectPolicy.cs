@@ -1,12 +1,7 @@
 namespace Steam.Session;
 
-/// Computes reconnection delays for the Steam session.
-///
-/// Valve restarts its CM (connection manager) fleet during weekly maintenance
-/// (typically Tuesday afternoons Pacific time), which can keep connections
-/// failing for 5-20 minutes. Recovery of an established session must therefore
-/// never give up: it retries indefinitely with exponential backoff. Only
-/// interactive logins, where a user is waiting at a login screen, are capped.
+/// Reconnection delays for the Steam session. An established session retries forever, since
+/// Valve's weekly CM maintenance can last 5-20 minutes; only interactive logins give up.
 public sealed class ReconnectPolicy
 {
   /// Maximum connection attempts during an interactive login before giving up
@@ -21,25 +16,37 @@ public sealed class ReconnectPolicy
   /// Upper bound for the delay between reconnect attempts
   public static readonly TimeSpan MaxDelay = TimeSpan.FromMinutes(5);
 
-  /// Upper bound for the delay during an interactive login, where a user is
-  /// actively waiting at a login screen and minute-long gaps between the
-  /// capped attempts would read as a hang
+  /// Upper bound during an interactive login, where longer gaps would read as a hang
   public static readonly TimeSpan InteractiveMaxDelay = TimeSpan.FromSeconds(10);
 
   const double BackoffMultiplier = 2.0;
 
-  // Randomizes each delay by up to +/-20% so that a fleet of devices does not
-  // hammer Steam in lockstep when connectivity returns after an outage
+  // +/-20%, so a fleet of devices does not reconnect in lockstep after an outage
   const double JitterFraction = 0.2;
 
   readonly Random random;
+  readonly TimeSpan baseDelay;
+  readonly TimeSpan maxDelay;
+  readonly TimeSpan interactiveMaxDelay;
   readonly object attemptsLock = new();
   int attempts;
 
   public ReconnectPolicy(Random? random = null)
+    : this(random, BaseDelay, MaxDelay, InteractiveMaxDelay)
+  {
+  }
+
+  // Tests shorten the delays.
+  internal ReconnectPolicy(Random? random, TimeSpan baseDelay, TimeSpan maxDelay, TimeSpan interactiveMaxDelay)
   {
     this.random = random ?? Random.Shared;
+    this.baseDelay = baseDelay;
+    this.maxDelay = maxDelay;
+    this.interactiveMaxDelay = interactiveMaxDelay;
   }
+
+  /// Delay before reconnecting a connection that was dropped on purpose rather than lost
+  public TimeSpan RecoveryDelay => baseDelay;
 
   /// Number of consecutive failed connection attempts
   public int Attempts
@@ -47,30 +54,26 @@ public sealed class ReconnectPolicy
     get { lock (attemptsLock) return attempts; }
   }
 
-  /// True once enough consecutive failures accumulated that an interactive
-  /// login should give up and surface an error to the waiting user
+  /// True once an interactive login should give up and show the waiting user an error
   public bool HasExceededInteractiveAttempts
   {
     get { lock (attemptsLock) return attempts >= InteractiveMaxAttempts; }
   }
 
-  /// Records a failed attempt and returns how long to wait before the next
-  /// one. Interactive attempts are clamped to InteractiveMaxDelay.
+  /// Records a failed attempt and returns how long to wait before the next one
   public TimeSpan RecordFailureAndGetDelay(bool interactive = false)
   {
     lock (attemptsLock)
     {
       attempts += 1;
       var delay = DelayForAttempt(attempts);
-      if (interactive && delay > InteractiveMaxDelay)
-        delay = InteractiveMaxDelay;
+      if (interactive && delay > interactiveMaxDelay)
+        delay = interactiveMaxDelay;
       return delay;
     }
   }
 
-  /// True when enough consecutive failures accumulated that the cached CM
-  /// server list should be re-fetched from the Steam Directory Web API. After
-  /// Valve restarts its CM fleet, every cached endpoint may be stale.
+  /// True when the cached CM server list should be re-fetched; after a CM restart every cached endpoint may be stale
   public bool ShouldRefreshServerList()
   {
     lock (attemptsLock)
@@ -87,9 +90,9 @@ public sealed class ReconnectPolicy
 
   TimeSpan DelayForAttempt(int attempt)
   {
-    var exponential = BaseDelay.TotalSeconds * Math.Pow(BackoffMultiplier, attempt - 1);
-    var capped = Math.Min(exponential, MaxDelay.TotalSeconds);
+    var exponential = baseDelay.TotalSeconds * Math.Pow(BackoffMultiplier, attempt - 1);
+    var capped = Math.Min(exponential, maxDelay.TotalSeconds);
     var jitter = 1.0 + JitterFraction * (random.NextDouble() * 2.0 - 1.0);
-    return TimeSpan.FromSeconds(Math.Min(capped * jitter, MaxDelay.TotalSeconds));
+    return TimeSpan.FromSeconds(Math.Min(capped * jitter, maxDelay.TotalSeconds));
   }
 }
