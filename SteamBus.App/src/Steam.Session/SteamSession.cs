@@ -74,6 +74,7 @@ public class SteamSession : IDisposable
   // SteamClient.Connect() calls whose disconnect has not been handled. SteamKit reports
   // exactly one disconnect per call, so while this is above one, a disconnect belongs to a replaced connection.
   int liveConnections;
+  int connectionSeq; // Numbers each SteamClient.Connect(), so a callback can tell whether its connection is current
   bool bAborted;
   bool bExpectingDisconnectRemote;
   bool bIsConnectionRecovery;
@@ -743,6 +744,7 @@ public class SteamSession : IDisposable
   {
     bConnecting = true;
     attemptStartedUtc = DateTime.UtcNow;
+    Interlocked.Increment(ref connectionSeq);
     Interlocked.Increment(ref liveConnections);
     try
     {
@@ -889,6 +891,20 @@ public class SteamSession : IDisposable
   }
 
 
+  // SteamKit cancels a request both when its connection drops and when the CM never answers it. Only the second
+  // strands the login, since no disconnect follows to retry it.
+  bool AuthRequestWentUnanswered(int connection) =>
+    connection == Volatile.Read(ref connectionSeq) && SteamClient.IsConnected && !abortedToken.IsCancellationRequested;
+
+
+  void EndUnansweredLogin()
+  {
+    Console.Error.WriteLine("OnConnected: Steam did not answer the sign-in request");
+    OnAuthError?.Invoke(DbusErrors.Timeout);
+    Abort(false);
+  }
+
+
   private void Reconnect()
   {
     Console.WriteLine($"Reconnect: called. waitingToRetry={waitingToRetry}, bIsConnectionRecovery={bIsConnectionRecovery}, IsConnected={SteamClient.IsConnected}");
@@ -912,6 +928,7 @@ public class SteamSession : IDisposable
 
     Console.WriteLine("OnConnected: Done!");
     bConnecting = false;
+    var connection = Volatile.Read(ref connectionSeq);
 
     if (!AuthenticatedUser())
     {
@@ -973,6 +990,11 @@ public class SteamSession : IDisposable
             /// you can implement your own <see cref="SteamKit2.Authentication.IAuthenticator"/>.
             Authenticator = this.authenticator,
           });
+        }
+        catch (TaskCanceledException) when (AuthRequestWentUnanswered(connection))
+        {
+          EndUnansweredLogin();
+          return;
         }
         catch (TaskCanceledException)
         {
@@ -1079,6 +1101,11 @@ public class SteamSession : IDisposable
         {
           this.SteamGuardData = null;
         }
+      }
+      catch (TaskCanceledException) when (AuthRequestWentUnanswered(connection))
+      {
+        EndUnansweredLogin();
+        return;
       }
       catch (TaskCanceledException)
       {
@@ -1349,11 +1376,12 @@ public class SteamSession : IDisposable
       return;
     }
 
-    // ServiceUnavailable is Steam itself being down, e.g. CM maintenance, so an established session retries it.
+    // Steam down, overloaded or rate limiting, e.g. after CM maintenance: an established session waits it out,
+    // since giving up signs the user out. A user at the login screen is told instead.
     var isRetryableLogOnResult = loggedOn.Result == EResult.TryAnotherCM
       || loggedOn.Result == EResult.AlreadyLoggedInElsewhere
       || loggedOn.Result == EResult.NoConnection
-      || (loggedOn.Result == EResult.ServiceUnavailable && bSessionEstablished);
+      || (bSessionEstablished && loggedOn.Result is EResult.ServiceUnavailable or EResult.Timeout or EResult.Busy or EResult.RateLimitExceeded);
 
     if (isRetryableLogOnResult)
     {
@@ -1421,6 +1449,10 @@ public class SteamSession : IDisposable
     // Another client holds the session; give it time before taking it back.
     if (result == EResult.AlreadyLoggedInElsewhere && delay < timings.AlreadyLoggedInRetry)
       delay = timings.AlreadyLoggedInRetry;
+
+    // Retrying a rate limit early only extends it.
+    if (result == EResult.RateLimitExceeded && delay < timings.RateLimitRetry)
+      delay = timings.RateLimitRetry;
 
     LastLogOnRetryDelay = delay;
     Console.WriteLine($"OnLogIn: Waiting {delay.TotalSeconds:F1}s before retrying ({result}, attempt #{reconnectPolicy.Attempts})...");
