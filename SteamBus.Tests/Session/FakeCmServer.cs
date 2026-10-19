@@ -44,7 +44,7 @@ sealed class FakeCmServer : IDisposable
   // Connections that completed the channel handshake
   public int Handshakes => Volatile.Read(ref handshakes);
 
-  // Handshaked connections that then sent their first packet, the logon
+  // Handshaked connections whose session then sent its logon
   public int Logons => Volatile.Read(ref logons);
 
   public int OpenConnections
@@ -136,11 +136,17 @@ sealed class FakeCmServer : IDisposable
         // Network latency on a real CM: SteamKit drops a request that beats its own channel setup.
         await Task.Delay(50);
         await WriteFrame(stream, EncryptRequest());
+        // SteamKit starts reading before it is ready for the request, so a loaded machine can still drop it and
+        // wait forever. Asking again keeps that race out of tests; once SteamKit has answered, it ignores a repeat.
+        while (!client.Client.Poll(TimeSpan.FromMilliseconds(300), SelectMode.SelectRead))
+          await WriteFrame(stream, EncryptRequest());
         await ReadFrame(stream);
         await WriteFrame(stream, EncryptResult());
         Interlocked.Increment(ref handshakes);
 
-        await ReadFrame(stream);
+        // SteamKit says hello as soon as the channel is up; the session's logon comes next.
+        if (await ReadFrame(stream) == null || await ReadFrame(stream) == null)
+          return;
         Interlocked.Increment(ref logons);
       }
 

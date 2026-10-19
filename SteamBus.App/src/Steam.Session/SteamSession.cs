@@ -1110,6 +1110,13 @@ public class SteamSession : IDisposable
     {
       SteamUser?.LogOn(logonDetails);
     }
+    catch (Exception ex) when (ex is not ArgumentException)
+    {
+      // SteamKit throws, instead of reporting NoConnection, when the connection drops under the logon.
+      // That is a lost connection, not a failed sign-in.
+      Console.Error.WriteLine($"OnConnected: Could not send the logon, retrying. err:{ex.Message}");
+      RetryLogOn(EResult.NoConnection);
+    }
     catch (Exception ex)
     {
       Console.Error.WriteLine("Failed to authenticate with Steam when logging in: " + ex.Message, ex);
@@ -1350,46 +1357,7 @@ public class SteamSession : IDisposable
 
     if (isRetryableLogOnResult)
     {
-      // Set here, before the disconnect the CM usually sends after a rejection, so OnDisconnected defers to this retry.
-      if (waitingToRetry) return;
-      waitingToRetry = true;
-
-      // Every rejection counts, so repeated ones back off and refresh the server list.
-      var delay = reconnectPolicy.RecordFailureAndGetDelay(interactive: !bSessionEstablished);
-      if (GiveUpInteractiveLogin($"OnLogIn ({loggedOn.Result})"))
-      {
-        waitingToRetry = false;
-        return;
-      }
-
-      // Another client holds the session; give it time before taking it back.
-      if (loggedOn.Result == EResult.AlreadyLoggedInElsewhere && delay < timings.AlreadyLoggedInRetry)
-        delay = timings.AlreadyLoggedInRetry;
-
-      LastLogOnRetryDelay = delay;
-      Console.WriteLine($"OnLogIn: Waiting {delay.TotalSeconds:F1}s before retrying ({loggedOn.Result}, attempt #{reconnectPolicy.Attempts})...");
-      _ = Task.Run(async () =>
-      {
-        try
-        {
-          await Task.Delay(delay, disposedToken.Token);
-        }
-        catch (OperationCanceledException)
-        {
-          return;
-        }
-
-        // Another path may have logged on, or the session was aborted, meanwhile.
-        if (!waitingToRetry || bAborted || IsLoggedOn)
-        {
-          waitingToRetry = false;
-          return;
-        }
-
-        Console.WriteLine($"Retrying Steam3 connection ({loggedOn.Result})...");
-        TryStartReconnect("OnLogIn", replaceConnected: true);
-      });
-
+      RetryLogOn(loggedOn.Result);
       return;
     }
 
@@ -1433,6 +1401,50 @@ public class SteamSession : IDisposable
     IsLoggedOn = true;
     IsPendingLogin = false;
     FinishLoggingInTask();
+  }
+
+  // Retries a logon that was rejected or never sent, on a new connection after the backoff.
+  void RetryLogOn(EResult result)
+  {
+    // Set here, before the disconnect the CM usually sends after a rejection, so OnDisconnected defers to this retry.
+    if (waitingToRetry) return;
+    waitingToRetry = true;
+
+    // Every rejection counts, so repeated ones back off and refresh the server list.
+    var delay = reconnectPolicy.RecordFailureAndGetDelay(interactive: !bSessionEstablished);
+    if (GiveUpInteractiveLogin($"OnLogIn ({result})"))
+    {
+      waitingToRetry = false;
+      return;
+    }
+
+    // Another client holds the session; give it time before taking it back.
+    if (result == EResult.AlreadyLoggedInElsewhere && delay < timings.AlreadyLoggedInRetry)
+      delay = timings.AlreadyLoggedInRetry;
+
+    LastLogOnRetryDelay = delay;
+    Console.WriteLine($"OnLogIn: Waiting {delay.TotalSeconds:F1}s before retrying ({result}, attempt #{reconnectPolicy.Attempts})...");
+    _ = Task.Run(async () =>
+    {
+      try
+      {
+        await Task.Delay(delay, disposedToken.Token);
+      }
+      catch (OperationCanceledException)
+      {
+        return;
+      }
+
+      // Another path may have logged on, or the session was aborted, meanwhile.
+      if (!waitingToRetry || bAborted || IsLoggedOn)
+      {
+        waitingToRetry = false;
+        return;
+      }
+
+      Console.WriteLine($"Retrying Steam3 connection ({result})...");
+      TryStartReconnect("OnLogIn", replaceConnected: true);
+    });
   }
 
   private void OnLoggedOff(SteamUser.LoggedOffCallback loggedOff)
