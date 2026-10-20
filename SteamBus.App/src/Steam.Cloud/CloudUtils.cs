@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.IO.Compression;
+using System.Runtime.ExceptionServices;
 using Playtron.Plugin;
 using Steam.Config;
 using SteamKit2;
@@ -89,18 +90,13 @@ public class CloudUtils
     }
 
 
-    public static async Task<(RemoteCacheFile, Exception?)> DownloadFileAsync(uint appid, RemoteCacheFile file, string fspath, SemaphoreSlim semaphore, HttpClient httpClient, SteamCloud steamCloud)
+    public static async Task<(RemoteCacheFile, Exception?)> DownloadFileAsync(uint appid, RemoteCacheFile file, string fspath, SemaphoreSlim semaphore, HttpClient httpClient, ICloudFileApi steamCloud)
     {
         await semaphore.WaitAsync();
         try
         {
             var cloudpath = file.GetRemotePath();
             var response = await steamCloud.DownloadFileAsync(appid, cloudpath);
-            if (response == null)
-            {
-                Console.WriteLine("Unable to get file {0}", file.Path);
-                throw new Exception("connection error");
-            }
             if (response.encrypted)
             {
                 Console.WriteLine("Encypted files aren't supported");
@@ -180,30 +176,15 @@ public class CloudUtils
         return (file, null);
     }
 
-    public static async Task<(RemoteCacheFile, Exception?)> UploadFileAsync(uint appid, RemoteCacheFile file, string fspath, ulong batch, SemaphoreSlim semaphore, HttpClient httpClient, SteamCloud steamCloud)
+    public static async Task<(RemoteCacheFile, Exception?)> UploadFileAsync(uint appid, RemoteCacheFile file, string fspath, ulong batch, SemaphoreSlim semaphore, HttpClient httpClient, ICloudFileApi steamCloud)
     {
         await semaphore.WaitAsync();
         try
         {
             var cloudpath = file.GetRemotePath();
             byte[] sha_hash = new byte[20];
-            Stream fileContents;
-            if (file.Size > 512 * 1024)
-            {
-                var zipStream = new MemoryStream(1024);
-                using var newArchive = new ZipArchive(zipStream, ZipArchiveMode.Create);
-                var entry = newArchive.CreateEntry("z");
-                using (var entryStream = entry.Open())
-                {
-                    using var fileStream = File.OpenRead(fspath);
-                    await fileStream.CopyToAsync(entryStream);
-                }
-                fileContents = zipStream;
-            }
-            else
-            {
-                fileContents = File.OpenRead(fspath);
-            }
+            // Sent uncompressed: Steam takes a file whose size equals its raw size as is.
+            using var fileContents = File.OpenRead(fspath);
 
             for (int i = 0; i < sha_hash.Length; i++)
             {
@@ -211,66 +192,20 @@ public class CloudUtils
                 sha_hash[i] = Convert.ToByte(hex, 16);
             }
             var response = await steamCloud.ClientBeginFileUpload(appid, cloudpath, sha_hash, (uint)fileContents.Length, file.Size, file.LocalTime, file.PlatformsToSync, batch);
-            if (response == null)
+            Exception? transferError = null;
+            try
             {
-                Console.WriteLine("Unable to upload file {0}", file.Path);
-                throw new Exception("connection error");
+                await TransferAsync(response, fileContents, httpClient);
             }
-            if (response.encrypt_file)
+            catch (Exception e)
             {
-                throw new Exception("encryption is unsupported");
+                transferError = e;
             }
-            foreach (var request in response.block_requests)
-            {
-                string http = request.use_https ? "https" : "http";
-                string url = $"{http}://{request.url_host}{request.url_path}";
-                Console.WriteLine("Uploading to {0}", url);
-                // These methods are a guess, I assume Steam uses same http method codes here as in steamworks 
-                HttpMethod httpMethod = (EHTTPMethod)request.http_method switch
-                {
-                    EHTTPMethod.GET => HttpMethod.Get,
-                    EHTTPMethod.HEAD => HttpMethod.Head,
-                    EHTTPMethod.POST => HttpMethod.Post,
-                    EHTTPMethod.DELETE => HttpMethod.Delete,
-                    EHTTPMethod.OPTIONS => HttpMethod.Options,
-                    EHTTPMethod.PATCH => HttpMethod.Patch,
-                    EHTTPMethod.PUT => HttpMethod.Put,
-                    _ => HttpMethod.Put
-                };
-                var httpRequest = new HttpRequestMessage(httpMethod, url);
-                if (request.ShouldSerializeexplicit_body_data())
-                {
-                    httpRequest.Content = new ByteArrayContent(request.explicit_body_data);
-                }
-                else
-                {
-                    var offset = request.ShouldSerializeblock_offset() ? (long)request.block_offset : 0;
-                    var length = request.ShouldSerializeblock_length() ? (int)request.block_length : (int)fileContents.Length;
-
-                    if (length != 0)
-                    {
-                        fileContents.Seek(offset, SeekOrigin.Begin);
-                        httpRequest.Content = new StreamContent(fileContents, length);
-                    }
-                }
-
-                foreach (var header in request.request_headers)
-                {
-                    try
-                    {
-                        httpRequest.Headers.Add(header.name, header.value);
-                    }
-                    catch (Exception)
-                    {
-                        Console.WriteLine("Unable to insert {0} header to request", header.name);
-                        httpRequest.Content.Headers.Add(header.name, header.value);
-                    }
-                }
-                var httpRes = await httpClient.SendAsync(httpRequest);
-                // Gracefully handle errors
-                httpRes.EnsureSuccessStatusCode();
-            }
-            var commitRes = await steamCloud.CientCommitFileUpload(appid, true, cloudpath, sha_hash) ?? throw new Exception("Failed to commit file");
+            // Steam refuses every later upload of a begun file (Busy) unless it is committed before the
+            // batch completes, so a failed transfer is still committed, as failed.
+            var commitRes = await steamCloud.CientCommitFileUpload(appid, transferError == null, cloudpath, sha_hash);
+            if (transferError != null) ExceptionDispatchInfo.Throw(transferError);
+            if (commitRes == null) throw new Exception("Failed to commit file");
             Console.WriteLine("File {0} is commited?: {1}", cloudpath, commitRes.file_committed);
         }
         catch (Exception e)
@@ -282,6 +217,58 @@ public class CloudUtils
             semaphore.Release();
         }
         return (file, null);
+    }
+
+    static async Task TransferAsync(CCloud_ClientBeginFileUpload_Response response, Stream fileContents, HttpClient httpClient)
+    {
+        if (response.encrypt_file)
+        {
+            throw new Exception("encryption is unsupported");
+        }
+        foreach (var request in response.block_requests)
+        {
+            string http = request.use_https ? "https" : "http";
+            string url = $"{http}://{request.url_host}{request.url_path}";
+            Console.WriteLine("Uploading to {0}", url);
+            // These methods are a guess, I assume Steam uses same http method codes here as in steamworks 
+            HttpMethod httpMethod = (EHTTPMethod)request.http_method switch
+            {
+                EHTTPMethod.GET => HttpMethod.Get,
+                EHTTPMethod.HEAD => HttpMethod.Head,
+                EHTTPMethod.POST => HttpMethod.Post,
+                EHTTPMethod.DELETE => HttpMethod.Delete,
+                EHTTPMethod.OPTIONS => HttpMethod.Options,
+                EHTTPMethod.PATCH => HttpMethod.Patch,
+                EHTTPMethod.PUT => HttpMethod.Put,
+                _ => HttpMethod.Put
+            };
+            var httpRequest = new HttpRequestMessage(httpMethod, url);
+            if (request.ShouldSerializeexplicit_body_data())
+            {
+                httpRequest.Content = new ByteArrayContent(request.explicit_body_data);
+            }
+            else
+            {
+                var offset = request.ShouldSerializeblock_offset() ? (long)request.block_offset : 0;
+                var length = request.ShouldSerializeblock_length() ? (int)request.block_length : (int)fileContents.Length;
+
+                if (length != 0)
+                {
+                    fileContents.Seek(offset, SeekOrigin.Begin);
+                    httpRequest.Content = new StreamContent(fileContents, length);
+                }
+            }
+
+            foreach (var header in request.request_headers)
+            {
+                // Sent as given: Steam's Content-Disposition ends in ';', which .NET's parser rejects.
+                if (!httpRequest.Headers.TryAddWithoutValidation(header.name, header.value))
+                    httpRequest.Content?.Headers.TryAddWithoutValidation(header.name, header.value);
+            }
+            var httpRes = await httpClient.SendAsync(httpRequest);
+            // Gracefully handle errors
+            httpRes.EnsureSuccessStatusCode();
+        }
     }
 
     // Splits path after the variable
