@@ -23,6 +23,7 @@ public static class DbusErrors
     public const string CloudQuota = "one.playtron.Error.CloudQuota";
     public const string CloudFileDownload = "one.playtron.Error.CloudFileDownload";
     public const string CloudFileUpload = "one.playtron.Error.CloudFileUpload";
+    public const string CloudBusy = "one.playtron.Error.CloudBusy";
     public const string AppNotOwned = "one.playtron.Error.AppNotOwned";
     public const string PlayingBlocked = "one.playtron.Error.PlayingBlocked";
     public const string NotEnoughSpace = "one.playtron.Error.NotEnoughSpace";

@@ -21,6 +21,23 @@ public static class CloudSyncCompletion
     return new DBusException(error, "Cloud save synchronization did not complete");
   }
 
+  // Steam answers Busy, for uploads and downloads alike, while an earlier upload of the file was begun and never committed.
+  public static string FileError(Exception exception, string? current, SyncState operation) =>
+    exception is CloudRefusedException { Result: SteamKit2.EResult.Busy }
+      ? DbusErrors.CloudBusy
+      : current ?? (operation == SyncState.Upload ? DbusErrors.CloudFileUpload : DbusErrors.CloudFileDownload);
+
+  static DBusException Busy(string appId, Action<CloudSyncFailure> failed, SyncState operation)
+  {
+    failed(new CloudSyncFailure
+    {
+      AppdId = appId,
+      Error = DbusErrors.CloudBusy,
+      SyncState = (uint)operation,
+    });
+    return new DBusException(DbusErrors.CloudBusy, "Steam still holds an unfinished earlier upload of these saves");
+  }
+
   public static Task CompleteUploadAsync(
     string appId,
     string? transferError,
@@ -47,6 +64,7 @@ public static class CloudSyncCompletion
     }
     catch (Exception)
     {
+      if (transferError == DbusErrors.CloudBusy) throw Busy(appId, failed, operation);
       throw Failure(appId, failed, operation);
     }
     progressed(new CloudSyncProgress

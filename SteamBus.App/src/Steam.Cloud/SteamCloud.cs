@@ -9,6 +9,20 @@ namespace Steam.Cloud;
 // These are handled by CCloud_ExternalStorageTransferReport_Notification
 // and don't provide any data back to the client.
 
+// The cloud calls one file transfer makes.
+public interface ICloudFileApi
+{
+  Task<CCloud_ClientFileDownload_Response> DownloadFileAsync(uint appid, string filename);
+  Task<CCloud_ClientBeginFileUpload_Response> ClientBeginFileUpload(uint appid, string filename, byte[] sha, uint file_size, uint raw_file_size, ulong time_stamp, ERemoteStoragePlatform platformsToSync, ulong upload_batch_id);
+  Task<CCloud_ClientCommitFileUpload_Response?> CientCommitFileUpload(uint appid, bool transfer_succeeded, string filename, byte[] file_sha);
+}
+
+// Steam turned a cloud request down with this result.
+public class CloudRefusedException(string request, EResult result) : Exception($"{request} refused: {result}")
+{
+  public EResult Result { get; } = result;
+}
+
 // Common interface betwen different file types that eventually move to RemoteCacheFile
 public interface IRemoteFile
 {
@@ -17,7 +31,7 @@ public interface IRemoteFile
   public ulong UpdateTime { get; }
 }
 
-public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
+public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages) : ICloudFileApi
 {
   // Handles requests to actual cloud
   private SteamKit2.Internal.Cloud unifiedCloud = steamUnifiedMessages.CreateService<SteamKit2.Internal.Cloud>();
@@ -52,7 +66,7 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
   /// <param name="appid">Application id</param>
   /// <param name="filename">Path known to the api</param>
   /// <returns>A <see cref="CCloud_ClientFileDownload_Response"/> payload or null if failed</returns>
-  public async Task<CCloud_ClientFileDownload_Response?> DownloadFileAsync(uint appid, string filename)
+  public async Task<CCloud_ClientFileDownload_Response> DownloadFileAsync(uint appid, string filename)
   {
     // It is possible to force proxification and particular realm, not useful for us I guess.
     var request = new CCloud_ClientFileDownload_Request { appid = appid, filename = filename };
@@ -60,7 +74,7 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to get data for file download of {0} in {1}, {2}", filename, appid, response.Result);
-      return null;
+      throw new CloudRefusedException("ClientFileDownload", response.Result);
     }
     return response.Body;
   }
@@ -82,7 +96,7 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
   }
 
 
-  public async Task<CCloud_ClientBeginFileUpload_Response?> ClientBeginFileUpload(uint appid, string filename, byte[] sha, uint file_size, uint raw_file_size, ulong time_stamp, ERemoteStoragePlatform platformsToSync, ulong upload_batch_id)
+  public async Task<CCloud_ClientBeginFileUpload_Response> ClientBeginFileUpload(uint appid, string filename, byte[] sha, uint file_size, uint raw_file_size, ulong time_stamp, ERemoteStoragePlatform platformsToSync, ulong upload_batch_id)
   {
     // Unsure what's the difference between raw_file_size and file_size, maybe related to encryption? We don't use encryption so it's fine, right???
     CCloud_ClientBeginFileUpload_Request request = new()
@@ -101,7 +115,7 @@ public class SteamCloud(SteamUnifiedMessages steamUnifiedMessages)
     if (response.Result != EResult.OK)
     {
       Console.WriteLine("Failed to begin upload for {0} of {1}: {2}", filename, appid, response.Result);
-      return null;
+      throw new CloudRefusedException("ClientBeginFileUpload", response.Result);
     }
     return response.Body;
   }

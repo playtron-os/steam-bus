@@ -2094,7 +2094,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         file.SyncState = ERemoteStorageSyncState.inprogress;
         file.Time = 0;
         file.LocalTime = 0;
-        currentError ??= DbusErrors.CloudFileDownload;
+        currentError = CloudSyncCompletion.FileError(exception, currentError, SyncState.Download);
       }
       cachedFiles[file.GetRemotePath()] = file;
     }
@@ -2273,7 +2273,7 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
         Console.WriteLine("a file encountered an error {0}", exception);
         file.SyncState = ERemoteStorageSyncState.inprogress;
         file.RemoteTime = 0;
-        currentError ??= DbusErrors.CloudFileUpload;
+        currentError = CloudSyncCompletion.FileError(exception, currentError, SyncState.Upload);
       }
       cachedFiles[file.GetRemotePath()] = file;
     }
