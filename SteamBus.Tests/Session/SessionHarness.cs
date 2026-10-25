@@ -30,7 +30,7 @@ sealed class SessionHarness : IAsyncDisposable
   public List<string> AuthErrors { get; } = [];
 
   // interactive: a login still in progress, holding the token its auth flow just returned but never logged on.
-  public static async Task<SessionHarness> Create(bool savedToken = true, bool online = true, Action<ISteamConfigurationBuilder>? configure = null, SessionTimings? timings = null, bool interactive = false)
+  public static async Task<SessionHarness> Create(bool savedToken = true, bool online = true, Action<ISteamConfigurationBuilder>? configure = null, SessionTimings? timings = null, bool interactive = false, uint accountId = 0)
   {
     // STEAMBUS_TEST_TRACE=1 adds SteamKit's own connection log to the test output.
     if (Environment.GetEnvironmentVariable("STEAMBUS_TEST_TRACE") == "1" && !DebugLog.Enabled)
@@ -54,7 +54,7 @@ sealed class SessionHarness : IAsyncDisposable
       configure?.Invoke(config);
     });
 
-    var details = new SteamUser.LogOnDetails { Username = "tester" };
+    var details = new SteamUser.LogOnDetails { Username = "tester", AccountID = accountId };
     if (savedToken)
       details.AccessToken = "saved-refresh-token";
     else

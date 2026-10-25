@@ -156,7 +156,7 @@ public class SteamSession : IDisposable
       PersonaName = userCache.GetKey(UserCache.PERSONA_NAME, details.AccountID) ?? "";
 
       PackageIDs = new ReadOnlyCollection<uint>(libraryCache.GetPackageIDs(details.AccountID));
-      ProviderItemMap = new ConcurrentDictionary<uint, ProviderItem>(libraryCache.GetApps(details.AccountID).ToDictionary((x) => uint.Parse(x.id)));
+      ProviderItemMap = new ConcurrentDictionary<uint, ProviderItem>(libraryCache.GetApps(details.AccountID).Where(IsListed).ToDictionary((x) => uint.Parse(x.id)));
     }
     else
     {
@@ -377,7 +377,7 @@ public class SteamSession : IDisposable
 
           Console.WriteLine("Got AppInfo for {0}", app.ID);
           AppInfo[app.ID] = app.KeyValues;
-          ProviderItemMap[app.ID] = GetProviderItem(app.ID.ToString(), app.KeyValues);
+          SetProviderItem(app.ID, app.KeyValues);
           appInfoCache.Save(app.ID, app.KeyValues);
         }
 
@@ -485,7 +485,7 @@ public class SteamSession : IDisposable
         // Update ProviderItemMap so IsAppOwned returns true
         if (AppInfo.TryGetValue(appId, out var appInfo))
         {
-          ProviderItemMap[appId] = GetProviderItem(appId.ToString(), appInfo);
+          SetProviderItem(appId, appInfo);
         }
       }
 
@@ -1589,7 +1589,7 @@ public class SteamSession : IDisposable
               var validOsList = entry.Value.KeyValues["extended"]?["validoslist"]?.AsString() ?? entry.Value.KeyValues["common"]?["oslist"]?.AsString();
               if (!string.IsNullOrEmpty(validOsList) && !validOsList.Split(',').Any(os => os == "windows" || os == ContentDownloader.GetSteamOS())) continue;
 
-              ProviderItemMap[entry.Key] = GetProviderItem(entry.Key.ToString(), entry.Value.KeyValues);
+              SetProviderItem(entry.Key, entry.Value.KeyValues);
 
               if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
               {
@@ -1715,6 +1715,19 @@ public class SteamSession : IDisposable
       providerItems.Add(app.Value);
 
     return providerItems;
+  }
+
+  // Steam shows an account only "public_only" info for some apps in its packages: no name, type or
+  // depots. They can't be shown or installed, so they are left out of the library.
+  public static bool IsListed(ProviderItem item) => !string.IsNullOrEmpty(item.name);
+
+  internal void SetProviderItem(uint appId, KeyValue appInfo)
+  {
+    var item = GetProviderItem(appId.ToString(), appInfo);
+    if (IsListed(item))
+      ProviderItemMap[appId] = item;
+    else
+      ProviderItemMap.TryRemove(appId, out _);
   }
 
   public static ProviderItem GetProviderItem(string appId, KeyValue appKeyValues)
