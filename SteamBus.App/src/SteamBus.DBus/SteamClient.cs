@@ -671,6 +671,11 @@ class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IA
 
       return JsonSerializer.Serialize(metadata, options);
     }
+    catch (DBusException exception)
+    {
+      Console.WriteLine($"GetItemMetadataAsync({appIdString}): {exception.ErrorName}");
+      throw;
+    }
     catch (Exception exception)
     {
       Console.WriteLine(exception.ToString());
