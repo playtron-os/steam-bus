@@ -23,4 +23,6 @@ public interface IPluginDependencies : IDBusObject
     Task<IDisposable> WatchInstallCompletedAsync(Action<string> reply);
     Task<IDisposable> WatchInstallFailedAsync(Action<(string appId, string error)> reply);
     Task<IDisposable> WatchDependencyNewVersionFoundAsync(Action<(string appId, string version)> reply);
+    // Which of an install's downloads runs, of how many: a fresh Steam client downloads twice
+    Task<IDisposable> WatchInstallStepChangedAsync(Action<(string appId, uint step, uint steps)> reply);
 }

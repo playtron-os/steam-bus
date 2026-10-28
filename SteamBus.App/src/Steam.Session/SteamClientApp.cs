@@ -29,6 +29,7 @@ public class SteamClientApp
     public Action<string>? OnDependencyInstallCompleted;
     public Action<(string appId, string error)>? OnDependencyInstallFailed;
     public Action<(string appId, string version)>? OnDependencyAppNewVersionFound;
+    public Action<(string appId, uint step, uint steps)>? OnDependencyInstallStepChanged;
     public Action<string>? OnLaunchReady;
     public Action<(string appId, string error)>? OnLaunchError;
 
@@ -38,6 +39,7 @@ public class SteamClientApp
     public bool isLoggedIn { get; private set; }
     private bool isReady;
     private string updatingToVersion = "0";
+    internal ClientUpdateSteps UpdateSteps { get; init; } = new();
     private Process? process;
 
     private TaskCompletionSource? updateStartedTask;
@@ -218,11 +220,16 @@ public class SteamClientApp
     {
         if (string.IsNullOrEmpty(e.Data)) return;
         Console.WriteLine($"[Steam Client: stderr] {e.Data}");
+        OnClientOutput(e.Data);
+    }
 
-        var hasRunningString = IsClientUiLine(e.Data);
+    // One line of the client's stderr, where the bootstrapper reports its update
+    internal void OnClientOutput(string line)
+    {
+        var hasRunningString = IsClientUiLine(line);
 
         // Client starting up, so reset initial variables
-        if (e.Data.Contains("Running Steam on"))
+        if (line.Contains("Running Steam on"))
         {
             running = true;
             isReady = false;
@@ -236,7 +243,7 @@ public class SteamClientApp
         // Mark update as complete once the restarted client runs, a client without an account never prints the UI lines.
         // startingTask is only set while a client is (re)starting, so a background update of an already running
         // client is not completed by the lines that client prints before it restarts
-        if (IsClientRunningLine(e.Data))
+        if (IsClientRunningLine(line))
         {
             runningTask?.TrySetResult();
             runningTask = null;
@@ -246,11 +253,11 @@ public class SteamClientApp
         }
 
         // Fallback in case the restarted client output is not recognised
-        if (updating && IsUpdateInstalledLine(e.Data))
+        if (updating && IsUpdateInstalledLine(line))
             StartUpdateInstalledWatchdog();
 
         // Mark steam client as started when it outputs this string, a client that never shows a UI is started once it runs
-        if (startingTask != null && (IsClientStartedLine(e.Data) || (!waitForUi && IsClientRunningLine(e.Data))))
+        if (startingTask != null && (IsClientStartedLine(line) || (!waitForUi && IsClientRunningLine(line))))
         {
             Console.WriteLine("Steam client has started");
 
@@ -322,9 +329,9 @@ public class SteamClientApp
         }
 
         // Get version of new steam client update
-        if (e.Data.Contains("Downloaded new manifest"))
+        if (line.Contains("Downloaded new manifest"))
         {
-            var match = Regex.Match(e.Data, @"version\s(\d+),");
+            var match = Regex.Match(line, @"version\s(\d+),");
             if (match.Success)
             {
                 updatingToVersion = match.Groups[1].Value;
@@ -333,13 +340,35 @@ public class SteamClientApp
             else
                 Console.Error.WriteLine("Failed to parse steam client version");
 
+            var manifest = ClientUpdateSteps.ParseManifest(line);
+            if (manifest != null && UpdateSteps.OnManifest(manifest, updating))
+            {
+                // The restarted client downloads again, so the last step's watchdog no longer applies
+                updateInstalledWatchdog = null;
+                ReportUpdateStep();
+            }
+
+            return;
+        }
+
+        // Unpacking has no progress of its own, say once per step that the download is being installed
+        if (updating && ClientUpdateSteps.IsInstallingLine(line) && UpdateSteps.OnInstalling())
+        {
+            OnDependencyInstallProgressed?.Invoke(new InstallProgressedDescription
+            {
+                AppId = STEAM_CLIENT_APP_ID.ToString(),
+                Stage = (uint)DownloadStage.Verifying,
+                DownloadedBytes = UpdateSteps.TotalBytes,
+                TotalDownloadSize = UpdateSteps.TotalBytes,
+                Progress = 100,
+            });
             return;
         }
 
         // Process steam client update
-        if (e.Data.Contains("Downloading update"))
+        if (line.Contains("Downloading update"))
         {
-            var match = Regex.Match(e.Data, @"\(([\d,]+) of ([\d,]+) (\w+)\)");
+            var match = Regex.Match(line, @"\(([\d,]+) of ([\d,]+) (\w+)\)");
             string currentBytes = match.Success ? match.Groups[1].Value.Replace(",", "") : "0";
             string totalBytes = match.Success ? match.Groups[2].Value.Replace(",", "") : "0";
             string unit = match.Success ? match.Groups[3].Value : "KB";
@@ -365,9 +394,14 @@ public class SteamClientApp
                 Console.WriteLine("Steam client update has started");
                 updating = true;
                 OnUpdateStarted(updatingToVersion, totalBytesValue);
+                UpdateSteps.Start();
+                if (match.Success) UpdateSteps.OnDownloadProgress(totalBytesValue);
+                ReportUpdateStep();
             }
-            else
+            // "Downloading update..." without sizes starts a download, it is not 100% of one
+            else if (match.Success)
             {
+                UpdateSteps.OnDownloadProgress(totalBytesValue);
                 toolsDepotConfigStore.SetDownloadStage(STEAM_CLIENT_APP_ID, DownloadStage.Downloading);
                 toolsDepotConfigStore.SetCurrentSize(STEAM_CLIENT_APP_ID, currentBytesValue);
                 toolsDepotConfigStore.SetTotalSize(STEAM_CLIENT_APP_ID, totalBytesValue);
@@ -396,6 +430,12 @@ public class SteamClientApp
             if (updateEndedTask == null)
                 updateEndedTask = new();
         }
+    }
+
+    private void ReportUpdateStep()
+    {
+        Console.WriteLine($"Steam client update step {UpdateSteps.Step} of {UpdateSteps.Steps}");
+        OnDependencyInstallStepChanged?.Invoke((STEAM_CLIENT_APP_ID.ToString(), UpdateSteps.Step, UpdateSteps.Steps));
     }
 
     public void OnUpdateStarted(string? version = null, ulong? totalBytes = null)
@@ -431,6 +471,7 @@ public class SteamClientApp
         toolsDepotConfigStore.Save(STEAM_CLIENT_APP_ID);
 
         Console.WriteLine("Steam client update has completed");
+        UpdateSteps.Reset();
         OnDependencyInstallCompleted?.Invoke(STEAM_CLIENT_APP_ID.ToString());
 
         updateInstalledWatchdog = null;
@@ -443,12 +484,14 @@ public class SteamClientApp
         if (updateInstalledWatchdog != null) return;
 
         var endedTask = updateEndedTask;
+        var step = UpdateSteps.Step;
         updateInstalledWatchdog = Task.Run(async () =>
         {
             await Task.Delay(STEAM_UPDATE_RESTART_TIMEOUT);
 
-            // Client is still alive after the update was installed, an exit would have failed it in OnExited
-            if (updating && running && endedTask != null && ReferenceEquals(updateEndedTask, endedTask))
+            // Client is still alive after the update was installed, an exit would have failed it in OnExited.
+            // A restarted client that downloads again moved on to the next step, which has its own watchdog
+            if (updating && running && endedTask != null && ReferenceEquals(updateEndedTask, endedTask) && step == UpdateSteps.Step)
             {
                 Console.Error.WriteLine("Timed out waiting for the restarted steam client to report it is running, assuming the update completed");
                 OnUpdateCompleted();
@@ -471,6 +514,7 @@ public class SteamClientApp
             wasUpdating = updating;
             updating = false;
         }
+        UpdateSteps.Reset();
         if (wasUpdating)
         {
             Console.WriteLine("Steam client update has failed");
