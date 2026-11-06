@@ -375,10 +375,12 @@ public class SteamSession : IDisposable
         {
           var app = app_value.Value;
 
-          Console.WriteLine("Got AppInfo for {0}", app.ID);
-          AppInfo[app.ID] = app.KeyValues;
-          SetProviderItem(app.ID, app.KeyValues);
-          appInfoCache.Save(app.ID, app.KeyValues);
+          var resolved = ResolveAppInfo(app.ID, app.KeyValues);
+          Console.WriteLine("Got AppInfo for {0}{1}", app.ID, resolved == app.KeyValues ? "" : " (public_only, kept the cached info)");
+          AppInfo[app.ID] = resolved;
+          SetProviderItem(app.ID, resolved);
+          if (resolved == app.KeyValues)
+            appInfoCache.Save(app.ID, app.KeyValues);
         }
 
         foreach (var app in appInfo.UnknownApps)
@@ -1578,18 +1580,30 @@ public class SteamSession : IDisposable
             return;
           }
 
+          int publicOnly = 0, fromCache = 0;
           foreach (var productInfo in result.Results)
           {
             foreach (var entry in productInfo.Apps)
             {
-              AppInfo[entry.Key] = entry.Value.KeyValues;
-              appInfoCache.Save(entry.Key, entry.Value.KeyValues);
+              var received = entry.Value.KeyValues;
+              var appInfo = ResolveAppInfo(entry.Key, received);
+              if (!HasFullInfo(entry.Key, received))
+              {
+                publicOnly++;
+                if (appInfo != received)
+                  fromCache++;
+              }
+
+              AppInfo[entry.Key] = appInfo;
+              // Never replace a cached full answer with the public_only one Steam gave this time.
+              if (appInfo == received)
+                appInfoCache.Save(entry.Key, received);
 
               // Validate if we can install the game
-              var validOsList = entry.Value.KeyValues["extended"]?["validoslist"]?.AsString() ?? entry.Value.KeyValues["common"]?["oslist"]?.AsString();
+              var validOsList = appInfo["extended"]?["validoslist"]?.AsString() ?? appInfo["common"]?["oslist"]?.AsString();
               if (!string.IsNullOrEmpty(validOsList) && !validOsList.Split(',').Any(os => os == "windows" || os == ContentDownloader.GetSteamOS())) continue;
 
-              SetProviderItem(entry.Key, entry.Value.KeyValues);
+              SetProviderItem(entry.Key, appInfo);
 
               if (installedAppIdsToVersion.TryGetValue(entry.Key.ToString(), out var item))
               {
@@ -1608,6 +1622,7 @@ public class SteamSession : IDisposable
               }
             }
           }
+          Console.WriteLine($"OnLicenseList: Steam gave public_only info for {publicOnly} apps, {fromCache} of them kept from app_info_cache");
 
           if (SteamUser?.SteamID?.AccountID != null)
           {
@@ -1720,6 +1735,20 @@ public class SteamSession : IDisposable
   // Steam shows an account only "public_only" info for some apps in its packages: no name, type or
   // depots. They can't be shown or installed, so they are left out of the library.
   public static bool IsListed(ProviderItem item) => !string.IsNullOrEmpty(item.name);
+
+  // Steam also answers apps the account owns with "public_only" info, and does not do it for the
+  // same apps from one login to the next. An app whose full info is cached keeps it, so an owned
+  // game does not drop out of the library, and look unowned, for as long as Steam withholds it.
+  internal KeyValue ResolveAppInfo(uint appId, KeyValue received)
+  {
+    if (HasFullInfo(appId, received))
+      return received;
+
+    var cached = appInfoCache.GetCached(appId);
+    return cached != null && HasFullInfo(appId, cached) ? cached : received;
+  }
+
+  static bool HasFullInfo(uint appId, KeyValue appInfo) => IsListed(GetProviderItem(appId.ToString(), appInfo));
 
   internal void SetProviderItem(uint appId, KeyValue appInfo)
   {
