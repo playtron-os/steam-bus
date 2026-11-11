@@ -2,7 +2,7 @@ using Tmds.DBus;
 
 namespace SteamBus.DBus;
 
-[DBusInterface("one.playtron.SteamBus.Manager")]
+[DBusInterface("inc.kora.SteamBus.Manager")]
 public interface IManager : IDBusObject
 {
   Task<string> GreetAsync(string message);
@@ -11,7 +11,7 @@ public interface IManager : IDBusObject
 
 class Manager : IManager
 {
-  public static readonly ObjectPath Path = new ObjectPath("/one/playtron/SteamBus");
+  public static readonly ObjectPath Path = new ObjectPath("/inc/kora/SteamBus");
   public Connection connection;
   public DepotConfigStore depotConfigStore;
   public DepotConfigStore dependenciesStore;
@@ -33,7 +33,7 @@ class Manager : IManager
   // TODO: Keep track of steam client instances
   public async Task<string> CreateClientAsync()
   {
-    string path = "/one/playtron/SteamBus/SteamClient1";
+    string path = "/inc/kora/SteamBus/SteamClient1";
     DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore, dependenciesStore, displayManager, networkManager);
 
     // Register the object with DBus

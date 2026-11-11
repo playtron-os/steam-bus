@@ -13,7 +13,7 @@ public class PlaytronPluginProperties
   public readonly string MinimumApiVersion = "0.1.1";
 }
 
-[DBusInterface("one.playtron.plugin.Plugin")]
+[DBusInterface("inc.kora.plugin.Plugin")]
 public interface IPlaytronPlugin : IDBusObject
 {
   Task<object> GetAsync(string prop);

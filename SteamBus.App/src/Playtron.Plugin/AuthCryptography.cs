@@ -2,7 +2,7 @@ using Tmds.DBus;
 
 namespace Playtron.Plugin;
 
-[DBusInterface("one.playtron.auth.Cryptography")]
+[DBusInterface("inc.kora.auth.Cryptography")]
 public interface IAuthCryptography : IDBusObject
 {
   // Returns the public key used to send encrypted secrets. The data must be

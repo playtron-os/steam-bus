@@ -2,7 +2,7 @@ using Tmds.DBus;
 
 namespace Playtron.Plugin;
 
-[DBusInterface("one.playtron.auth.TwoFactorFlow")]
+[DBusInterface("inc.kora.auth.TwoFactorFlow")]
 public interface IAuthTwoFactorFlow : IDBusObject
 {
   // Send the given two-factor code.
