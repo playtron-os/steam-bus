@@ -25,7 +25,7 @@ public class UserProperties : IEnumerable<KeyValuePair<string, object>>
 }
 
 
-[DBusInterface("one.playtron.auth.User")]
+[DBusInterface("inc.kora.auth.User")]
 public interface IUser : IDBusObject
 {
   Task<bool> ChangeUserAsync(string user_id);

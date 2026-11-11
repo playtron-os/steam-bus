@@ -39,7 +39,7 @@ public enum SyncState
   Upload
 }
 
-[DBusInterface("one.playtron.plugin.CloudSaveProvider")]
+[DBusInterface("inc.kora.plugin.CloudSaveProvider")]
 public interface ICloudSaveProvider : IDBusObject
 {
   Task CloudSaveDownloadAsync(string appid, string platform, bool force, CloudPathObject[] paths);

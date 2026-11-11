@@ -16,7 +16,7 @@ public struct DriveInfo
     public bool NeedsFormatting { get; set; }
 }
 
-[DBusInterface("one.playtron.plugin.Manager")]
+[DBusInterface("inc.kora.plugin.Manager")]
 public interface IPluginManager : IDBusObject
 {
     // Methods

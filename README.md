@@ -7,36 +7,36 @@ DBus interface for interacting with Steam API
 Login
 
 ```bash
-busctl --user call one.playtron.SteamBus \
-  /one/playtron/SteamBus/SteamClient0 \
-  one.playtron.auth.PasswordFlow \
+busctl --user call inc.kora.SteamBus \
+  /inc/kora/SteamBus/SteamClient0 \
+  inc.kora.auth.PasswordFlow \
   Login "ss" "myuser" 'mypassword'
 ```
 
 2FA
 
 ```bash
-busctl --user call one.playtron.SteamBus \
-  /one/playtron/SteamBus/SteamClient0 \
-  one.playtron.auth.TwoFactorFlow \
+busctl --user call inc.kora.SteamBus \
+  /inc/kora/SteamBus/SteamClient0 \
+  inc.kora.auth.TwoFactorFlow \
   SendCode s XXXXX
 ```
 
 Getting install options
 
 ```bash
-busctl --user call one.playtron.SteamBus \
-  /one/playtron/SteamBus/SteamClient0 \
-  one.playtron.plugin.LibraryProvider \
+busctl --user call inc.kora.SteamBus \
+  /inc/kora/SteamBus/SteamClient0 \
+  inc.kora.plugin.LibraryProvider \
   GetInstallOptions s <appId>
 ```
 
 Install a game
 
 ```bash
-busctl --user call one.playtron.SteamBus \
-  /one/playtron/SteamBus/SteamClient0 \
-  one.playtron.plugin.LibraryProvider \
+busctl --user call inc.kora.SteamBus \
+  /inc/kora/SteamBus/SteamClient0 \
+  inc.kora.plugin.LibraryProvider \
   Install "ssa{sv}" "<appId>" "/dev/sda1" 2 'os' s windows 'language' s english
 ```
 

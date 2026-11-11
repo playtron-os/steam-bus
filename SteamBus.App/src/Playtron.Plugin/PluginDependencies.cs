@@ -3,7 +3,7 @@ using Tmds.DBus;
 namespace Playtron.Plugin;
 
 /// Interface definition for plugin dependencies that are required by the plugin
-[DBusInterface("one.playtron.plugin.PluginDependencies")]
+[DBusInterface("inc.kora.plugin.PluginDependencies")]
 public interface IPluginDependencies : IDBusObject
 {
     // Methods

@@ -244,7 +244,7 @@ public struct LaunchOption
 }
 
 /// Interface definition for a library provider
-[DBusInterface("one.playtron.plugin.LibraryProvider")]
+[DBusInterface("inc.kora.plugin.LibraryProvider")]
 public interface IPluginLibraryProvider : IDBusObject
 {
   // Properties

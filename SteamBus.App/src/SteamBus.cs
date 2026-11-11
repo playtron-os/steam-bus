@@ -41,8 +41,8 @@ class SteamBus
     await systemConnection.ConnectAsync();
     Console.WriteLine("Connected to system bus.");
 
-    await connection.RegisterServiceAsync("one.playtron.SteamBus");
-    Console.WriteLine("Registered address: one.playtron.SteamBus");
+    await connection.RegisterServiceAsync("inc.kora.SteamBus");
+    Console.WriteLine("Registered address: inc.kora.SteamBus");
 
     var networkManager = systemConnection.CreateProxy<INetworkManager>(
       "org.freedesktop.NetworkManager",
@@ -53,7 +53,7 @@ class SteamBus
     await connection.RegisterObjectAsync(new Manager(connection, depotConfigStore, dependenciesStore, displayManager, networkManager));
 
     // Create a default DBusSteamClient instance
-    string path = "/one/playtron/SteamBus/SteamClient0";
+    string path = "/inc/kora/SteamBus/SteamClient0";
 
     DBusSteamClient client = new DBusSteamClient(new ObjectPath(path), depotConfigStore, dependenciesStore, displayManager, networkManager);
     await connection.RegisterObjectAsync(client);
@@ -72,8 +72,8 @@ class SteamBus
     try
     {
       var pluginManager = connection.CreateProxy<IPluginManager>(
-        "one.playtron.Playserve",
-        "/one/playtron/plugins/Manager"
+        "inc.kora.Playserve",
+        "/inc/kora/plugins/Manager"
       );
 
       await pluginManager.WatchOnDriveAddedAsync(async (driveInfo) =>
@@ -142,7 +142,7 @@ class SteamBus
       foreach (var dir in directories)
         await depotConfigStore.ReloadApps(dir);
 
-      await pluginManager.RegisterPluginAsync("one.playtron.SteamBus", path);
+      await pluginManager.RegisterPluginAsync("inc.kora.SteamBus", path);
     }
     catch (Exception ex)
     {

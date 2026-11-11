@@ -2,7 +2,7 @@ using Tmds.DBus;
 
 namespace Playtron.Plugin;
 
-[DBusInterface("one.playtron.auth.PasswordFlow")]
+[DBusInterface("inc.kora.auth.PasswordFlow")]
 public interface IAuthPasswordFlow : IDBusObject
 {
   // Login to the service with the given username and password

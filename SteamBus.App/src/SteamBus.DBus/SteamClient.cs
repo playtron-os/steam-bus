@@ -35,7 +35,7 @@ public class SteamClientProperties : IEnumerable<KeyValuePair<string, object>>
   }
 }
 
-[DBusInterface("one.playtron.SteamBus.SteamClient")]
+[DBusInterface("inc.kora.SteamBus.SteamClient")]
 public interface IDBusSteamClient : IDBusObject
 {
   //Task<int> LoginAsync(string username, string password);
@@ -55,7 +55,7 @@ public interface IDBusSteamClient : IDBusObject
 
 class DBusSteamClient : IDBusSteamClient, IPlaytronPlugin, IAuthPasswordFlow, IAuthCryptography, IUser, IAuthTwoFactorFlow, IAuthQrFlow, IPluginLibraryProvider, ICloudSaveProvider, IAuthenticator, IPluginDependencies
 {
-  // Path to the object on DBus (e.g. "/one/playtron/SteamBus/SteamClient0")
+  // Path to the object on DBus (e.g. "/inc/kora/SteamBus/SteamClient0")
   public ObjectPath Path;
   // Depot Config Store used to retrieve installed apps informations
   private DepotConfigStore depotConfigStore;

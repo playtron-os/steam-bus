@@ -2,35 +2,35 @@ using Tmds.DBus;
 
 public static class DbusErrors
 {
-    public const string DiskNotFound = "one.playtron.Error.DiskNotFound";
-    public const string DownloadInProgress = "one.playtron.Error.DownloadInProgress";
-    public const string DownloadFailed = "one.playtron.Error.DownloadFailed";
-    public const string ContentNotFound = "one.playtron.Error.ContentNotFound";
-    public const string AppNotInstalled = "one.playtron.Error.AppNotInstalled";
-    public const string InvalidAppId = "one.playtron.Error.InvalidAppId";
-    public const string NotLoggedIn = "one.playtron.Error.NotLoggedIn";
-    public const string MissingDirectory = "one.playtron.Error.MissingDirectory";
-    public const string InvalidPassword = "one.playtron.Error.InvalidPassword";
-    public const string AuthenticationError = "one.playtron.Error.AuthenticationError";
-    public const string TfaTimedOut = "one.playtron.Error.TfaTimedOut";
-    public const string RateLimitExceeded = "one.playtron.Error.RateLimitExceeded";
-    public const string AppUpdateRequired = "one.playtron.Error.AppUpdateRequired";
-    public const string DependencyUpdateRequired = "one.playtron.Error.DependencyUpdateRequired";
-    public const string Timeout = "one.playtron.Error.Timeout";
-    public const string DependencyError = "one.playtron.Error.DependencyError";
-    public const string PreLaunchError = "one.playtron.Error.PreLaunchError";
-    public const string CloudConflict = "one.playtron.Error.CloudConflict";
-    public const string CloudQuota = "one.playtron.Error.CloudQuota";
-    public const string CloudFileDownload = "one.playtron.Error.CloudFileDownload";
-    public const string CloudFileUpload = "one.playtron.Error.CloudFileUpload";
-    public const string CloudBusy = "one.playtron.Error.CloudBusy";
-    public const string AppNotOwned = "one.playtron.Error.AppNotOwned";
-    public const string PlayingBlocked = "one.playtron.Error.PlayingBlocked";
-    public const string NotEnoughSpace = "one.playtron.Error.NotEnoughSpace";
-    public const string Permission = "one.playtron.Error.Permission";
-    public const string NetworkRequired = "one.playtron.Error.NetworkRequired";
-    public const string Generic = "one.playtron.Error.Generic";
-    public const string MoveItemCancelled = "one.playtron.Error.MoveItemCancelled";
+    public const string DiskNotFound = "inc.kora.Error.DiskNotFound";
+    public const string DownloadInProgress = "inc.kora.Error.DownloadInProgress";
+    public const string DownloadFailed = "inc.kora.Error.DownloadFailed";
+    public const string ContentNotFound = "inc.kora.Error.ContentNotFound";
+    public const string AppNotInstalled = "inc.kora.Error.AppNotInstalled";
+    public const string InvalidAppId = "inc.kora.Error.InvalidAppId";
+    public const string NotLoggedIn = "inc.kora.Error.NotLoggedIn";
+    public const string MissingDirectory = "inc.kora.Error.MissingDirectory";
+    public const string InvalidPassword = "inc.kora.Error.InvalidPassword";
+    public const string AuthenticationError = "inc.kora.Error.AuthenticationError";
+    public const string TfaTimedOut = "inc.kora.Error.TfaTimedOut";
+    public const string RateLimitExceeded = "inc.kora.Error.RateLimitExceeded";
+    public const string AppUpdateRequired = "inc.kora.Error.AppUpdateRequired";
+    public const string DependencyUpdateRequired = "inc.kora.Error.DependencyUpdateRequired";
+    public const string Timeout = "inc.kora.Error.Timeout";
+    public const string DependencyError = "inc.kora.Error.DependencyError";
+    public const string PreLaunchError = "inc.kora.Error.PreLaunchError";
+    public const string CloudConflict = "inc.kora.Error.CloudConflict";
+    public const string CloudQuota = "inc.kora.Error.CloudQuota";
+    public const string CloudFileDownload = "inc.kora.Error.CloudFileDownload";
+    public const string CloudFileUpload = "inc.kora.Error.CloudFileUpload";
+    public const string CloudBusy = "inc.kora.Error.CloudBusy";
+    public const string AppNotOwned = "inc.kora.Error.AppNotOwned";
+    public const string PlayingBlocked = "inc.kora.Error.PlayingBlocked";
+    public const string NotEnoughSpace = "inc.kora.Error.NotEnoughSpace";
+    public const string Permission = "inc.kora.Error.Permission";
+    public const string NetworkRequired = "inc.kora.Error.NetworkRequired";
+    public const string Generic = "inc.kora.Error.Generic";
+    public const string MoveItemCancelled = "inc.kora.Error.MoveItemCancelled";
 }
 
 public static class DbusExceptionHelper
