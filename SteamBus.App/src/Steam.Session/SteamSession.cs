@@ -375,12 +375,9 @@ public class SteamSession : IDisposable
         {
           var app = app_value.Value;
 
-          var resolved = ResolveAppInfo(app.ID, app.KeyValues);
+          var resolved = StoreAppInfo(app.ID, app.KeyValues);
           Console.WriteLine("Got AppInfo for {0}{1}", app.ID, resolved == app.KeyValues ? "" : " (public_only, kept the cached info)");
-          AppInfo[app.ID] = resolved;
           SetProviderItem(app.ID, resolved);
-          if (resolved == app.KeyValues)
-            appInfoCache.Save(app.ID, app.KeyValues);
         }
 
         foreach (var app in appInfo.UnknownApps)
@@ -1586,18 +1583,13 @@ public class SteamSession : IDisposable
             foreach (var entry in productInfo.Apps)
             {
               var received = entry.Value.KeyValues;
-              var appInfo = ResolveAppInfo(entry.Key, received);
+              var appInfo = StoreAppInfo(entry.Key, received);
               if (!HasFullInfo(entry.Key, received))
               {
                 publicOnly++;
                 if (appInfo != received)
                   fromCache++;
               }
-
-              AppInfo[entry.Key] = appInfo;
-              // Never replace a cached full answer with the public_only one Steam gave this time.
-              if (appInfo == received)
-                appInfoCache.Save(entry.Key, received);
 
               // Validate if we can install the game
               var validOsList = appInfo["extended"]?["validoslist"]?.AsString() ?? appInfo["common"]?["oslist"]?.AsString();
@@ -1746,6 +1738,17 @@ public class SteamSession : IDisposable
 
     var cached = appInfoCache.GetCached(appId);
     return cached != null && HasFullInfo(appId, cached) ? cached : received;
+  }
+
+  // Keeps what Steam answered for an app, or its cached full info when Steam answered public_only.
+  // A public_only answer is never saved over the cache, or the next login would have nothing to fall back to.
+  internal KeyValue StoreAppInfo(uint appId, KeyValue received)
+  {
+    var appInfo = ResolveAppInfo(appId, received);
+    AppInfo[appId] = appInfo;
+    if (appInfo == received)
+      appInfoCache.Save(appId, received);
+    return appInfo;
   }
 
   static bool HasFullInfo(uint appId, KeyValue appInfo) => IsListed(GetProviderItem(appId.ToString(), appInfo));

@@ -121,6 +121,58 @@ public class HiddenAppTests
     Assert.That(session.ResolveAppInfo(260790, received), Is.SameAs(received));
   }
 
+  // AppInfoCache saves in the background; this one saves at once, so the next login reads what the last one left.
+  sealed class ImmediateAppInfoCache() : AppInfoCache(DefaultPath())
+  {
+    public override void Save(uint appId, KeyValue? data)
+    {
+      var file = Path.Join(path, $"{appId}.vdf");
+      if (data == null)
+      {
+        File.Delete(file);
+        return;
+      }
+      Directory.CreateDirectory(path);
+      data.SaveToFile(file, false);
+    }
+  }
+
+  static string? CachedName(uint appId) =>
+    new AppInfoCache(AppInfoCache.DefaultPath()).GetCached(appId)?["common"]["name"].AsString();
+
+  [Test]
+  public async Task PublicOnlyAnswersAtTwoLoginsInARowLeaveTheCachedInfo()
+  {
+    await using var harness = await SessionHarness.Create();
+    var session = harness.Session;
+    harness.SetField("appInfoCache", new ImmediateAppInfoCache());
+    Cache(260790, GameAppInfo);
+
+    for (var login = 1; login <= 2; login++)
+    {
+      var appInfo = session.StoreAppInfo(260790, Parse(PublicOnly(260790)));
+      session.SetProviderItem(260790, appInfo);
+
+      Assert.That(CachedName(260790), Is.EqualTo("1001 Spikes"), $"cache after login {login}");
+      Assert.That(session.AppInfo[260790]["common"]["name"].AsString(), Is.EqualTo("1001 Spikes"), $"login {login}");
+      Assert.That(session.IsAppOwned(260790), Is.True, $"login {login}");
+    }
+  }
+
+  [Test]
+  public async Task AFullAnswerReplacesTheCachedInfo()
+  {
+    await using var harness = await SessionHarness.Create();
+    var session = harness.Session;
+    harness.SetField("appInfoCache", new ImmediateAppInfoCache());
+    Cache(260790, GameAppInfo.Replace("1001 Spikes", "An older name"));
+
+    session.StoreAppInfo(260790, Parse(GameAppInfo));
+
+    Assert.That(CachedName(260790), Is.EqualTo("1001 Spikes"));
+    Assert.That(session.AppInfo[260790]["common"]["name"].AsString(), Is.EqualTo("1001 Spikes"));
+  }
+
   [Test]
   public async Task NamelessAppsFromAnOlderLibraryCacheAreDropped()
   {
