@@ -27,8 +27,8 @@ public class AppInfoCache
         return path;
     }
 
-    // Save the app info value
-    public void Save(uint appId, KeyValue? data)
+    // Save the app info value, in the background
+    public virtual void Save(uint appId, KeyValue? data)
     {
         _ = Task.Run(() =>
         {
